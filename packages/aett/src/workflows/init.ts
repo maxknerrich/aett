@@ -2,7 +2,7 @@ import { Console, Effect, FileSystem, Option, Path, Schema, Stream } from "effec
 import { Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Nix } from "../adapters/nix.ts";
-import { SshPublicKey } from "../domain/state.ts";
+import { ageKeyPair, type Operator, SshPublicKey } from "../domain/state.ts";
 
 export class InitError extends Schema.TaggedError<InitError>()("InitError", {
 	message: Schema.String,
@@ -18,8 +18,9 @@ const isSshPublicKey = Schema.is(SshPublicKey);
 
 /**
  * Starts a fleet in `root`: fleet.ts, package.json, .gitignore and
- * state/operator.json. The operator's key comes from `--ssh-key` (a key line
- * or a .pub file) or else from the SSH agent.
+ * state/operator.json. The operator's SSH key comes from `--ssh-key` (a key
+ * line or a .pub file) or else from the SSH agent. A new age key encrypts the
+ * fleet's secrets; its private half is shown once and never stored.
  */
 export const init = Effect.fn("init")(function* (
 	root: string,
@@ -58,6 +59,8 @@ export const init = Effect.fn("init")(function* (
 			}),
 	});
 
+	const age = yield* ageKey;
+
 	// A source checkout is linked; an installed package is depended on by version.
 	const dependency = aett.directory.split(path.sep).includes("node_modules")
 		? `^${aett.version}`
@@ -85,10 +88,21 @@ export const init = Effect.fn("init")(function* (
 	yield* fs.writeFileString(path.join(root, ".gitignore"), "node_modules/\n.aett/build/\n");
 	yield* fs.writeFileString(
 		path.join(root, "state", "operator.json"),
-		`${JSON.stringify({ sshKeys: [key] }, null, "\t")}\n`,
+		`${JSON.stringify({ sshKeys: [key], age: age.publicKey } satisfies Operator, null, "\t")}\n`,
 	);
 
 	yield* Console.log(`Started a fleet in ${root}.`);
+	yield* Console.log(
+		[
+			"",
+			"Your private age key decrypts the fleet's secrets. aett shows it only this once:",
+			"",
+			`  ${age.secretKey}`,
+			"",
+			"Store it in your password manager. aett reads it from SOPS_AGE_KEY.",
+			"",
+		].join("\n"),
+	);
 	yield* Console.log(
 		"Next: install its dependencies (pnpm install) and declare machines in fleet.ts.",
 	);
@@ -114,6 +128,25 @@ const agentKey = Effect.gen(function* () {
 		message: "Which SSH key should aett use?",
 		choices: [first, ...rest].map((key) => ({ title: keyLabel(key), value: key })),
 	});
+});
+
+/** Makes the operator's age key pair with the pinned age-keygen. */
+const ageKey = Effect.gen(function* () {
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const path = yield* Path.Path;
+	const tools = yield* (yield* Nix).tools;
+
+	const output = yield* spawner.string(
+		ChildProcess.make(path.join(tools, "bin", "age-keygen"), [], {
+			stdin: "ignore",
+			stderr: "ignore",
+		}),
+	);
+
+	return yield* Effect.fromOption(
+		ageKeyPair(output),
+		() => new InitError({ message: "age-keygen printed no key pair." }),
+	);
 });
 
 /** Asks the pinned ssh-keygen whether OpenSSH can parse the key; the pattern alone lets truncated blobs through. */

@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 
 /** One OpenSSH public key line: type, base64 blob and an optional comment. */
 export const SshPublicKey = Schema.String.check(
@@ -8,9 +8,29 @@ export const SshPublicKey = Schema.String.check(
 	),
 );
 
-/** state/operator.json: the operator's public keys. */
+/** An age X25519 public key, which secrets are encrypted to. */
+export const AgePublicKey = Schema.String.check(
+	Schema.isPattern(/^age1[02-9ac-hj-np-z]{58}$/, {
+		expected: 'an age public key such as "age1…"',
+	}),
+);
+
+const isAgePublicKey = Schema.is(AgePublicKey);
+
+/** Reads the key pair from age-keygen's output: the `# public key: age1…` comment and the `AGE-SECRET-KEY-1…` line. */
+export const ageKeyPair = (output: string) => {
+	const publicKey = /^# public key: (\S+)$/m.exec(output)?.[1];
+	const secretKey = /^AGE-SECRET-KEY-1[0-9A-Z]+$/m.exec(output)?.[0];
+
+	return publicKey !== undefined && secretKey !== undefined && isAgePublicKey(publicKey)
+		? Option.some({ publicKey, secretKey })
+		: Option.none();
+};
+
+/** state/operator.json: the operator's public keys, for SSH and for the fleet's secrets. */
 export const Operator = Schema.Struct({
 	sshKeys: Schema.NonEmptyArray(SshPublicKey),
+	age: AgePublicKey,
 });
 
 export interface Operator extends Schema.Schema.Type<typeof Operator> {}

@@ -66,7 +66,11 @@
         in
         pkgs.buildEnv {
           name = "aett-tools";
-          paths = [ pkgs.openssh ];
+          paths = [
+            pkgs.openssh
+            pkgs.sops
+            pkgs.age
+          ];
         };
     in
     {

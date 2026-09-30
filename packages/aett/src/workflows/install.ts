@@ -1,6 +1,8 @@
 import { Console, Effect, FileSystem, Option, Path, Redacted, Schema } from "effect";
 import { Prompt } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Nix } from "../adapters/nix.ts";
+import { Secrets } from "../adapters/secrets.ts";
 import { type Connection, shellQuote, Ssh } from "../adapters/ssh.ts";
 import {
 	type Disk,
@@ -11,8 +13,8 @@ import {
 	layoutPreview,
 } from "../domain/disk.ts";
 import type { Fleet } from "../domain/fleet.ts";
-import { forgetHost, formatHost, type Host } from "../domain/host.ts";
-import type { MachineRecord } from "../domain/state.ts";
+import { formatHost, type Host, trustHost } from "../domain/host.ts";
+import { type MachineRecord, SshPublicKey } from "../domain/state.ts";
 import { emit } from "./compile.ts";
 import { loadFleet, readState } from "./load.ts";
 
@@ -45,7 +47,8 @@ export const discover = Effect.fn("discover")(function* (
 
 /**
  * Discovers the machine, lets the operator confirm its disk, builds its system
- * on the installer, erases the disk, installs and reboots into the new system.
+ * on the installer, erases the disk, installs with the machine's stored host
+ * key and reboots into the new system.
  */
 export const install = Effect.fn("install")(function* (
 	root: string,
@@ -57,13 +60,17 @@ export const install = Effect.fn("install")(function* (
 
 	yield* declared(fleet, name);
 
-	const recorded = (yield* readState(root, fleet)).machines.get(name);
+	const state = yield* readState(root, fleet);
+	const recorded = state.machines.get(name);
 
 	if (recorded?.installed === true && !options.reinstall) {
 		return yield* new InstallError({
 			message: `${name} is already installed. Pass --reinstall to erase it and install it again.`,
 		});
 	}
+
+	// Before anything is erased, so a reinstall that cannot decrypt the stored key stops here.
+	const hostKey = yield* machineHostKey(root, name, state.operator.age);
 
 	const connection = yield* connect(options);
 	const disks = internalDisks(yield* discoverFacts(root, name, connection));
@@ -100,12 +107,21 @@ export const install = Effect.fn("install")(function* (
 		`${shellQuote(`${formatDisk}/bin/disko-destroy-format-mount`)} --yes-wipe-all-disks`,
 	);
 	yield* connection.run(`${shellQuote(prepare)} /mnt`);
+	// Where the NixOS module points sshd. sshd ignores a private key that others can read.
+	yield* connection.run(
+		"mkdir -p /mnt/persist/etc/ssh && umask 077 && cat > /mnt/persist/etc/ssh/ssh_host_ed25519_key",
+		hostKey.privateKey,
+	);
+	yield* connection.run(
+		"umask 022 && cat > /mnt/persist/etc/ssh/ssh_host_ed25519_key.pub",
+		`${hostKey.publicKey}\n`,
+	);
 	yield* Console.log("Installing…");
 	yield* connection.run(
 		`nixos-install --root /mnt --system ${shellQuote(toplevel)} --no-root-passwd --no-channel-copy`,
 	);
 	yield* writeRecord(root, name, { disk: disk.byId, installed: true });
-	yield* forgetHostKey(root, name);
+	yield* trustHostKey(root, name, hostKey.publicKey);
 	yield* Console.log(`Installed ${name}. It reboots now and comes back as ${name}.local.`);
 
 	// The reboot drops the connection, which may fail the command; that is expected.
@@ -257,13 +273,71 @@ const writeRecord = Effect.fn("writeRecord")(function* (
 	);
 });
 
-// The new system has a new host key, so aett's known_hosts must not keep the old one.
-const forgetHostKey = Effect.fn("forgetHostKey")(function* (root: string, name: string) {
+const isSshPublicKey = Schema.is(SshPublicKey);
+
+/**
+ * The machine's SSH host key pair. The private key is the secret
+ * secrets/<name>/ssh_host_ed25519_key.json, made on the controller by the
+ * pinned ssh-keygen once and reused by every reinstall, so aett's known_hosts
+ * entry stays valid.
+ */
+const machineHostKey = Effect.fn("machineHostKey")(function* (
+	root: string,
+	name: string,
+	recipient: string,
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const secrets = yield* Secrets;
+	const keygen = path.join(yield* (yield* Nix).tools, "bin", "ssh-keygen");
+	const file = path.join("secrets", name, "ssh_host_ed25519_key.json");
+
+	// ssh-keygen reads and writes private keys only as files. This one lives until the scope closes.
+	const keyFile = path.join(yield* fs.makeTempDirectoryScoped({ prefix: "aett-" }), "key");
+
+	const generate = spawner
+		.exitCode(
+			ChildProcess.make(
+				keygen,
+				["-q", "-t", "ed25519", "-N", "", "-C", `root@${name}`, "-f", keyFile],
+				{ stdin: "ignore" },
+			),
+		)
+		.pipe(
+			Effect.filterOrFail(
+				(exitCode) => exitCode === 0,
+				() => new InstallError({ message: `ssh-keygen could not make a host key for ${name}.` }),
+			),
+			Effect.andThen(fs.readFileString(keyFile)),
+		);
+
+	const privateKey = yield* secrets.ensure(root, file, recipient, generate);
+
+	// The public key is derived rather than stored. ssh-keygen wants the private key in a file only its owner can read.
+	yield* fs.writeFileString(keyFile, privateKey, { mode: 0o600 });
+
+	const publicKey = (yield* spawner.string(
+		ChildProcess.make(keygen, ["-y", "-f", keyFile], { stdin: "ignore" }),
+	)).trim();
+
+	if (!isSshPublicKey(publicKey)) {
+		return yield* new InstallError({ message: `${file} holds no SSH private key.` });
+	}
+
+	return { privateKey, publicKey };
+}, Effect.scoped);
+
+// Records the machine's host key in aett's known_hosts, replacing whatever it held for the machine.
+const trustHostKey = Effect.fn("trustHostKey")(function* (
+	root: string,
+	name: string,
+	publicKey: string,
+) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const file = path.join(root, "state", "known_hosts");
+	const knownHosts = (yield* fs.exists(file)) ? yield* fs.readFileString(file) : "";
 
-	if (yield* fs.exists(file)) {
-		yield* fs.writeFileString(file, forgetHost(yield* fs.readFileString(file), name));
-	}
+	yield* fs.writeFileString(file, trustHost(knownHosts, name, publicKey));
 });
