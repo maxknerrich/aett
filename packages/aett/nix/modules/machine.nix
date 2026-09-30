@@ -36,6 +36,8 @@ in
   config = {
     networking.hostName = cfg.name;
     networking.networkmanager.enable = true;
+    # NetworkManager owns the interfaces; facter would otherwise start dhcpcd on them too.
+    hardware.facter.detected.dhcp.enable = false;
 
     # Announces <name>.local.
     services.avahi = {
