@@ -35,6 +35,10 @@ export interface Connection {
 export const shellQuote = (value: string) =>
 	/^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 
+/** Quotes a path as an ssh_config value, which ssh splits on spaces, unescapes and expands % tokens in. */
+export const sshConfigPath = (value: string) =>
+	`"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%")}"`;
+
 /** SSH through the pinned OpenSSH from aett's tools, independent of the operator's SSH config. */
 export class Ssh extends Context.Service<
 	Ssh,
@@ -194,12 +198,11 @@ export class Ssh extends Context.Service<
 				return yield* open(host, yield* temporaryDirectory, {
 					target: name,
 					// Only the agent's keys, and only aett's known hosts, keyed by the machine's name.
-					// ssh splits a known-hosts value on spaces unless it is quoted.
 					options: [
 						"BatchMode=yes",
 						"PasswordAuthentication=no",
 						"IdentityFile=none",
-						`UserKnownHostsFile="${knownHosts}"`,
+						`UserKnownHostsFile=${sshConfigPath(knownHosts)}`,
 						"GlobalKnownHostsFile=/dev/null",
 						`HostKeyAlias=${name}`,
 						"StrictHostKeyChecking=accept-new",
