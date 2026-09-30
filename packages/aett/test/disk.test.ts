@@ -94,8 +94,11 @@ describe("isPassphrase", () => {
 		expect(isPassphrase(value)).toBe(true);
 	});
 
-	// Empty, multi-line or control characters can't be typed at the console; disko's `echo -n` swallows -n, -e and -E.
-	it.each(["", "secret\r", "two\nlines", "nul\0", "-n", "-e", "-neE"])("rejects %j", (value) => {
-		expect(isPassphrase(value)).toBe(false);
-	});
+	// Control characters are line editing at the console; disko's `echo -n` swallows -n, -e and -E.
+	it.each(["", "secret\r", "two\nlines", "nul\0", "tab\there", "del\x7f", "-n", "-e", "-neE"])(
+		"rejects %j",
+		(value) => {
+			expect(isPassphrase(value)).toBe(false);
+		},
+	);
 });
