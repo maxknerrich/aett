@@ -10,6 +10,7 @@ import {
 	FacterReport,
 	findDisk,
 	internalDisks,
+	isPassphrase,
 	layoutPreview,
 } from "../domain/disk.ts";
 import { type Fleet, isEncrypted } from "../domain/fleet.ts";
@@ -135,7 +136,11 @@ export const install = Effect.fn("install")(function* (
 	yield* connection.run(
 		`nixos-install --root /mnt --system ${shellQuote(toplevel)} --no-root-passwd --no-channel-copy`,
 	);
-	yield* writeRecord(root, name, { disk: disk.byId, installed: true });
+	yield* writeRecord(root, name, {
+		disk: disk.byId,
+		encrypted: isEncrypted(machine),
+		installed: true,
+	});
 	yield* trustHostKey(root, name, hostKey.publicKey);
 	yield* Console.log(`Installed ${name}. It reboots now and comes back as ${name}.local.`);
 
@@ -403,9 +408,6 @@ const diskPassphrase = Effect.fn("diskPassphrase")(function* (
 
 	return passphrase;
 });
-
-// One line, not empty, without control characters that disko would keep but nobody can type at the console.
-const isPassphrase = (value: string) => /^[^\r\n\0]+$/.test(value);
 
 // Asks for a new passphrase twice, starting over until both entries match.
 const choosePassphrase = (name: string) =>

@@ -101,3 +101,11 @@ export const layoutPreview = (machine: Machine, disk: Disk) =>
 		"      └─ @persist  /persist",
 		"/     tmpfs, capped at 1 GB, empty on every boot",
 	].join("\n");
+
+/**
+ * Whether a disk passphrase can be typed at the console and survives disko,
+ * which passes it through `echo -n`: one line without control characters, and
+ * nothing echo would take for its own options.
+ */
+export const isPassphrase = (value: string) =>
+	/^[^\r\n\0]+$/.test(value) && !/^-[neE]+$/.test(value);

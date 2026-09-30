@@ -1,6 +1,12 @@
 import { Option } from "effect";
 import { describe, expect, it } from "vite-plus/test";
-import { byIdPath, type FacterReport, findDisk, internalDisks } from "../src/domain/disk.ts";
+import {
+	byIdPath,
+	type FacterReport,
+	findDisk,
+	internalDisks,
+	isPassphrase,
+} from "../src/domain/disk.ts";
 
 // Trimmed from a real report: an NVMe disk and the installer stick on USB.
 const nvmeNames = [
@@ -80,5 +86,16 @@ describe("byIdPath", () => {
 		expect(byIdPath(["/dev/disk/by-path/pci-0000:00:01.0-nvme-1", "/dev/nvme0n1"])).toEqual(
 			Option.none(),
 		);
+	});
+});
+
+describe("isPassphrase", () => {
+	it.each(["correct horse battery", "-x", "--n", "-n word"])("accepts %j", (value) => {
+		expect(isPassphrase(value)).toBe(true);
+	});
+
+	// Empty, multi-line or control characters can't be typed at the console; disko's `echo -n` swallows -n, -e and -E.
+	it.each(["", "secret\r", "two\nlines", "nul\0", "-n", "-e", "-neE"])("rejects %j", (value) => {
+		expect(isPassphrase(value)).toBe(false);
 	});
 });
