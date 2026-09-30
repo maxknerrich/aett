@@ -19,7 +19,15 @@ Command.run(command({ directory, version: metadata.version }), { version: metada
 	),
 	// Expected failures print their message alone, without a logged stack, and exit with 1.
 	Effect.catchTag(
-		["FleetError", "InitError", "InstallError", "NixError", "PlatformError", "SshError"],
+		[
+			"ApplyError",
+			"FleetError",
+			"InitError",
+			"InstallError",
+			"NixError",
+			"PlatformError",
+			"SshError",
+		],
 		(error) =>
 			Console.error(error.message).pipe(
 				Effect.andThen(

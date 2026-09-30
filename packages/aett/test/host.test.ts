@@ -1,6 +1,6 @@
 import { Option } from "effect";
 import { describe, expect, it } from "vite-plus/test";
-import { parseHost } from "../src/domain/host.ts";
+import { forgetHost, parseHost } from "../src/domain/host.ts";
 
 describe("parseHost", () => {
 	it("defaults the port to 22", () => {
@@ -19,4 +19,23 @@ describe("parseHost", () => {
 			expect(parseHost(input)).toEqual(Option.none());
 		},
 	);
+});
+
+describe("forgetHost", () => {
+	it("drops only the lines that name the machine", () => {
+		const knownHosts = [
+			"# aett's known hosts",
+			"box ssh-ed25519 AAAAold",
+			"boxer ssh-ed25519 AAAAboxer",
+			"web,box ecdsa-sha2-nistp256 AAAAboth",
+			"web ssh-ed25519 AAAAweb",
+			"",
+		].join("\n");
+
+		expect(forgetHost(knownHosts, "box")).toBe(
+			["# aett's known hosts", "boxer ssh-ed25519 AAAAboxer", "web ssh-ed25519 AAAAweb", ""].join(
+				"\n",
+			),
+		);
+	});
 });

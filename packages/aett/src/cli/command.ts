@@ -1,6 +1,7 @@
 import { Effect, Path } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { installerHost, parseHost } from "../domain/host.ts";
+import { apply } from "../workflows/apply.ts";
 import { compile } from "../workflows/compile.ts";
 import { type AettPackage, init } from "../workflows/init.ts";
 import { discover, install } from "../workflows/install.ts";
@@ -12,10 +13,14 @@ const machineName = Argument.String("name").pipe(
 	Argument.withDescription("The machine's name in fleet.ts."),
 );
 
-const installerFlags = {
-	host: Flag.String("host").pipe(
-		Flag.withDescription("The installer as host[:port]. Defaults to aett-installer.local."),
+const hostFlag = (description: string) =>
+	Flag.String("host").pipe(
+		Flag.withDescription(description),
 		Flag.filterMap(parseHost, () => "Expected host[:port]"),
+	);
+
+const installerFlags = {
+	host: hostFlag("The installer as host[:port]. Defaults to aett-installer.local.").pipe(
 		Flag.withDefault(installerHost),
 	),
 	code: Flag.Redacted("code").pipe(
@@ -85,6 +90,29 @@ export const command = (aett: AettPackage) =>
 			Command.make("compile", {}, () => Effect.flatMap(fleetRoot, compile)).pipe(
 				Command.withDescription(
 					"Write .aett/build/ from fleet.ts and state, and evaluate the machines it lists.",
+				),
+			),
+			Command.make(
+				"apply",
+				{
+					name: Argument.String("name").pipe(
+						Argument.withDescription(
+							"The machine's name in fleet.ts. Defaults to every installed machine.",
+						),
+						Argument.optional,
+					),
+					host: hostFlag("The named machine as host[:port]. Defaults to <name>.local.").pipe(
+						Flag.optional,
+					),
+					yes: Flag.Boolean("yes").pipe(
+						Flag.withDescription("Switch without asking."),
+						Flag.withDefault(false),
+					),
+				},
+				({ name, ...options }) => Effect.flatMap(fleetRoot, (root) => apply(root, name, options)),
+			).pipe(
+				Command.withDescription(
+					"Build the declared system on installed machines and switch to it.",
 				),
 			),
 			machine,

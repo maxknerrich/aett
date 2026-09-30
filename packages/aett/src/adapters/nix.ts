@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { Context, Effect, Layer, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { Connection } from "./ssh.ts";
@@ -5,6 +6,9 @@ import type { Connection } from "./ssh.ts";
 export class NixError extends Schema.TaggedError<NixError>()("NixError", {
 	message: Schema.String,
 }) {}
+
+// A local directory as a flake reference; nix parses it as a URL, so spaces and the like are percent-encoded.
+const flakeAt = (directory: string) => `path:${pathToFileURL(directory).pathname}`;
 
 // What `nix flake archive --json` prints; `path` is the flake's own store path.
 const ArchiveOutput = Schema.fromJsonString(Schema.Struct({ path: Schema.String }));
@@ -67,20 +71,20 @@ export class Nix extends Context.Service<
 				);
 
 				const tools = yield* Effect.cached(
-					run(["build", "--no-link", "--print-out-paths", `path:${source}#tools`]),
+					run(["build", "--no-link", "--print-out-paths", `${flakeAt(source)}#tools`]),
 				);
 
 				const evalDrv = Effect.fn("Nix.evalDrv")(function* (build: string, name: string) {
 					return yield* run([
 						"eval",
 						"--raw",
-						`path:${build}#nixosConfigurations.${name}.config.system.build.toplevel.drvPath`,
+						`${flakeAt(build)}#nixosConfigurations.${name}.config.system.build.toplevel.drvPath`,
 					]);
 				});
 
 				const archive = Effect.fn("Nix.archive")(function* (build: string, connection: Connection) {
 					const output = yield* run(
-						["flake", "archive", "--json", "--to", connection.store, `path:${build}`],
+						["flake", "archive", "--json", "--to", connection.store, flakeAt(build)],
 						connection.nixEnv,
 					);
 

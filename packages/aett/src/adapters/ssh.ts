@@ -35,7 +35,11 @@ export interface Connection {
 export const shellQuote = (value: string) =>
 	/^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 
-/** SSH through the pinned OpenSSH from aett's tools, independent of the operator's SSH config and agent. */
+/** Quotes a path as an ssh_config value, which ssh splits on spaces, unescapes and expands % tokens in. */
+export const sshConfigPath = (value: string) =>
+	`"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%")}"`;
+
+/** SSH through the pinned OpenSSH from aett's tools, independent of the operator's SSH config. */
 export class Ssh extends Context.Service<
 	Ssh,
 	{
@@ -48,6 +52,17 @@ export class Ssh extends Context.Service<
 			host: Host,
 			code: Redacted.Redacted,
 		) => Effect.Effect<Connection, SshError | NixError | PlatformError.PlatformError, Scope.Scope>;
+		/**
+		 * Logs in to an installed machine as root with the operator's key from the
+		 * SSH agent and keeps the connection open for the scope. The host key is
+		 * checked against `knownHosts` under the machine's name, whatever its
+		 * address, and recorded there on first contact.
+		 */
+		readonly machine: (
+			name: string,
+			host: Host,
+			knownHosts: string,
+		) => Effect.Effect<Connection, SshError | NixError | PlatformError.PlatformError, Scope.Scope>;
 	}
 >()("aett/adapters/Ssh") {
 	static readonly layer = Layer.effect(
@@ -58,24 +73,24 @@ export class Ssh extends Context.Service<
 			const path = yield* Path.Path;
 			const nix = yield* Nix;
 
-			const installer = Effect.fn("Ssh.installer")(function* (host: Host, code: Redacted.Redacted) {
+			const inheritedPath = yield* Config.String("PATH").pipe(Config.withDefault(""), Effect.orDie);
+
+			// Holds the control socket. Socket paths are limited to about 100 bytes, and the Mac's per-user temp directory is long.
+			const temporaryDirectory = fs.makeTempDirectoryScoped({ directory: "/tmp", prefix: "aett-" });
+
+			// Opens the master connection to root on `host` for the scope and returns the connection that reuses it.
+			const open = Effect.fnUntraced(function* (host: Host, directory: string, login: Login) {
 				const bin = path.join(yield* nix.tools, "bin");
 				const ssh = path.join(bin, "ssh");
 				const destination = `root@${host.name}`;
-				// Socket paths are limited to about 100 bytes, and the Mac's per-user temp directory is long.
-				const directory = yield* fs.makeTempDirectoryScoped({ directory: "/tmp", prefix: "aett-" });
-				const askpass = path.join(directory, "askpass");
 
-				// Shared by the master, the commands that reuse it and nix, which splits NIX_SSHOPTS on spaces.
-				// Without public keys, a command that misses the master can't offer the operator's agent keys.
+				// Shared by the master, the commands that reuse it and nix.
 				const options = [
 					["-F", "none"],
 					["-p", String(host.port)],
 					["-o", `ControlPath=${path.join(directory, "control")}`],
-					["-o", "PubkeyAuthentication=no"],
-					["-o", "StrictHostKeyChecking=no"],
-					["-o", "UserKnownHostsFile=/dev/null"],
 					["-o", "LogLevel=ERROR"],
+					login.options.flatMap((option) => ["-o", option]),
 				].flat();
 
 				// Runs ssh to completion and returns its exit code with stdout and stderr, which stay empty unless piped.
@@ -102,34 +117,16 @@ export class Ssh extends Context.Service<
 					),
 				);
 
-				// ssh reads the code from SSH_ASKPASS; the script hands it over from the master's environment.
-				yield* fs.writeFileString(askpass, '#!/bin/sh\nprintf "%s\\n" "$AETT_CODE"\n', {
-					mode: 0o700,
-				});
-
 				yield* Effect.acquireRelease(
-					exec(
-						[
-							["-M", "-N", "-f"],
-							["-o", "ControlPersist=yes"],
-							["-o", "PreferredAuthentications=keyboard-interactive,password"],
-							["-o", "NumberOfPasswordPrompts=1"],
-							[destination],
-						].flat(),
-						{
-							env: {
-								SSH_ASKPASS: askpass,
-								SSH_ASKPASS_REQUIRE: "force",
-								AETT_CODE: Redacted.value(code),
-							},
-							extendEnv: true,
-						},
-					).pipe(
+					exec(["-M", "-N", "-f", "-o", "ControlPersist=yes", destination], {
+						env: login.env,
+						extendEnv: true,
+					}).pipe(
 						Effect.filterOrFail(
 							({ exitCode }) => exitCode === 0,
 							({ stderr }) =>
 								new SshError({
-									message: `Could not log in to the installer at ${formatHost(host)}:\n${stderr}`,
+									message: `Could not log in to ${login.target} at ${formatHost(host)}:\n${stderr}`,
 								}),
 						),
 					),
@@ -153,21 +150,79 @@ export class Ssh extends Context.Service<
 						return result.stdout;
 					});
 
-				const inheritedPath = yield* Config.String("PATH").pipe(
-					Config.withDefault(""),
-					Effect.orDie,
-				);
-
 				return {
-					// With more than one connection nix opens its own master, which has no code to log in with.
+					// With more than one connection nix opens its own master, which could not log in to an installer.
 					store: `ssh-ng://${destination}?max-connections=1`,
-					nixEnv: { PATH: `${bin}:${inheritedPath}`, NIX_SSHOPTS: options.join(" ") },
+					// nix splits NIX_SSHOPTS like a shell.
+					nixEnv: {
+						PATH: `${bin}:${inheritedPath}`,
+						NIX_SSHOPTS: options.map(shellQuote).join(" "),
+					},
 					run: remote("pipe"),
 					stream: remote("inherit"),
 				} satisfies Connection;
 			});
 
-			return Ssh.of({ installer });
+			const installer = Effect.fn("Ssh.installer")(function* (host: Host, code: Redacted.Redacted) {
+				const directory = yield* temporaryDirectory;
+				const askpass = path.join(directory, "askpass");
+
+				// ssh reads the code from SSH_ASKPASS; the script hands it over from the master's environment.
+				yield* fs.writeFileString(askpass, '#!/bin/sh\nprintf "%s\\n" "$AETT_CODE"\n', {
+					mode: 0o700,
+				});
+
+				// The code alone logs in. Without public keys, a command that misses the master can't offer the operator's agent keys.
+				return yield* open(host, directory, {
+					target: "the installer",
+					options: [
+						"PubkeyAuthentication=no",
+						"PreferredAuthentications=keyboard-interactive,password",
+						"NumberOfPasswordPrompts=1",
+						"StrictHostKeyChecking=no",
+						"UserKnownHostsFile=/dev/null",
+					],
+					env: {
+						SSH_ASKPASS: askpass,
+						SSH_ASKPASS_REQUIRE: "force",
+						AETT_CODE: Redacted.value(code),
+					},
+				});
+			});
+
+			const machine = Effect.fn("Ssh.machine")(function* (
+				name: string,
+				host: Host,
+				knownHosts: string,
+			) {
+				return yield* open(host, yield* temporaryDirectory, {
+					target: name,
+					// Only the agent's keys, and only aett's known hosts, keyed by the machine's name.
+					options: [
+						"BatchMode=yes",
+						"PasswordAuthentication=no",
+						"IdentityFile=none",
+						`UserKnownHostsFile=${sshConfigPath(knownHosts)}`,
+						"GlobalKnownHostsFile=/dev/null",
+						`HostKeyAlias=${name}`,
+						"StrictHostKeyChecking=accept-new",
+						"CheckHostIP=no",
+					],
+					env: {},
+				});
+			});
+
+			return Ssh.of({ installer, machine });
 		}),
 	);
+}
+
+// How aett logs in to one kind of host.
+interface Login {
+	/** Names the host in errors, such as "the installer". */
+	readonly target: string;
+	/** ssh -o options for authentication and host keys, shared by every command and nix. */
+	readonly options: ReadonlyArray<string>;
+	/** Environment for the master connection alone, which is the only one that authenticates. */
+	readonly env: Readonly<Record<string, string>>;
 }

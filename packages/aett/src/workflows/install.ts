@@ -11,7 +11,7 @@ import {
 	layoutPreview,
 } from "../domain/disk.ts";
 import type { Fleet } from "../domain/fleet.ts";
-import { formatHost, type Host } from "../domain/host.ts";
+import { forgetHost, formatHost, type Host } from "../domain/host.ts";
 import type { MachineRecord } from "../domain/state.ts";
 import { emit } from "./compile.ts";
 import { loadFleet, readState } from "./load.ts";
@@ -105,6 +105,7 @@ export const install = Effect.fn("install")(function* (
 		`nixos-install --root /mnt --system ${shellQuote(toplevel)} --no-root-passwd --no-channel-copy`,
 	);
 	yield* writeRecord(root, name, { disk: disk.byId, installed: true });
+	yield* forgetHostKey(root, name);
 	yield* Console.log(`Installed ${name}. It reboots now and comes back as ${name}.local.`);
 
 	// The reboot drops the connection, which may fail the command; that is expected.
@@ -254,4 +255,15 @@ const writeRecord = Effect.fn("writeRecord")(function* (
 		path.join(root, "state", name, "machine.json"),
 		`${JSON.stringify(record, null, "\t")}\n`,
 	);
+});
+
+// The new system has a new host key, so aett's known_hosts must not keep the old one.
+const forgetHostKey = Effect.fn("forgetHostKey")(function* (root: string, name: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const file = path.join(root, "state", "known_hosts");
+
+	if (yield* fs.exists(file)) {
+		yield* fs.writeFileString(file, forgetHost(yield* fs.readFileString(file), name));
+	}
 });
