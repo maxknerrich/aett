@@ -36,6 +36,7 @@
             ./modules/machine.nix
             ./modules/disk.nix
             ./modules/persist.nix
+            ./modules/install.nix
             {
               _file = "fleet.ts -> machine(${name})";
               aett = declared // {

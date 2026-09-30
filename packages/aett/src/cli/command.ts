@@ -1,10 +1,69 @@
 import { Effect, Path } from "effect";
-import { Command, Flag } from "effect/cli";
+import { Argument, Command, Flag } from "effect/cli";
+import { installerHost, parseHost } from "../domain/host.ts";
 import { compile } from "../workflows/compile.ts";
 import { type AettPackage, init } from "../workflows/init.ts";
+import { discover, install } from "../workflows/install.ts";
 
 // Every command works on the fleet in the current directory.
 const fleetRoot = Effect.map(Effect.service(Path.Path), (path) => path.resolve());
+
+const machineName = Argument.String("name").pipe(
+	Argument.withDescription("The machine's name in fleet.ts."),
+);
+
+const installerFlags = {
+	host: Flag.String("host").pipe(
+		Flag.withDescription("The installer as host[:port]. Defaults to aett-installer.local."),
+		Flag.filterMap(parseHost, () => "Expected host[:port]"),
+		Flag.withDefault(installerHost),
+	),
+	code: Flag.Redacted("code").pipe(
+		Flag.withDescription(
+			"The code on the installer's console, which logs in as root. aett asks when it is missing.",
+		),
+		Flag.optional,
+	),
+};
+
+const machine = Command.make("machine").pipe(
+	Command.withDescription("Discover and install machines."),
+	Command.withSubcommands([
+		Command.make("discover", { name: machineName, ...installerFlags }, ({ name, ...access }) =>
+			Effect.flatMap(fleetRoot, (root) => discover(root, name, access)),
+		).pipe(
+			Command.withDescription("Save the installer's hardware report as state/<name>/facter.json."),
+		),
+		Command.make(
+			"install",
+			{
+				name: machineName,
+				...installerFlags,
+				disk: Flag.String("disk").pipe(
+					Flag.withDescription(
+						"The disk to erase, by any of its /dev names. Needed only when the machine has several internal disks.",
+					),
+					Flag.optional,
+				),
+				yes: Flag.Boolean("yes").pipe(
+					Flag.withDescription("Erase the disk without asking for the machine's name."),
+					Flag.withDefault(false),
+				),
+				reinstall: Flag.Boolean("reinstall").pipe(
+					Flag.withDescription(
+						"Install a machine state marks installed again, on its recorded disk.",
+					),
+					Flag.withDefault(false),
+				),
+			},
+			({ name, ...options }) => Effect.flatMap(fleetRoot, (root) => install(root, name, options)),
+		).pipe(
+			Command.withDescription(
+				"Discover the machine, erase its disk and install NixOS from the installer.",
+			),
+		),
+	]),
+);
 
 /** The aett command line; `aett` is the running package, which new fleets depend on. */
 export const command = (aett: AettPackage) =>
@@ -28,5 +87,6 @@ export const command = (aett: AettPackage) =>
 					"Write .aett/build/ from fleet.ts and state, and evaluate the machines it lists.",
 				),
 			),
+			machine,
 		]),
 	);
