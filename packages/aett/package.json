@@ -1,0 +1,26 @@
+{
+	"name": "aett",
+	"version": "0.0.0",
+	"private": true,
+	"bin": {
+		"aett": "./dist/cli/main.js"
+	},
+	"files": [
+		"dist"
+	],
+	"type": "module",
+	"exports": {
+		".": {
+			"development": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "vp pack"
+	},
+	"dependencies": {
+		"@effect/platform-node": "catalog:",
+		"effect": "catalog:"
+	}
+}

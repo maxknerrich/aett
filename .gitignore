@@ -1,0 +1,15 @@
+.DS_Store
+.claude/worktrees/
+node_modules/
+dist/
+.vite/
+.vite-plus/
+*.tsbuildinfo
+.aett/build/
+.aett/tmp/
+.env
+.env.*
+!.env.example
+
+# Not ready to publish yet
+docs/
