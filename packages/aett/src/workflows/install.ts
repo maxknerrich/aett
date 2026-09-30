@@ -82,7 +82,8 @@ export const install = Effect.fn("install")(function* (
 	}
 
 	// Later runs read the disk from state and never derive it again.
-	yield* writeRecord(root, name, { disk: disk.byId });
+	// An existing record stays as it is, so `installed` survives a failed reinstall.
+	if (recorded?.disk === undefined) yield* writeRecord(root, name, { disk: disk.byId });
 
 	const { build } = yield* emit(root);
 
@@ -185,7 +186,7 @@ const chooseDisk = Effect.fn("chooseDisk")(function* (
 			});
 		}
 
-		return disk;
+		return { ...disk, byId: recorded };
 	}
 
 	if (Option.isSome(requested)) {
