@@ -1,4 +1,4 @@
-import { Console, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Console, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import { Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Nix } from "../adapters/nix.ts";
@@ -44,10 +44,11 @@ export const init = Effect.fn("init")(function* (
 		onNone: () => agentKey,
 		onSome: (value) =>
 			Effect.gen(function* () {
-				const isFile = yield* fs.exists(value);
+				const isLine = isSshPublicKey(value.trim());
+				const isFile = !isLine && (yield* fs.exists(value));
 				const line = isFile ? (yield* fs.readFileString(value)).trim() : value.trim();
 
-				if (isSshPublicKey(line)) return line;
+				if ((isLine || isFile) && isSshPublicKey(line) && (yield* keygenAccepts(line))) return line;
 
 				return yield* new InitError({
 					message: isFile
@@ -113,6 +114,23 @@ const agentKey = Effect.gen(function* () {
 		message: "Which SSH key should aett use?",
 		choices: [first, ...rest].map((key) => ({ title: keyLabel(key), value: key })),
 	});
+});
+
+/** Asks the pinned ssh-keygen whether OpenSSH can parse the key; the pattern alone lets truncated blobs through. */
+const keygenAccepts = Effect.fnUntraced(function* (key: string) {
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const path = yield* Path.Path;
+	const tools = yield* (yield* Nix).tools;
+
+	const exitCode = yield* spawner.exitCode(
+		ChildProcess.make(path.join(tools, "bin", "ssh-keygen"), ["-l", "-f", "/dev/stdin"], {
+			stdin: Stream.make(new TextEncoder().encode(`${key}\n`)),
+			stdout: "ignore",
+			stderr: "ignore",
+		}),
+	);
+
+	return exitCode === 0;
 });
 
 /** Shows a key by its type and comment, or the end of its blob when it has no comment. */
