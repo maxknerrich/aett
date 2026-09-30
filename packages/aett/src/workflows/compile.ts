@@ -5,10 +5,10 @@ import { loadFleet, readState } from "./load.ts";
 
 /**
  * Emits `<root>/.aett/build/`: aett's flake, fleet.json and the recorded facts
- * of every machine it lists. Then evaluates those machines and reports the
- * rest as not discovered or not installed yet.
+ * of every machine it lists. Returns the build's absolute path with the fleet,
+ * state and fleet.json it was made from.
  */
-export const compile = Effect.fn("compile")(function* (root: string) {
+export const emit = Effect.fn("emit")(function* (root: string) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const nix = yield* Nix;
@@ -45,6 +45,18 @@ export const compile = Effect.fn("compile")(function* (root: string) {
 				),
 			),
 	);
+
+	return { build, fleet, state, emitted };
+});
+
+/**
+ * Emits the build, then evaluates the machines it lists and reports the rest
+ * as not discovered or not installed yet.
+ */
+export const compile = Effect.fn("compile")(function* (root: string) {
+	const path = yield* Path.Path;
+	const nix = yield* Nix;
+	const { build, fleet, state, emitted } = yield* emit(root);
 
 	yield* Console.log(`Wrote ${path.relative(root, build)}/`);
 

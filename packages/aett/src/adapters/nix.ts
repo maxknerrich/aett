@@ -1,9 +1,13 @@
 import { Context, Effect, Layer, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import type { Connection } from "./ssh.ts";
 
 export class NixError extends Schema.TaggedError<NixError>()("NixError", {
 	message: Schema.String,
 }) {}
+
+// What `nix flake archive --json` prints; `path` is the flake's own store path.
+const ArchiveOutput = Schema.fromJsonString(Schema.Struct({ path: Schema.String }));
 
 /** aett's Nix engine: the pinned flake sources, the tools built from them and machine evaluation. */
 export class Nix extends Context.Service<
@@ -15,6 +19,8 @@ export class Nix extends Context.Service<
 		readonly tools: Effect.Effect<string, NixError>;
 		/** Evaluates one machine of a compiled build and returns its system derivation path. */
 		readonly evalDrv: (build: string, name: string) => Effect.Effect<string, NixError>;
+		/** Copies a compiled build and its inputs into the store behind `connection`; returns the build's store path there. */
+		readonly archive: (build: string, connection: Connection) => Effect.Effect<string, NixError>;
 	}
 >()("aett/adapters/Nix") {
 	/** Runs the nix CLI; `source` is the package's nix/ directory. */
@@ -24,16 +30,14 @@ export class Nix extends Context.Service<
 			Effect.gen(function* () {
 				const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-				// Returns trimmed stdout, or fails with nix's stderr.
+				// Returns trimmed stdout, or fails with nix's stderr. `env` extends aett's environment.
 				const run = Effect.fn("Nix.run")(
-					function* (args: ReadonlyArray<string>) {
+					function* (args: ReadonlyArray<string>, env: Connection["nixEnv"] = {}) {
 						const handle = yield* spawner.spawn(
 							ChildProcess.make(
 								"nix",
 								["--extra-experimental-features", "nix-command flakes", ...args],
-								{
-									stdin: "ignore",
-								},
+								{ stdin: "ignore", env, extendEnv: true },
 							),
 						);
 
@@ -74,7 +78,25 @@ export class Nix extends Context.Service<
 					]);
 				});
 
-				return Nix.of({ source, tools, evalDrv });
+				const archive = Effect.fn("Nix.archive")(function* (build: string, connection: Connection) {
+					const output = yield* run(
+						["flake", "archive", "--json", "--to", connection.store, `path:${build}`],
+						connection.nixEnv,
+					);
+
+					return yield* Schema.decodeUnknownEffect(ArchiveOutput)(output).pipe(
+						Effect.map(({ path }) => path),
+						Effect.catchTag("SchemaError", (error) =>
+							Effect.fail(
+								new NixError({
+									message: `nix flake archive printed unexpected output: ${error.message}`,
+								}),
+							),
+						),
+					);
+				});
+
+				return Nix.of({ source, tools, evalDrv, archive });
 			}),
 		);
 }
