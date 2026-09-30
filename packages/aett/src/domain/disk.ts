@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect";
+import { isEncrypted, type Machine } from "./fleet.ts";
 
 /** The part of a nixos-facter report that disk selection reads. */
 export const FacterReport = Schema.Struct({
@@ -91,11 +92,11 @@ export const diskLabel = ({ model, bytes, byId }: Disk) =>
 	`${model} · ${Math.round(bytes / 1e9)} GB · ${byId}`;
 
 /** The read-only layout preview install shows before it asks to erase the disk; it mirrors disk.nix. */
-export const layoutPreview = (machine: string, disk: Disk) =>
+export const layoutPreview = (machine: Machine, disk: Disk) =>
 	[
-		`${machine} · ${disk.model} · ${disk.byId}`,
+		`${machine.name} · ${disk.model} · ${disk.byId}`,
 		"├─ 1  ESP   1 GB   vfat   /boot",
-		"└─ 2  root  rest   btrfs",
+		`└─ 2  root  rest   btrfs${isEncrypted(machine) ? "  inside LUKS" : ""}`,
 		"      ├─ @nix      /nix",
 		"      └─ @persist  /persist",
 		"/     tmpfs, capped at 1 GB, empty on every boot",

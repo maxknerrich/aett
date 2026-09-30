@@ -16,6 +16,7 @@ describe("decodeFleet", () => {
 					role: "server",
 					packages: ["htop", "python3Packages.rich"],
 					channel: "unstable",
+					disk: { encrypted: true },
 				}),
 			],
 		});
@@ -44,6 +45,19 @@ describe("decodeFleet", () => {
 		expect(problems({ machines: [{ name: "box", role: "desktop" }] })).toBe(
 			'machine("box") role: Expected "hypervisor" | "server" | "computer", got "desktop"',
 		);
+	});
+
+	it("rejects an encryption setting that is not a boolean", () => {
+		expect(
+			problems({ machines: [{ name: "box", role: "server", disk: { encrypted: "yes" } }] }),
+		).toBe('machine("box") disk.encrypted: Expected boolean, got "yes"');
+	});
+
+	// A misspelled `encrypted` must not leave the disk plain unnoticed.
+	it("rejects an unknown option", () => {
+		expect(
+			problems({ machines: [{ name: "box", role: "server", disk: { encrpyted: true } }] }),
+		).toBe('machine("box") disk.encrpyted: Unexpected key with value true');
 	});
 
 	it("rejects a package that is not a nixpkgs attribute path", () => {

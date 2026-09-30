@@ -12,7 +12,7 @@ import {
 	internalDisks,
 	layoutPreview,
 } from "../domain/disk.ts";
-import type { Fleet } from "../domain/fleet.ts";
+import { type Fleet, isEncrypted } from "../domain/fleet.ts";
 import { formatHost, type Host, trustHost } from "../domain/host.ts";
 import { type MachineRecord, SshPublicKey } from "../domain/state.ts";
 import { emit } from "./compile.ts";
@@ -33,6 +33,8 @@ export interface InstallOptions extends InstallerAccess {
 	readonly disk: Option.Option<string>;
 	readonly yes: boolean;
 	readonly reinstall: boolean;
+	/** An encrypted machine's new disk passphrase. aett asks when it is missing and none is stored. */
+	readonly passphrase: Option.Option<Redacted.Redacted>;
 }
 
 /** Connects to the installer and saves its hardware report as `state/<name>/facter.json`. */
@@ -47,8 +49,9 @@ export const discover = Effect.fn("discover")(function* (
 
 /**
  * Discovers the machine, lets the operator confirm its disk, builds its system
- * on the installer, erases the disk, installs with the machine's stored host
- * key and reboots into the new system.
+ * on the installer, erases the disk (inside LUKS with the stored passphrase
+ * when declared encrypted), installs with the machine's stored host key and
+ * reboots into the new system.
  */
 export const install = Effect.fn("install")(function* (
 	root: string,
@@ -57,9 +60,7 @@ export const install = Effect.fn("install")(function* (
 ) {
 	const nix = yield* Nix;
 	const fleet = yield* loadFleet(root);
-
-	yield* declared(fleet, name);
-
+	const machine = yield* declared(fleet, name);
 	const state = yield* readState(root, fleet);
 	const recorded = state.machines.get(name);
 
@@ -69,14 +70,24 @@ export const install = Effect.fn("install")(function* (
 		});
 	}
 
-	// Before anything is erased, so a reinstall that cannot decrypt the stored key stops here.
+	if (Option.isSome(options.passphrase) && !isEncrypted(machine)) {
+		return yield* new InstallError({
+			message: `fleet.ts does not encrypt ${name}'s disk, so it has no passphrase. Declare disk: { encrypted: true } or leave out --passphrase-file.`,
+		});
+	}
+
+	// Secrets come before anything is erased, so a reinstall that cannot decrypt them stops here.
 	const hostKey = yield* machineHostKey(root, name, state.operator.age);
+
+	const passphrase = isEncrypted(machine)
+		? Option.some(yield* diskPassphrase(root, name, state.operator.age, options.passphrase))
+		: Option.none();
 
 	const connection = yield* connect(options);
 	const disks = internalDisks(yield* discoverFacts(root, name, connection));
 	const disk = yield* chooseDisk(name, recorded?.disk, options.disk, disks);
 
-	yield* Console.log(`\n${layoutPreview(name, disk)}\n`);
+	yield* Console.log(`\n${layoutPreview(machine, disk)}\n`);
 
 	if (!options.yes) {
 		const typed = yield* Prompt.String({ message: `Type "${name}" to erase this disk:` });
@@ -103,8 +114,12 @@ export const install = Effect.fn("install")(function* (
 	const [toplevel, formatDisk, prepare] = yield* buildOn(connection, source, name);
 
 	yield* Console.log(`Erasing ${disk.byId}…`);
-	yield* connection.run(
-		`${shellQuote(`${formatDisk}/bin/disko-destroy-format-mount`)} --yes-wipe-all-disks`,
+	yield* withPassphraseFile(
+		connection,
+		passphrase,
+		connection.run(
+			`${shellQuote(`${formatDisk}/bin/disko-destroy-format-mount`)} --yes-wipe-all-disks`,
+		),
 	);
 	yield* connection.run(`${shellQuote(prepare)} /mnt`);
 	// Where the NixOS module points sshd. sshd ignores a private key that others can read.
@@ -128,10 +143,12 @@ export const install = Effect.fn("install")(function* (
 	return yield* Effect.ignore(connection.run("systemctl reboot"));
 }, Effect.scoped);
 
+// The machine fleet.ts declares as `name`.
 const declared = (fleet: Fleet, name: string) =>
-	fleet.machines.some((machine) => machine.name === name)
-		? Effect.void
-		: Effect.fail(new InstallError({ message: `fleet.ts declares no machine named "${name}".` }));
+	Effect.fromOption(
+		Option.fromUndefinedOr(fleet.machines.find((machine) => machine.name === name)),
+		() => new InstallError({ message: `fleet.ts declares no machine named "${name}".` }),
+	);
 
 // Logs in to the installer, asking for its code unless --code gave it.
 const connect = Effect.fn("connect")(function* ({ host, code }: InstallerAccess) {
@@ -341,3 +358,84 @@ const trustHostKey = Effect.fn("trustHostKey")(function* (
 
 	yield* fs.writeFileString(file, trustHost(knownHosts, name, publicKey));
 });
+
+/**
+ * An encrypted machine's disk passphrase, which the operator types at its
+ * console on every boot. It is the secret secrets/<name>/luks-passphrase.json,
+ * chosen once through --passphrase-file or a prompt and reused by every
+ * reinstall; the stored copy is the operator's recovery copy.
+ */
+const diskPassphrase = Effect.fn("diskPassphrase")(function* (
+	root: string,
+	name: string,
+	recipient: string,
+	given: Option.Option<Redacted.Redacted>,
+) {
+	const path = yield* Path.Path;
+	const secrets = yield* Secrets;
+	const file = path.join("secrets", name, "luks-passphrase.json");
+	const chosen = Option.map(given, Redacted.value);
+
+	if (Option.isSome(chosen) && !isPassphrase(chosen.value)) {
+		return yield* new InstallError({
+			message: "--passphrase-file must hold the passphrase: one line that is not empty.",
+		});
+	}
+
+	const passphrase = yield* secrets.ensure(
+		root,
+		file,
+		recipient,
+		Option.match(chosen, { onSome: Effect.succeed, onNone: () => choosePassphrase(name) }),
+	);
+
+	if (Option.isSome(chosen) && chosen.value !== passphrase) {
+		return yield* new InstallError({
+			message: `--passphrase-file differs from ${name}'s stored passphrase in ${file}. A reinstall keeps the stored one; leave out --passphrase-file to use it.`,
+		});
+	}
+
+	return passphrase;
+});
+
+// One line, not empty: what the operator can type at the console.
+const isPassphrase = (value: string) => /^[^\n]+$/.test(value);
+
+// Asks for a new passphrase twice, starting over until both entries match.
+const choosePassphrase = (name: string) =>
+	Effect.gen(function* () {
+		const passphrase = yield* Prompt.Password({
+			message: `Disk passphrase for ${name}, typed at its console on every boot`,
+			validate: (value) =>
+				isPassphrase(value) ? Effect.succeed(value) : Effect.fail("Expected a passphrase"),
+		});
+
+		const repeated = yield* Prompt.Password({ message: "The same passphrase again" });
+		const matches = Redacted.value(repeated) === Redacted.value(passphrase);
+
+		if (!matches) yield* Console.log("The two entries differ. Choose the passphrase again.");
+
+		return { passphrase: Redacted.value(passphrase), matches };
+	}).pipe(
+		Effect.repeat({ until: ({ matches }) => matches }),
+		Effect.map(({ passphrase }) => passphrase),
+	);
+
+// disk.nix's passwordFile, from which disko reads an encrypted disk's passphrase while it formats.
+const passphraseFile = "/tmp/aett-luks-passphrase";
+
+// Runs `format` with the passphrase, if there is one, in passphraseFile on the installer, and removes the file afterwards, also when formatting fails.
+const withPassphraseFile = <A, E>(
+	connection: Connection,
+	passphrase: Option.Option<string>,
+	format: Effect.Effect<A, E>,
+) =>
+	Option.match(passphrase, {
+		onNone: () => format,
+		onSome: (value) =>
+			Effect.acquireUseRelease(
+				connection.run(`umask 077 && cat > ${passphraseFile}`, value),
+				() => format,
+				() => connection.run(`rm -f ${passphraseFile}`),
+			),
+	});

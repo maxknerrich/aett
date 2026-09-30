@@ -23,14 +23,23 @@ export const PackagePath = Schema.String.check(
 	}),
 );
 
+/** How install lays out the disk: `encrypted` wraps the btrfs partition in LUKS. */
+export const DiskOptions = Schema.Struct({
+	encrypted: Schema.optionalKey(Schema.Boolean),
+});
+
 export const Machine = Schema.Struct({
 	name: MachineName,
 	role: Role,
 	packages: Schema.optionalKey(Schema.Array(PackagePath)),
 	channel: Schema.optionalKey(Channel),
+	disk: Schema.optionalKey(DiskOptions),
 });
 
 export interface Machine extends Schema.Schema.Type<typeof Machine> {}
+
+/** Whether the machine's btrfs partition sits inside LUKS. Disks are plain unless declared encrypted. */
+export const isEncrypted = (machine: Machine) => machine.disk?.encrypted ?? false;
 
 /** Reports every machine whose name an earlier machine already uses. */
 const uniqueNames = Schema.makeFilter((machines: ReadonlyArray<Machine>) =>
@@ -59,26 +68,33 @@ const formatIssue = SchemaIssue.makeFormatterStandardSchemaV1();
 /**
  * Decodes a declaration into a fleet. A failure holds one line per problem,
  * naming the machine as the operator wrote it, the field and what was wrong.
+ * Unknown keys are problems too, so a misspelled option cannot pass unnoticed.
  */
 export const decodeFleet = (declaration: Declaration): Result.Result<Fleet, string> =>
-	Schema.decodeUnknownResult(Fleet)(declaration, { errors: "all", reportInput: true }).pipe(
+	Schema.decodeUnknownResult(Fleet)(declaration, {
+		errors: "all",
+		reportInput: true,
+		onExcessProperty: "error",
+	}).pipe(
 		Result.mapError((error) =>
 			formatIssue(error.issue)
-				.issues.map(({ path, message }) => {
-					const [, index, field] = path ?? [];
+				.issues.map(({ path = [], message }) => {
+					const [, index, ...keys] = path;
+					const inMachine = Predicate.isNumber(index);
 
-					if (!Predicate.isNumber(index)) return message;
+					const where = inMachine
+						? Schema.decodeUnknownOption(MachineLabel)(declaration.machines[index]).pipe(
+								Option.match({
+									onNone: () => `machines[${index}]`,
+									onSome: ({ name }) => `machine("${name}")`,
+								}),
+							)
+						: "fleet()";
 
-					const where = Schema.decodeUnknownOption(MachineLabel)(declaration.machines[index]).pipe(
-						Option.match({
-							onNone: () => `machines[${index}]`,
-							onSome: ({ name }) => `machine("${name}")`,
-						}),
-					);
+					// Nested options such as disk.encrypted read as one field; array indexes are left out.
+					const field = (inMachine ? keys : path).filter(Predicate.isString).join(".");
 
-					return Predicate.isString(field)
-						? `${where} ${field}: ${message}`
-						: `${where}: ${message}`;
+					return field === "" ? `${where}: ${message}` : `${where} ${field}: ${message}`;
 				})
 				.join("\n"),
 		),
