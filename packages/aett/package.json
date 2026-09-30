@@ -6,7 +6,8 @@
 		"aett": "./dist/cli/main.js"
 	},
 	"files": [
-		"dist"
+		"dist",
+		"nix"
 	],
 	"type": "module",
 	"exports": {
