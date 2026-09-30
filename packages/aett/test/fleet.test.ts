@@ -1,6 +1,6 @@
-import { Result } from "effect";
+import { Result, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
-import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
+import { Declaration, decodeFleet } from "../src/domain/fleet.ts";
 import { fleet, machine } from "../src/index.ts";
 
 // What decodeFleet reports for a declaration it has to reject.
@@ -16,6 +16,7 @@ describe("decodeFleet", () => {
 					role: "server",
 					packages: ["htop", "python3Packages.rich"],
 					channel: "unstable",
+					disk: { encrypted: true },
 				}),
 			],
 		});
@@ -44,6 +45,25 @@ describe("decodeFleet", () => {
 		expect(problems({ machines: [{ name: "box", role: "desktop" }] })).toBe(
 			'machine("box") role: Expected "hypervisor" | "server" | "computer", got "desktop"',
 		);
+	});
+
+	it("rejects an encryption setting that is not a boolean", () => {
+		expect(
+			problems({ machines: [{ name: "box", role: "server", disk: { encrypted: "yes" } }] }),
+		).toBe('machine("box") disk.encrypted: Expected boolean, got "yes"');
+	});
+
+	// A misspelled `encrypted` must not leave the disk plain unnoticed.
+	it("rejects an unknown option", () => {
+		expect(
+			problems({ machines: [{ name: "box", role: "server", disk: { encrpyted: true } }] }),
+		).toBe('machine("box") disk.encrpyted: Unexpected key with value true');
+	});
+
+	it("rejects an unknown fleet key that the loader's declaration check lets through", () => {
+		const declaration = Schema.decodeUnknownSync(Declaration)({ machines: [], machine: [] });
+
+		expect(problems(declaration)).toContain("fleet() machine:");
 	});
 
 	it("rejects a package that is not a nixpkgs attribute path", () => {

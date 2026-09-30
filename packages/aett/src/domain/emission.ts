@@ -1,4 +1,4 @@
-import type { Fleet } from "./fleet.ts";
+import { type Fleet, isEncrypted } from "./fleet.ts";
 import type { State } from "./state.ts";
 
 /**
@@ -17,7 +17,7 @@ export const fleetJson = (fleet: Fleet, state: State) => ({
 				role: machine.role,
 				channel: machine.channel ?? "stable",
 				packages: machine.packages ?? [],
-				disk: { device: recorded.disk },
+				disk: { device: recorded.disk, encrypted: isEncrypted(machine) },
 			};
 
 			return [[machine.name, emitted] as const];

@@ -45,6 +45,18 @@ describe("applyTargets", () => {
 		);
 	});
 
+	it("rejects a machine whose declared disk encryption differs from its install", () => {
+		const encrypted = fleet({
+			machines: [machine("box", { role: "hypervisor", disk: { encrypted: true } })],
+		});
+
+		expect(applyTargets(encrypted, state, Option.none())).toEqual(
+			Result.fail(
+				"box's disk was installed unencrypted, but fleet.ts now declares it encrypted. Only a reinstall changes that: aett machine install box --reinstall.",
+			),
+		);
+	});
+
 	it("rejects a name fleet.ts does not declare", () => {
 		expect(applyTargets(declared, state, Option.some("gone"))).toEqual(
 			Result.fail('fleet.ts declares no machine named "gone".'),

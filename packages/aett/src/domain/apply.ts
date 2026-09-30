@@ -1,5 +1,5 @@
 import { Option, Result } from "effect";
-import type { Fleet } from "./fleet.ts";
+import { type Fleet, isEncrypted } from "./fleet.ts";
 import type { State } from "./state.ts";
 
 /** The machines one apply covers, and the declared ones it leaves out. */
@@ -11,9 +11,31 @@ export interface Targets {
 /**
  * Picks the machines `aett apply` covers: the named one, which must be
  * installed, or else every installed machine. `skipped` lists the declared
- * machines left out because they are not installed yet.
+ * machines left out because they are not installed yet. A target whose
+ * declared disk encryption differs from how it was installed is an error,
+ * because its new system could not mount its disk.
  */
-export const applyTargets = (
+export const applyTargets = (fleet: Fleet, state: State, name: Option.Option<string>) =>
+	Result.flatMap(select(fleet, state, name), (selected) => {
+		const changed = fleet.machines.find(
+			(machine) =>
+				selected.targets.includes(machine.name) &&
+				(state.machines.get(machine.name)?.encrypted ?? false) !== isEncrypted(machine),
+		);
+
+		if (changed === undefined) return Result.succeed(selected);
+
+		const [was, now] = isEncrypted(changed)
+			? ["unencrypted", "encrypted"]
+			: ["encrypted", "unencrypted"];
+
+		return Result.fail(
+			`${changed.name}'s disk was installed ${was}, but fleet.ts now declares it ${now}. Only a reinstall changes that: aett machine install ${changed.name} --reinstall.`,
+		);
+	});
+
+// The named machine, which must be installed, or else every installed machine.
+const select = (
 	fleet: Fleet,
 	state: State,
 	name: Option.Option<string>,

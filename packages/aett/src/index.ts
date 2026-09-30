@@ -19,5 +19,5 @@ export type MachineOptions = Omit<Machine, "name">;
  */
 export const fleet = (declaration: Fleet): Fleet => declaration;
 
-/** Declares a machine by its hostname and role, with optional packages and channel. */
+/** Declares a machine by its hostname and role, with optional packages, channel and disk options. */
 export const machine = (name: string, options: MachineOptions): Machine => ({ name, ...options });

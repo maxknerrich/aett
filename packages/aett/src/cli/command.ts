@@ -1,4 +1,4 @@
-import { Effect, Path } from "effect";
+import { Effect, Path, Redacted } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { installerHost, parseHost } from "../domain/host.ts";
 import { apply } from "../workflows/apply.ts";
@@ -56,9 +56,17 @@ const machine = Command.make("machine").pipe(
 				),
 				reinstall: Flag.Boolean("reinstall").pipe(
 					Flag.withDescription(
-						"Install a machine state marks installed again, on its recorded disk with its stored host key.",
+						"Install a machine state marks installed again, on its recorded disk with its stored host key and disk passphrase.",
 					),
 					Flag.withDefault(false),
+				),
+				// A file keeps the passphrase out of argv and shell history.
+				passphrase: Flag.FileText("passphrase-file").pipe(
+					Flag.withDescription(
+						"A file holding the new disk passphrase of a machine declared with disk: { encrypted: true }. aett asks when it is missing.",
+					),
+					Flag.map((text) => Redacted.make(text.replace(/\r?\n$/, ""))),
+					Flag.optional,
 				),
 			},
 			({ name, ...options }) => Effect.flatMap(fleetRoot, (root) => install(root, name, options)),

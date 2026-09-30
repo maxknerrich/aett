@@ -38,6 +38,8 @@ export interface Operator extends Schema.Schema.Type<typeof Operator> {}
 /** state/<name>/machine.json: aett's decisions about one machine, written by install. */
 export const MachineRecord = Schema.Struct({
 	disk: Schema.optionalKey(Schema.String),
+	// Whether the installed btrfs partition is inside LUKS; absent means it is not.
+	encrypted: Schema.optionalKey(Schema.Boolean),
 	installed: Schema.optionalKey(Schema.Boolean),
 });
 

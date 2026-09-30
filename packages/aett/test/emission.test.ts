@@ -36,11 +36,16 @@ describe("fleetJson", () => {
 		expect(Object.keys(fleetJson(declared, state).machines)).toEqual(["box"]);
 	});
 
-	it("defaults channel and packages and passes the operator's SSH keys through", () => {
+	it("defaults channel, packages and encryption and passes the operator's SSH keys through", () => {
 		const declared = fleet({
 			machines: [
 				machine("box", { role: "hypervisor" }),
-				machine("web", { role: "server", packages: ["htop"], channel: "unstable" }),
+				machine("web", {
+					role: "server",
+					packages: ["htop"],
+					channel: "unstable",
+					disk: { encrypted: true },
+				}),
 			],
 		});
 
@@ -55,8 +60,18 @@ describe("fleetJson", () => {
 		expect(fleetJson(declared, state)).toEqual({
 			operator: { sshKeys: [sshKey] },
 			machines: {
-				box: { role: "hypervisor", channel: "stable", packages: [], disk: { device: disk } },
-				web: { role: "server", channel: "unstable", packages: ["htop"], disk: { device: disk } },
+				box: {
+					role: "hypervisor",
+					channel: "stable",
+					packages: [],
+					disk: { device: disk, encrypted: false },
+				},
+				web: {
+					role: "server",
+					channel: "unstable",
+					packages: ["htop"],
+					disk: { device: disk, encrypted: true },
+				},
 			},
 		});
 	});
