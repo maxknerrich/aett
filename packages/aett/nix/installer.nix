@@ -37,6 +37,11 @@
     '';
   };
 
+  # Replaces the stock text, which says root has an empty password.
+  services.getty.helpLine = lib.mkForce ''
+    Join Wi-Fi with `nmtui`, then run `aett machine install <name>` on the controller.
+  '';
+
   services.openssh.settings = {
     PermitRootLogin = "yes";
     PasswordAuthentication = true;
