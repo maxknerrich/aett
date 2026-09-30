@@ -56,8 +56,14 @@ export const Fleet = Schema.Struct({
 
 export interface Fleet extends Schema.Schema.Type<typeof Fleet> {}
 
-/** What fleet.ts must default-export before its machines are checked. */
-export const Declaration = Schema.Struct({ machines: Schema.Array(Schema.Unknown) });
+/**
+ * What fleet.ts must default-export before its machines are checked. Other keys
+ * pass through so that decodeFleet can reject them.
+ */
+export const Declaration = Schema.StructWithRest(
+	Schema.Struct({ machines: Schema.Array(Schema.Unknown) }),
+	[Schema.Record(Schema.String, Schema.Unknown)],
+);
 
 export interface Declaration extends Schema.Schema.Type<typeof Declaration> {}
 

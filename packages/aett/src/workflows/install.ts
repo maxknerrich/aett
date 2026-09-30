@@ -389,6 +389,12 @@ const diskPassphrase = Effect.fn("diskPassphrase")(function* (
 		Option.match(chosen, { onSome: Effect.succeed, onNone: () => choosePassphrase(name) }),
 	);
 
+	if (!isPassphrase(passphrase)) {
+		return yield* new InstallError({
+			message: `${file} does not hold a passphrase that can be typed at the console: one line that is not empty.`,
+		});
+	}
+
 	if (Option.isSome(chosen) && chosen.value !== passphrase) {
 		return yield* new InstallError({
 			message: `--passphrase-file differs from ${name}'s stored passphrase in ${file}. A reinstall keeps the stored one; leave out --passphrase-file to use it.`,
@@ -398,8 +404,8 @@ const diskPassphrase = Effect.fn("diskPassphrase")(function* (
 	return passphrase;
 });
 
-// One line, not empty: what the operator can type at the console.
-const isPassphrase = (value: string) => /^[^\n]+$/.test(value);
+// One line, not empty, without control characters that disko would keep but nobody can type at the console.
+const isPassphrase = (value: string) => /^[^\r\n\0]+$/.test(value);
 
 // Asks for a new passphrase twice, starting over until both entries match.
 const choosePassphrase = (name: string) =>
@@ -424,7 +430,8 @@ const choosePassphrase = (name: string) =>
 // disk.nix's passwordFile, from which disko reads an encrypted disk's passphrase while it formats.
 const passphraseFile = "/tmp/aett-luks-passphrase";
 
-// Runs `format` with the passphrase, if there is one, in passphraseFile on the installer, and removes the file afterwards, also when formatting fails.
+// Runs `format` with the passphrase, if there is one, in passphraseFile on the installer.
+// The file is removed afterwards, also when writing it or formatting fails.
 const withPassphraseFile = <A, E>(
 	connection: Connection,
 	passphrase: Option.Option<string>,
@@ -433,9 +440,10 @@ const withPassphraseFile = <A, E>(
 	Option.match(passphrase, {
 		onNone: () => format,
 		onSome: (value) =>
-			Effect.acquireUseRelease(
-				connection.run(`umask 077 && cat > ${passphraseFile}`, value),
-				() => format,
-				() => connection.run(`rm -f ${passphraseFile}`),
-			),
+			connection
+				.run(`umask 077 && cat > ${passphraseFile}`, value)
+				.pipe(
+					Effect.andThen(format),
+					Effect.ensuring(Effect.ignore(connection.run(`rm -f ${passphraseFile}`))),
+				),
 	});

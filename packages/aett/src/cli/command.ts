@@ -65,7 +65,7 @@ const machine = Command.make("machine").pipe(
 					Flag.withDescription(
 						"A file holding the new disk passphrase of a machine declared with disk: { encrypted: true }. aett asks when it is missing.",
 					),
-					Flag.map((text) => Redacted.make(text.replace(/\n$/, ""))),
+					Flag.map((text) => Redacted.make(text.replace(/\r?\n$/, ""))),
 					Flag.optional,
 				),
 			},
