@@ -21,3 +21,13 @@ export const parseHost = (input: string): Option.Option<Host> => {
 
 /** Shows a host as the operator would type it, leaving out the default port. */
 export const formatHost = ({ name, port }: Host) => (port === 22 ? name : `${name}:${port}`);
+
+/**
+ * Removes a host's entries from a known_hosts file's content. aett records
+ * machine keys under the machine's name (HostKeyAlias), so `name` is that name.
+ */
+export const forgetHost = (knownHosts: string, name: string) =>
+	knownHosts
+		.split("\n")
+		.filter((line) => !(line.split(/\s/, 1)[0] ?? "").split(",").includes(name))
+		.join("\n");
