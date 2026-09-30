@@ -56,7 +56,7 @@ const machine = Command.make("machine").pipe(
 				),
 				reinstall: Flag.Boolean("reinstall").pipe(
 					Flag.withDescription(
-						"Install a machine state marks installed again, on its recorded disk.",
+						"Install a machine state marks installed again, on its recorded disk with its stored host key.",
 					),
 					Flag.withDefault(false),
 				),

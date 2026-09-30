@@ -7,6 +7,7 @@ import { Console, Effect } from "effect";
 import { Command } from "effect/cli";
 import metadata from "../../package.json" with { type: "json" };
 import { Nix } from "../adapters/nix.ts";
+import { Secrets } from "../adapters/secrets.ts";
 import { Ssh } from "../adapters/ssh.ts";
 import { command } from "./command.ts";
 
@@ -26,6 +27,7 @@ Command.run(command({ directory, version: metadata.version }), { version: metada
 			"InstallError",
 			"NixError",
 			"PlatformError",
+			"SecretsError",
 			"SshError",
 		],
 		(error) =>
@@ -38,6 +40,7 @@ Command.run(command({ directory, version: metadata.version }), { version: metada
 			),
 	),
 	Effect.provide(Ssh.layer),
+	Effect.provide(Secrets.layer),
 	Effect.provide(Nix.layer(join(directory, "nix"))),
 	Effect.provide(NodeServices.layer),
 	NodeRuntime.runMain,

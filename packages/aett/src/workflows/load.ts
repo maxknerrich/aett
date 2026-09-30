@@ -72,7 +72,7 @@ export const readState = Effect.fn("readState")(function* (root: string, fleet: 
 	if (!(yield* fs.exists(operatorFile))) {
 		return yield* new FleetError({
 			message:
-				"state/operator.json is missing. It holds the operator's SSH keys and aett init writes it.",
+				"state/operator.json is missing. It holds the operator's SSH and age keys and aett init writes it.",
 		});
 	}
 

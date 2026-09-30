@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
 import { fleetJson } from "../src/domain/emission.ts";
-import type { State } from "../src/domain/state.ts";
+import type { Operator, State } from "../src/domain/state.ts";
 import { fleet, machine } from "../src/index.ts";
 
 const sshKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOperatorKey operator@mac";
+
+const operator: Operator = {
+	sshKeys: [sshKey],
+	age: "age1gejw6jhjj3pdapugaevecrtsla2kcjhrdzykaznyh5xv4fjukuqq42qv3d",
+};
 
 const disk = "/dev/disk/by-id/nvme-test";
 
@@ -19,7 +24,7 @@ describe("fleetJson", () => {
 		});
 
 		const state: State = {
-			operator: { sshKeys: [sshKey] },
+			operator,
 			machines: new Map([
 				["box", { facts: true, disk }],
 				["fresh", { facts: false }],
@@ -31,7 +36,7 @@ describe("fleetJson", () => {
 		expect(Object.keys(fleetJson(declared, state).machines)).toEqual(["box"]);
 	});
 
-	it("defaults channel and packages and passes the operator's keys through", () => {
+	it("defaults channel and packages and passes the operator's SSH keys through", () => {
 		const declared = fleet({
 			machines: [
 				machine("box", { role: "hypervisor" }),
@@ -40,7 +45,7 @@ describe("fleetJson", () => {
 		});
 
 		const state: State = {
-			operator: { sshKeys: [sshKey] },
+			operator,
 			machines: new Map([
 				["box", { facts: true, disk }],
 				["web", { facts: true, disk, installed: true }],

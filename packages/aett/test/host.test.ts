@@ -1,6 +1,6 @@
 import { Option } from "effect";
 import { describe, expect, it } from "vite-plus/test";
-import { forgetHost, parseHost } from "../src/domain/host.ts";
+import { parseHost, trustHost } from "../src/domain/host.ts";
 
 describe("parseHost", () => {
 	it("defaults the port to 22", () => {
@@ -21,8 +21,8 @@ describe("parseHost", () => {
 	);
 });
 
-describe("forgetHost", () => {
-	it("drops only the lines that name the machine", () => {
+describe("trustHost", () => {
+	it("replaces only the lines that name the machine", () => {
 		const knownHosts = [
 			"# aett's known hosts",
 			"box ssh-ed25519 AAAAold",
@@ -32,10 +32,20 @@ describe("forgetHost", () => {
 			"",
 		].join("\n");
 
-		expect(forgetHost(knownHosts, "box")).toBe(
-			["# aett's known hosts", "boxer ssh-ed25519 AAAAboxer", "web ssh-ed25519 AAAAweb", ""].join(
-				"\n",
-			),
+		expect(trustHost(knownHosts, "box", "ssh-ed25519 AAAAnew root@box")).toBe(
+			[
+				"# aett's known hosts",
+				"boxer ssh-ed25519 AAAAboxer",
+				"web ssh-ed25519 AAAAweb",
+				"box ssh-ed25519 AAAAnew root@box",
+				"",
+			].join("\n"),
+		);
+	});
+
+	it("starts a missing file", () => {
+		expect(trustHost("", "box", "ssh-ed25519 AAAAnew root@box")).toBe(
+			"box ssh-ed25519 AAAAnew root@box\n",
 		);
 	});
 });

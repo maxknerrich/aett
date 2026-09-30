@@ -25,8 +25,11 @@ export interface Connection {
 	readonly store: string;
 	/** Environment for nix commands that reach `store`: the pinned ssh first on PATH, NIX_SSHOPTS on the master connection. */
 	readonly nixEnv: Readonly<Record<string, string>>;
-	/** Runs a shell command on the host and returns its stdout. A failure carries the end of its stderr. */
-	readonly run: (command: string) => Effect.Effect<string, SshError>;
+	/**
+	 * Runs a shell command on the host and returns its stdout. `input`, if
+	 * given, is the command's stdin. A failure carries the end of its stderr.
+	 */
+	readonly run: (command: string, input?: string) => Effect.Effect<string, SshError>;
 	/** Runs a shell command like `run`, streaming its stderr to the terminal, for long commands such as builds. */
 	readonly stream: (command: string) => Effect.Effect<string, SshError>;
 }
@@ -135,8 +138,11 @@ export class Ssh extends Context.Service<
 
 				// Runs a remote command; a failure shows the last lines of its stderr unless they streamed already.
 				const remote = (stderr: "pipe" | "inherit") =>
-					Effect.fn("Ssh.run")(function* (command: string) {
-						const result = yield* exec([destination, command], { stderr });
+					Effect.fn("Ssh.run")(function* (command: string, input?: string) {
+						const result = yield* exec([destination, command], {
+							stderr,
+							stdin: input === undefined ? "ignore" : Stream.make(new TextEncoder().encode(input)),
+						});
 
 						if (result.exitCode !== 0) {
 							const tail = result.stderr.split("\n").slice(-20).join("\n");

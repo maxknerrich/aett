@@ -15,7 +15,10 @@ const declared = fleet({
 const disk = "/dev/disk/by-id/nvme-test";
 
 const state: State = {
-	operator: { sshKeys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOperatorKey operator@mac"] },
+	operator: {
+		sshKeys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOperatorKey operator@mac"],
+		age: "age1gejw6jhjj3pdapugaevecrtsla2kcjhrdzykaznyh5xv4fjukuqq42qv3d",
+	},
 	machines: new Map([
 		["box", { facts: true, disk, installed: true }],
 		["fresh", { facts: true, disk }],
