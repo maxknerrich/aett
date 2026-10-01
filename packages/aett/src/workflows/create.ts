@@ -164,7 +164,11 @@ export const create = Effect.fn("create")(function* (
 			"",
 			`  ${age.secretKey}`,
 			"",
-			"Store it in your password manager. aett reads it from SOPS_AGE_KEY.",
+			"Store it in your password manager. aett reads it from SOPS_AGE_KEY, or runs",
+			"SOPS_AGE_KEY_CMD to fetch it. On a Mac, keep a copy in the login keychain:",
+			"",
+			`  security add-generic-password -a $USER -s aett-${name} -w`,
+			`  export SOPS_AGE_KEY_CMD="security find-generic-password -a $USER -s aett-${name} -w"`,
 			"",
 		].join("\n"),
 	);

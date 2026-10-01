@@ -5,6 +5,7 @@ import {
 	Effect,
 	FileSystem,
 	Layer,
+	Option,
 	Path,
 	type PlatformError,
 	Redacted,
@@ -26,7 +27,7 @@ export class Secrets extends Context.Service<
 		 * Returns the plaintext of the secret `file`, a path under the fleet
 		 * `root`. A secret that does not exist yet comes from `produce` and is
 		 * stored encrypted to `recipient`, an age public key. Decrypting takes
-		 * the private key from SOPS_AGE_KEY.
+		 * the private key from SOPS_AGE_KEY, else from what SOPS_AGE_KEY_CMD prints.
 		 */
 		readonly ensure: <E, R>(
 			root: string,
@@ -44,28 +45,9 @@ export class Secrets extends Context.Service<
 			const path = yield* Path.Path;
 			const engine = yield* Engine;
 
-			const ageKey = yield* Config.option(Config.Redacted("SOPS_AGE_KEY")).pipe(Effect.orDie);
-
-			// Runs the pinned sops with only the given environment and without a .sops.yaml, so aett's
-			// arguments alone decide how a secret is encrypted and SOPS_AGE_KEY alone decrypts it.
-			const sops = Effect.fnUntraced(function* (
-				args: ReadonlyArray<string>,
-				options: { readonly env?: Record<string, string>; readonly stdin?: string },
-			) {
-				const handle = yield* spawner.spawn(
-					ChildProcess.make(
-						path.join(yield* engine.tools, "sops"),
-						["--config", "/dev/null", ...args],
-						{
-							env: options.env ?? {},
-							extendEnv: false,
-							stdin:
-								options.stdin === undefined
-									? "ignore"
-									: Stream.make(new TextEncoder().encode(options.stdin)),
-						},
-					),
-				);
+			// Runs `command` and collects what it prints to the pipes it was given and its exit code.
+			const run = Effect.fnUntraced(function* (command: ChildProcess.Command) {
+				const handle = yield* spawner.spawn(command);
 
 				const [stdout, stderr, exitCode] = yield* Effect.all(
 					[
@@ -79,13 +61,70 @@ export class Secrets extends Context.Service<
 				return { stdout, stderr: stderr.trim(), exitCode };
 			}, Effect.scoped);
 
+			// Runs the pinned sops with only the given environment and without a .sops.yaml, so aett's
+			// arguments alone decide how a secret is encrypted and SOPS_AGE_KEY alone decrypts it.
+			const sops = Effect.fnUntraced(function* (
+				args: ReadonlyArray<string>,
+				options: { readonly env?: Record<string, string>; readonly stdin?: string },
+			) {
+				return yield* run(
+					ChildProcess.make(
+						path.join(yield* engine.tools, "sops"),
+						["--config", "/dev/null", ...args],
+						{
+							env: options.env ?? {},
+							extendEnv: false,
+							stdin:
+								options.stdin === undefined
+									? "ignore"
+									: Stream.make(new TextEncoder().encode(options.stdin)),
+						},
+					),
+				);
+			});
+
+			// Runs SOPS_AGE_KEY_CMD in a shell with the operator's environment and terminal, so a
+			// password manager can ask to be unlocked, and takes what it prints as the private key.
+			// It stays in aett's session; a detached one has no /dev/tty to prompt on.
+			const keyFromCommand = Effect.fnUntraced(function* (command: string) {
+				const result = yield* run(
+					ChildProcess.make("/bin/sh", ["-c", command], {
+						stdin: "inherit",
+						stderr: "inherit",
+						detached: false,
+					}),
+				);
+
+				if (result.exitCode !== 0) {
+					return yield* new SecretsError({
+						message: `SOPS_AGE_KEY_CMD exited with ${result.exitCode}: ${command}`,
+					});
+				}
+
+				return Redacted.make(result.stdout);
+			});
+
+			const keyVariable = yield* Config.option(Config.Redacted("SOPS_AGE_KEY")).pipe(Effect.orDie);
+			const keyCommand = yield* Config.option(Config.String("SOPS_AGE_KEY_CMD")).pipe(Effect.orDie);
+
+			// The operator's private age key: SOPS_AGE_KEY, else what SOPS_AGE_KEY_CMD prints. The
+			// command runs only once a secret needs decrypting, and at most once per run.
+			const ageKey = yield* Effect.cached(
+				Option.match(keyVariable, {
+					onSome: Effect.succeedSome,
+					onNone: () => Effect.transposeOption(Option.map(keyCommand, keyFromCommand)),
+				}),
+			);
+
 			const decrypt = Effect.fn("Secrets.decrypt")(function* (root: string, file: string) {
-				const key = yield* Effect.fromOption(
-					ageKey,
-					() =>
-						new SecretsError({
-							message: `${file} is encrypted. Set SOPS_AGE_KEY to your private age key (AGE-SECRET-KEY-1…), which aett create showed.`,
-						}),
+				const key = yield* Effect.flatMap(ageKey, (found) =>
+					Effect.fromOption(
+						found,
+						() =>
+							new SecretsError({
+								message: `${file} is encrypted. Set SOPS_AGE_KEY to your private age key (AGE-SECRET-KEY-1…), which aett create showed, or SOPS_AGE_KEY_CMD to a command that prints it.`,
+							}),
+					),
 				);
 
 				const result = yield* sops(
@@ -96,7 +135,7 @@ export class Secrets extends Context.Service<
 				// sops exits with 128 when none of its keys opens the file.
 				if (result.exitCode === 128) {
 					return yield* new SecretsError({
-						message: `SOPS_AGE_KEY cannot decrypt ${file}. It must hold your private age key, which aett create showed.`,
+						message: `The key from ${Option.isSome(keyVariable) ? "SOPS_AGE_KEY" : "SOPS_AGE_KEY_CMD"} cannot decrypt ${file}. It must be your private age key, which aett create showed.`,
 					});
 				}
 
