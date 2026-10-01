@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { sshConfigPath } from "../src/adapters/ssh.ts";
+import { sshConfigPath } from "../src/domain/host.ts";
 
 describe("sshConfigPath", () => {
 	it("keeps spaces, quotes, backslashes and percent signs literal for ssh", () => {

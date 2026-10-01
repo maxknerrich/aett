@@ -1,5 +1,6 @@
 import { Option, Result } from "effect";
 import type { Fleet } from "./fleet.ts";
+import { sshConfigPath } from "./host.ts";
 import type { MachineRecord, State } from "./state.ts";
 
 // Guest networks: each machine that runs VMs gets one bridge with the subnet
@@ -129,10 +130,10 @@ export const allocate = (
 };
 
 // The host ports that reach the guest numbered `guest` on its host's subnet: one for SSH and ten
-// for mosh. Unique per host, and clear of the host's own mosh ports, 60000 to 61000.
+// for mosh. Unique per host, and clear of the host's own mosh ports, 60000 to 61000 inclusive.
 const forwardsFor = (guest: number) => ({
 	ssh: 2200 + guest,
-	mosh: [61000 + (guest - 2) * 10, 61000 + (guest - 2) * 10 + 9] as const,
+	mosh: [61010 + (guest - 2) * 10, 61010 + (guest - 2) * 10 + 9] as const,
 });
 
 /** How a guest sits on its host's bridge, derived from its recorded address. */
@@ -186,7 +187,7 @@ export const sshConfig = (fleet: Fleet, state: State, knownHosts: string) => {
 				`\tPort ${forwards.ssh}`,
 				`\tUser ${user}`,
 				`\tHostKeyAlias ${name}`,
-				`\tUserKnownHostsFile "${knownHosts}"`,
+				`\tUserKnownHostsFile ${sshConfigPath(knownHosts)}`,
 			].join("\n"),
 		);
 	});
