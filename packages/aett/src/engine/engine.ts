@@ -1,5 +1,6 @@
 import { Context, type Effect, type Option, type PlatformError, Schema } from "effect";
 import type { Connection, SshError } from "../adapters/ssh.ts";
+import type { Disk } from "../domain/disk.ts";
 import type { Fleet } from "../domain/fleet.ts";
 import type { State } from "../domain/state.ts";
 
@@ -29,6 +30,12 @@ export class Engine extends Context.Service<
 	{
 		/** Directory of the pinned tools aett runs on the controller: ssh, ssh-add, ssh-keygen, sops, age and age-keygen. */
 		readonly tools: Effect.Effect<string, EngineError>;
+		/** Runs the installer's hardware probe on `target`, saves its report in `<root>/state/<name>/` and returns the internal disks it found. */
+		readonly discover: (
+			root: string,
+			name: string,
+			target: Connection,
+		) => Effect.Effect<ReadonlyArray<Disk>, EngineError | SshError | PlatformError.PlatformError>;
 		/** Writes the build for `fleet` to `<root>/.aett/build/`. It covers the machines with recorded facts and an install disk. */
 		readonly emit: (
 			root: string,

@@ -2,16 +2,8 @@ import { Console, Effect, FileSystem, Option, Path, Redacted, Schema } from "eff
 import { Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Secrets } from "../adapters/secrets.ts";
-import { type Connection, Ssh } from "../adapters/ssh.ts";
-import {
-	type Disk,
-	diskLabel,
-	FacterReport,
-	findDisk,
-	internalDisks,
-	isPassphrase,
-	layoutPreview,
-} from "../domain/disk.ts";
+import { Ssh } from "../adapters/ssh.ts";
+import { type Disk, diskLabel, findDisk, isPassphrase, layoutPreview } from "../domain/disk.ts";
 import { type Fleet, isEncrypted } from "../domain/fleet.ts";
 import { formatHost, type Host, trustHost } from "../domain/host.ts";
 import { type MachineRecord, SshPublicKey } from "../domain/state.ts";
@@ -45,7 +37,7 @@ export const discover = Effect.fn("discover")(function* (
 	access: InstallerAccess,
 ) {
 	yield* declared(yield* loadFleet(root), name);
-	yield* discoverFacts(root, name, yield* connect(access));
+	yield* (yield* Engine).discover(root, name, yield* connect(access));
 }, Effect.scoped);
 
 /**
@@ -85,7 +77,7 @@ export const install = Effect.fn("install")(function* (
 		: Option.none();
 
 	const connection = yield* connect(options);
-	const disks = internalDisks(yield* discoverFacts(root, name, connection));
+	const disks = yield* engine.discover(root, name, connection);
 	const disk = yield* chooseDisk(name, recorded?.disk, options.disk, disks);
 
 	yield* Console.log(`\n${layoutPreview(machine, disk)}\n`);
@@ -138,38 +130,6 @@ const connect = Effect.fn("connect")(function* ({ host, code }: InstallerAccess)
 	yield* Console.log(`Connecting to the installer at ${formatHost(host)}…`);
 
 	return yield* ssh.installer(host, secret);
-});
-
-// Saves the nixos-facter report exactly as printed, once it proves readable.
-const discoverFacts = Effect.fn("discoverFacts")(function* (
-	root: string,
-	name: string,
-	connection: Connection,
-) {
-	const fs = yield* FileSystem.FileSystem;
-	const path = yield* Path.Path;
-
-	yield* Console.log("Running nixos-facter on the installer…");
-
-	const report = yield* connection.run("nixos-facter");
-
-	const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(FacterReport))(
-		report,
-	).pipe(
-		Effect.catchTag("SchemaError", (error) =>
-			Effect.fail(
-				new InstallError({
-					message: `nixos-facter printed a report aett cannot read: ${error.message}`,
-				}),
-			),
-		),
-	);
-
-	yield* fs.makeDirectory(path.join(root, "state", name), { recursive: true });
-	yield* fs.writeFileString(path.join(root, "state", name, "facter.json"), report);
-	yield* Console.log(`Wrote state/${name}/facter.json`);
-
-	return decoded;
 });
 
 // The recorded disk wins; otherwise --disk, the only internal disk or the operator's choice.

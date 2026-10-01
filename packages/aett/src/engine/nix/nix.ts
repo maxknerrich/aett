@@ -5,6 +5,7 @@ import { type Connection, shellQuote } from "../../adapters/ssh.ts";
 import type { Fleet } from "../../domain/fleet.ts";
 import type { State } from "../../domain/state.ts";
 import { type Build, Engine, EngineError, type InstallSecrets } from "../engine.ts";
+import { FacterReport, internalDisks } from "./facter.ts";
 import { fleetJson } from "./fleet-json.ts";
 
 // A local directory as a flake reference; nix parses it as a URL, so spaces and the like are percent-encoded.
@@ -153,6 +154,35 @@ export const nixEngine = (flake: string) =>
 				),
 			);
 
+			// The report is saved exactly as nixos-facter printed it, once it proves readable; emit copies it into the build.
+			const discover = Effect.fn("NixEngine.discover")(function* (
+				root: string,
+				name: string,
+				target: Connection,
+			) {
+				yield* Console.log("Running nixos-facter on the installer…");
+
+				const report = yield* target.run("nixos-facter");
+
+				const decoded = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(FacterReport))(
+					report,
+				).pipe(
+					Effect.catchTag("SchemaError", (error) =>
+						Effect.fail(
+							new EngineError({
+								message: `nixos-facter printed a report aett cannot read: ${error.message}`,
+							}),
+						),
+					),
+				);
+
+				yield* fs.makeDirectory(path.join(root, "state", name), { recursive: true });
+				yield* fs.writeFileString(path.join(root, "state", name, "facter.json"), report);
+				yield* Console.log(`Wrote state/${name}/facter.json`);
+
+				return internalDisks(decoded);
+			});
+
 			const emit = Effect.fn("NixEngine.emit")(function* (
 				root: string,
 				fleet: Fleet,
@@ -298,6 +328,7 @@ export const nixEngine = (flake: string) =>
 
 			return Engine.of({
 				tools,
+				discover,
 				emit,
 				evaluate,
 				buildSystem,
