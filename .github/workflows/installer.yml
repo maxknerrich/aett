@@ -64,11 +64,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Releases are made by hand from main until the first real version: run this workflow on main.
   publish:
     name: Publish release
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'workflow_dispatch' || github.event_name == 'push')
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
     permissions:
