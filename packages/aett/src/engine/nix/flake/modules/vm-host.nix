@@ -81,16 +81,17 @@ in
     # through the host otherwise, not even from a LAN machine that routes 10.100.0.0/16 here.
     networking.firewall.filterForward = true;
 
-    # Connections to the host's own addresses on a forwarded port go to the guest; the forward chain
-    # lets them through as DNAT.
+    # Connections from the LAN to the host's own addresses on a forwarded port go to the guest; the
+    # forward chain lets them through as DNAT. Over the tailnet a guest is reached as itself, under
+    # its own ACL.
     networking.nftables.tables.aett-forwards = lib.mkIf (cfg.forwards != [ ]) {
       family = "ip";
       content = ''
         chain prerouting {
           type nat hook prerouting priority dstnat; policy accept;
           ${lib.concatMapStrings (forward: ''
-            iifname != "guests" fib daddr type local tcp dport ${toString forward.ssh} dnat to ${forward.address}:22
-            iifname != "guests" fib daddr type local udp dport ${toString forward.mosh.from}-${toString forward.mosh.to} dnat to ${forward.address}
+            iifname != { "guests", "tailscale0" } fib daddr type local tcp dport ${toString forward.ssh} dnat to ${forward.address}:22
+            iifname != { "guests", "tailscale0" } fib daddr type local udp dport ${toString forward.mosh.from}-${toString forward.mosh.to} dnat to ${forward.address}
           '') cfg.forwards}
         }
       '';
