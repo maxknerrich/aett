@@ -281,8 +281,9 @@ export const nixEngine = (flake: string) =>
 				root: string,
 				fleet: Fleet,
 				state: State,
+				secrets: ReadonlyArray<string>,
 			) {
-				const emitted = fleetJson(fleet, state);
+				const emitted = fleetJson(fleet, state, secrets);
 				const directory = path.join(root, ".aett", "build");
 
 				yield* fs.remove(directory, { recursive: true, force: true });
@@ -321,6 +322,15 @@ export const nixEngine = (flake: string) =>
 							),
 						),
 				);
+
+				// sops-nix on each machine decrypts these; tailscale.nix and the like read them from here.
+				yield* Effect.forEach(secrets, (secret) => {
+					const file = path.join("secrets", `${secret}.json`);
+
+					return fs
+						.makeDirectory(path.dirname(path.join(directory, file)), { recursive: true })
+						.pipe(Effect.andThen(fs.copyFile(path.join(root, file), path.join(directory, file))));
+				});
 
 				return { directory, machines } satisfies Build;
 			});

@@ -6,11 +6,14 @@ import type { State } from "../../domain/state.ts";
 // Whether fleet.ts declares nothing for the machine that aett can't build yet.
 const buildable = (machine: Machine) => machine.unsupported.length === 0;
 
-// What every listed machine has.
-const base = (machine: Machine) => ({
+// What every listed machine has. `secrets` are the machine secrets the fleet has.
+const base = (machine: Machine, secrets: ReadonlyArray<string>) => ({
 	role: machine.role,
 	channel: machine.channel,
 	packages: machine.packages,
+	tailscale: machine.tailscale
+		? { tag: `tag:${machine.role}`, authKey: secrets.includes("tailscale/auth-key") }
+		: null,
 });
 
 /**
@@ -20,7 +23,7 @@ const base = (machine: Machine) => ({
  * listed and whose address is recorded. A listed host names its guests and
  * its bridge address.
  */
-export const fleetJson = (fleet: Fleet, state: State) => {
+export const fleetJson = (fleet: Fleet, state: State, secrets: ReadonlyArray<string>) => {
 	const metal = fleet.machines.filter((machine) => {
 		const recorded = state.machines.get(machine.name);
 
@@ -71,13 +74,15 @@ export const fleetJson = (fleet: Fleet, state: State) => {
 				return [
 					machine.name,
 					{
-						...base(machine),
+						...base(machine, secrets),
 						disk: { device: recorded?.disk ?? "", encrypted: machine.encrypted },
 						...network,
 					},
 				] as const;
 			}),
-			...guests.map(({ machine, vm }) => [machine.name, { ...base(machine), vm }] as const),
+			...guests.map(
+				({ machine, vm }) => [machine.name, { ...base(machine, secrets), vm }] as const,
+			),
 		]),
 	};
 };

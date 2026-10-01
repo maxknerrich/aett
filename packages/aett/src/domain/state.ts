@@ -50,6 +50,8 @@ export const MachineRecord = Schema.Struct({
 	// A VM: the machine it was placed on and its address on that machine's subnet.
 	host: Schema.optionalKey(Schema.String),
 	address: Schema.optionalKey(Schema.String),
+	// The machine's tailnet address, once Tailscale reported one.
+	tailnet: Schema.optionalKey(Schema.String),
 });
 
 export interface MachineRecord extends Schema.Schema.Type<typeof MachineRecord> {}

@@ -15,6 +15,13 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Engine, type EngineError } from "../engine/engine.ts";
 
+// The recipients sops records in an encrypted file, readable without the key.
+const SopsRecipients = Schema.Struct({
+	sops: Schema.Struct({
+		age: Schema.optionalKey(Schema.Array(Schema.Struct({ recipient: Schema.String }))),
+	}),
+});
+
 export class SecretsError extends Schema.TaggedError<SecretsError>()("SecretsError", {
 	message: Schema.String,
 }) {}
@@ -35,6 +42,22 @@ export class Secrets extends Context.Service<
 			recipients: ReadonlyArray<string>,
 			produce: Effect.Effect<string, E, R>,
 		) => Effect.Effect<string, E | SecretsError | EngineError | PlatformError.PlatformError, R>;
+		/** Stores `plaintext` as the secret `file`, encrypted to `recipients`, replacing what it held. */
+		readonly write: (
+			root: string,
+			file: string,
+			recipients: ReadonlyArray<string>,
+			plaintext: string,
+		) => Effect.Effect<void, SecretsError | EngineError | PlatformError.PlatformError>;
+		/**
+		 * Encrypts the secret `file` to exactly `recipients`, decrypting it
+		 * first when they differ from the ones it has. Returns whether it changed.
+		 */
+		readonly share: (
+			root: string,
+			file: string,
+			recipients: ReadonlyArray<string>,
+		) => Effect.Effect<boolean, SecretsError | EngineError | PlatformError.PlatformError>;
 	}
 >()("aett/adapters/Secrets") {
 	static readonly layer = Layer.effect(
@@ -195,7 +218,37 @@ export class Secrets extends Context.Service<
 						: Effect.flatMap(produce, (plaintext) => encrypt(root, file, recipients, plaintext)),
 				);
 
-			return Secrets.of({ ensure });
+			const write = (
+				root: string,
+				file: string,
+				recipients: ReadonlyArray<string>,
+				plaintext: string,
+			) => Effect.asVoid(encrypt(root, file, recipients, plaintext));
+
+			const share = Effect.fn("Secrets.share")(function* (
+				root: string,
+				file: string,
+				recipients: ReadonlyArray<string>,
+			) {
+				const current = yield* fs.readFileString(path.join(root, file)).pipe(
+					Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(SopsRecipients))),
+					Effect.catchTag("SchemaError", () =>
+						Effect.fail(new SecretsError({ message: `${file} is not a secret aett can read.` })),
+					),
+				);
+
+				const had = new Set((current.sops.age ?? []).map(({ recipient }) => recipient));
+
+				if (had.size === recipients.length && recipients.every((recipient) => had.has(recipient))) {
+					return false;
+				}
+
+				yield* write(root, file, recipients, yield* decrypt(root, file));
+
+				return true;
+			});
+
+			return Secrets.of({ ensure, write, share });
 		}),
 	);
 }

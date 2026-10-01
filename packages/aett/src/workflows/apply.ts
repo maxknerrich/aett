@@ -1,13 +1,14 @@
-import { Console, Effect, Option, Path, Schedule, Schema } from "effect";
+import { Console, Effect, Option, Schema } from "effect";
 import { Prompt } from "effect/cli";
-import { type Connection, Ssh } from "../adapters/ssh.ts";
+import type { Connection } from "../adapters/ssh.ts";
 import { applyTargets } from "../domain/apply.ts";
 import { type Fleet, guestsOf } from "../domain/fleet.ts";
-import { formatHost, type Host } from "../domain/host.ts";
+import type { Host } from "../domain/host.ts";
 import type { State } from "../domain/state.ts";
 import { type Build, Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
 import { placeGuestKeys } from "./identity.ts";
+import { connectGuest, connectMachine, recordTailnet } from "./reach.ts";
 
 export class ApplyError extends Schema.TaggedError<ApplyError>()("ApplyError", {
 	message: Schema.String,
@@ -82,36 +83,23 @@ export const apply = Effect.fn("apply")(function* (
 			const host = hosts.get(machine);
 
 			return host === undefined
-				? applyMachine(
-						run,
-						machine,
-						Option.getOrElse(options.host, () => localHost(machine)),
-					)
+				? applyMachine(run, machine, options.host)
 				: applyGuest(run, machine, host);
 		},
 		{ discard: true },
 	);
 });
 
-// Where aett finds a bare-metal machine on the LAN.
-const localHost = (name: string): Host => ({ name: `${name}.local`, port: 22 });
-
-// Logs in to a bare-metal machine with aett's known hosts.
-const connect = Effect.fn("connect")(function* (root: string, name: string, host: Host) {
-	const ssh = yield* Ssh;
-	const path = yield* Path.Path;
-
-	yield* Console.log(`Connecting to ${name} at ${formatHost(host)}…`);
-
-	return yield* ssh.machine(name, host, path.join(root, "state", "known_hosts"));
-});
-
 // Builds a bare-metal machine's system on it and, once the operator agrees, switches to it. A
 // host's guests get their host keys first, so the ones the switch starts find their identity, and
 // the guests fleet.ts dropped stop once the host runs its new system.
-const applyMachine = Effect.fn("applyMachine")(function* (run: Run, name: string, host: Host) {
+const applyMachine = Effect.fn("applyMachine")(function* (
+	run: Run,
+	name: string,
+	host: Option.Option<Host>,
+) {
 	const engine = yield* Engine;
-	const connection = yield* connect(run.root, name, host);
+	const connection = yield* connectMachine(run.root, run.state, name, host);
 
 	const guests = guestsOf(run.fleet, name).filter((guest) => run.build.machines.includes(guest));
 
@@ -122,6 +110,7 @@ const applyMachine = Effect.fn("applyMachine")(function* (run: Run, name: string
 
 	if (system === current) {
 		yield* Console.log(`${name} is up to date.`);
+		yield* recordTailnet(run.root, run.state, name, connection);
 
 		return yield* stopDroppedGuests(run, name, connection);
 	}
@@ -141,6 +130,7 @@ const applyMachine = Effect.fn("applyMachine")(function* (run: Run, name: string
 	yield* Console.log(`Switching ${name}…`);
 	yield* engine.activate(connection, system);
 	yield* Console.log(`Switched ${name} to ${system}.`);
+	yield* recordTailnet(run.root, run.state, name, connection);
 
 	return yield* stopDroppedGuests(run, name, connection);
 }, Effect.scoped);
@@ -177,9 +167,7 @@ const stopDroppedGuests = Effect.fn("stopDroppedGuests")(function* (
 // what it boots with changed.
 const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, host: string) {
 	const engine = yield* Engine;
-	const path = yield* Path.Path;
-	const knownHosts = path.join(run.root, "state", "known_hosts");
-	const connection = yield* connect(run.root, host, localHost(host));
+	const connection = yield* connectMachine(run.root, run.state, host, Option.none());
 
 	yield* placeGuestKeys(run.root, connection, [name], run.state.operator.ageKeys);
 
@@ -199,16 +187,14 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 		return yield* Console.log(`Started ${name} with ${system}.`);
 	}
 
-	const guest = yield* connectGuest(
-		name,
-		run.state.machines.get(name)?.address ?? "",
-		knownHosts,
-		connection,
-	);
-
+	const guest = yield* connectGuest(run.root, run.state, name, connection);
 	const current = yield* engine.currentSystem(guest);
 
-	if (current === system) return yield* Console.log(`${name} is up to date.`);
+	if (current === system) {
+		yield* Console.log(`${name} is up to date.`);
+
+		return yield* recordTailnet(run.root, run.state, name, guest);
+	}
 
 	if (yield* engine.needsRestart(guest, system)) {
 		yield* Console.log(
@@ -239,32 +225,7 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 
 	yield* Console.log(`Switching ${name}…`);
 	yield* engine.switchGuest(connection, guest, name, system);
+	yield* Console.log(`Switched ${name} to ${system}.`);
 
-	return yield* Console.log(`Switched ${name} to ${system}.`);
+	return yield* recordTailnet(run.root, run.state, name, guest);
 }, Effect.scoped);
-
-// Logs in to a running guest through its host. A guest its host just started needs a moment
-// before sshd answers, so aett keeps trying for a minute and a half.
-const connectGuest = Effect.fn("connectGuest")(function* (
-	name: string,
-	address: string,
-	knownHosts: string,
-	host: Connection,
-) {
-	const ssh = yield* Ssh;
-	const login = ssh.guest(name, address, knownHosts, host);
-
-	return yield* login.pipe(
-		Effect.catchTag("SshError", () =>
-			Console.log(`Waiting for ${name} to answer over SSH…`).pipe(
-				Effect.andThen(
-					login.pipe(
-						Effect.retry(
-							Schedule.spaced("2 seconds").pipe(Schedule.upTo({ duration: "90 seconds" })),
-						),
-					),
-				),
-			),
-		),
-	);
-});

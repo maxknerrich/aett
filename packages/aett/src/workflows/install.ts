@@ -100,6 +100,9 @@ export const install = Effect.fn("install")(function* (
 		? Option.some(yield* diskPassphrase(root, name, state.operator.ageKeys, options.passphrase))
 		: Option.none();
 
+	// Trusted before the build, so the machine is a recipient of the secrets it reads on first boot.
+	yield* trustHostKey(root, name, hostKey.publicKey);
+
 	// Later runs read the disk from state and never derive it again.
 	// An existing record stays as it is, so `installed` survives a failed reinstall.
 	if (recorded?.disk === undefined) yield* updateRecord(root, name, { disk: disk.byId });
@@ -123,7 +126,6 @@ export const install = Effect.fn("install")(function* (
 		encrypted: machine.encrypted,
 		installed: true,
 	});
-	yield* trustHostKey(root, name, hostKey.publicKey);
 	yield* Effect.forEach(guests, ([guest, key]) => trustHostKey(root, guest, key.publicKey));
 	yield* Console.log(`Installed ${name}. It reboots now and comes back as ${name}.local.`);
 

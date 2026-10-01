@@ -7,6 +7,7 @@ import { compile } from "../workflows/compile.ts";
 import { type AettPackage, create } from "../workflows/create.ts";
 import { destroy } from "../workflows/destroy.ts";
 import { fleetRoot } from "../workflows/load.ts";
+import { setSecret } from "../workflows/secrets.ts";
 import { discover, install } from "../workflows/install.ts";
 
 const cwd = Effect.map(Effect.service(Path.Path), (path) => path.resolve());
@@ -98,6 +99,25 @@ const machine = Command.make("machine").pipe(
 	]),
 );
 
+const secret = Command.make("secret").pipe(
+	Command.withDescription("Set the secrets machines read."),
+	Command.withSubcommands([
+		Command.make(
+			"set",
+			{
+				name: Argument.String("name").pipe(
+					Argument.withDescription("The secret, such as tailscale/auth-key."),
+				),
+			},
+			({ name }) => Effect.flatMap(fleet, (root) => setSecret(root, name)),
+		).pipe(
+			Command.withDescription(
+				"Ask for a secret and store it encrypted to the operators and the machines that read it.",
+			),
+		),
+	]),
+);
+
 /** The aett command line; `aett` is the running package, which new fleets depend on. */
 export const command = (aett: AettPackage) =>
 	Command.make("aett").pipe(
@@ -175,5 +195,6 @@ export const command = (aett: AettPackage) =>
 				),
 			),
 			machine,
+			secret,
 		]),
 	);

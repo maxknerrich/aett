@@ -42,17 +42,20 @@ describe("fleetJson", () => {
 			]),
 		};
 
-		expect(Object.keys(fleetJson(declared, state).machines)).toEqual(["box"]);
+		expect(Object.keys(fleetJson(declared, state, []).machines)).toEqual(["box"]);
 	});
 
-	it("emits each machine's settings and the packages its stacks bring, with the operator's keys", () => {
+	it("emits each machine's settings, the packages its stacks bring and Tailscale, with the operator's keys", () => {
 		const declared = loaded(
 			fleet({
 				machines: {
 					box: hypervisor(),
 					web: server({ system: { channel: "unstable", encrypted: true } }),
 				},
-				stacks: { tools: { packages: ["htop"] } },
+				stacks: {
+					tools: { packages: ["htop"] },
+					private: { machines: { web: { services: { tailscale: false } } } },
+				},
 			}),
 		);
 
@@ -64,19 +67,21 @@ describe("fleetJson", () => {
 			]),
 		};
 
-		expect(fleetJson(declared, state)).toEqual({
+		expect(fleetJson(declared, state, ["tailscale/auth-key"])).toEqual({
 			operator: { sshKeys: [sshKey] },
 			machines: {
 				box: {
 					role: "hypervisor",
 					channel: "stable",
 					packages: [],
+					tailscale: { tag: "tag:hypervisor", authKey: true },
 					disk: { device: disk, encrypted: false },
 				},
 				web: {
 					role: "server",
 					channel: "unstable",
 					packages: ["htop"],
+					tailscale: null,
 					disk: { device: disk, encrypted: true },
 				},
 			},
@@ -105,11 +110,12 @@ describe("fleetJson", () => {
 			]),
 		};
 
-		expect(fleetJson(declared, state).machines).toEqual({
+		expect(fleetJson(declared, state, []).machines).toEqual({
 			box: {
 				role: "hypervisor",
 				channel: "stable",
 				packages: [],
+				tailscale: { tag: "tag:hypervisor", authKey: false },
 				disk: { device: disk, encrypted: false },
 				guests: ["vm"],
 				network: { address: "10.100.1.1", prefixLength: 24 },
@@ -118,6 +124,7 @@ describe("fleetJson", () => {
 				role: "server",
 				channel: "stable",
 				packages: [],
+				tailscale: { tag: "tag:server", authKey: false },
 				vm: {
 					host: "box",
 					cpu: 4,

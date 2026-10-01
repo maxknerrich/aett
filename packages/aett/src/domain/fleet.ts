@@ -137,6 +137,8 @@ export interface Machine {
 	readonly channel: Channel;
 	/** Set exactly for a VM. */
 	readonly vm: Option.Option<VmSettings>;
+	/** On the tailnet: a role default that only a stack can turn off, and never on a hypervisor. */
+	readonly tailscale: boolean;
 	readonly packages: ReadonlyArray<string>;
 	/** What it declares that aett can't build yet; install and apply refuse it while there is any. */
 	readonly unsupported: ReadonlyArray<string>;
@@ -337,7 +339,7 @@ const toMachine = (
 ): Machine => {
 	const resolved =
 		machine.role === "hypervisor"
-			? { packages: [], fast: [], apps: [], services: [], home: false }
+			? { packages: [], fast: [], apps: [], services: [], off: [], home: false }
 			: resolveStacks(
 					stacks.map(({ stack }) => stack),
 					{ name, computer: machine.role === "computer" },
@@ -350,7 +352,6 @@ const toMachine = (
 		system.desktop === undefined ? [] : ["desktops"],
 		resolved.fast.length > 0 ? ["fast packages"] : [],
 		resolved.apps.length > 0 ? ["apps"] : [],
-		resolved.services.length > 0 ? [`services (${resolved.services.join(", ")})`] : [],
 		resolved.home ? ["homes"] : [],
 	].flat();
 
@@ -366,6 +367,7 @@ const toMachine = (
 			memory: mebibytes(system.memory ?? "2 GiB"),
 			disk: mebibytes(system.disk ?? "20 GiB"),
 		})),
+		tailscale: !resolved.off.includes("tailscale"),
 		packages: resolved.packages,
 		unsupported,
 	};
