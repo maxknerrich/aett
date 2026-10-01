@@ -108,6 +108,10 @@ export const command = (aett: AettPackage) =>
 						),
 						Flag.atLeast(0),
 					),
+					noMachines: Flag.Boolean("no-machines").pipe(
+						Flag.withDescription("Start with no machines instead of asking for them."),
+						Flag.withDefault(false),
+					),
 				},
 				(options) => Effect.flatMap(fleetRoot, (cwd) => create(cwd, aett, options)),
 			).pipe(

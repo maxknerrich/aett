@@ -66,3 +66,19 @@ export const newMachineName = (machines: ReadonlyArray<Machine>, name: string) =
 			? Result.fail(`${name} is already in the fleet`)
 			: Result.succeed(name)
 		: Result.fail("Expected a lowercase hostname: a-z, 0-9 and inner hyphens");
+
+/**
+ * How a new fleet depends on aett: by version when aett came from the
+ * registry, else on the source checkout it runs from. npm links a `file:`
+ * directory; pnpm, yarn and bun would install the checkout's own
+ * dependencies from it, so they get `link:`.
+ */
+export const aettDependency = (
+	manager: PackageManager,
+	checkout: Option.Option<string>,
+	version: string,
+) =>
+	Option.match(checkout, {
+		onNone: () => `^${version}`,
+		onSome: (directory) => `${manager === "npm" ? "file" : "link"}:${directory}`,
+	});

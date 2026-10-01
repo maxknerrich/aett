@@ -1,4 +1,5 @@
 import {
+	Array as Arr,
 	Config,
 	Console,
 	Effect,
@@ -11,11 +12,13 @@ import {
 } from "effect";
 import { Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import type { Machine } from "../domain/fleet.ts";
+import { decodeFleet, type Machine } from "../domain/fleet.ts";
 import {
+	aettDependency,
 	FleetName,
 	fleetSource,
 	newMachineName,
+	type PackageManager,
 	packageManager,
 	roles,
 } from "../domain/scaffold.ts";
@@ -36,8 +39,9 @@ export interface AettPackage {
 export interface CreateOptions {
 	readonly name: Option.Option<string>;
 	readonly sshKey: Option.Option<string>;
-	/** Machines from --machine; when there are none, create asks. */
+	/** Machines from --machine; when there are none, create asks unless `noMachines`. */
 	readonly machines: ReadonlyArray<Machine>;
+	readonly noMachines: boolean;
 }
 
 const isSshPublicKey = Schema.is(SshPublicKey);
@@ -105,15 +109,34 @@ export const create = Effect.fn("create")(function* (
 			}),
 	});
 
-	const machines = options.machines.length > 0 ? options.machines : yield* askMachines([]);
+	if (options.noMachines && options.machines.length > 0) {
+		return yield* new CreateError({ message: "Pass either --machine or --no-machines, not both." });
+	}
+
+	const machines =
+		options.machines.length > 0 || options.noMachines ? options.machines : yield* askMachines([]);
+
+	yield* Effect.fromResult(decodeFleet({ machines })).pipe(
+		Effect.mapError(
+			(problems) => new CreateError({ message: `These machines can't form a fleet:\n${problems}` }),
+		),
+	);
+
 	const age = yield* ageKey;
+	const userAgent = yield* Config.option(Config.String("npm_config_user_agent")).pipe(Effect.orDie);
+	const manager = packageManager(userAgent);
 
-	// A source checkout is linked; an installed package is depended on by version.
-	const dependency = aett.directory.split(path.sep).includes("node_modules")
-		? `^${aett.version}`
-		: `file:${aett.directory}`;
+	// aett runs from a source checkout unless it was installed into node_modules.
+	const checkout = aett.directory.split(path.sep).includes("node_modules")
+		? Option.none()
+		: Option.some(aett.directory);
 
-	const manifest = { name, private: true, type: "module", dependencies: { aett: dependency } };
+	const manifest = {
+		name,
+		private: true,
+		type: "module",
+		dependencies: { aett: aettDependency(manager, checkout, aett.version) },
+	};
 
 	yield* fs.makeDirectory(path.join(root, "state"), { recursive: true });
 	yield* fs.writeFileString(path.join(root, "fleet.ts"), fleetSource(machines));
@@ -127,15 +150,9 @@ export const create = Effect.fn("create")(function* (
 		`${JSON.stringify({ sshKeys: [key], age: age.publicKey } satisfies Operator, null, "\t")}\n`,
 	);
 	yield* Console.log(`\nWrote the fleet to ${path.relative(cwd, root)}/.`);
-	yield* gitInit(root);
-	yield* installDependencies(root);
 
-	const next =
-		machines.length === 0
-			? "  Declare machines in fleet.ts, then boot one from the aett installer and run aett machine install <name>."
-			: `  Boot ${machines.length === 1 ? "the machine" : "a machine"} from the aett installer, then: aett machine install ${machines[0]?.name ?? "<name>"}`;
-
-	return yield* Console.log(
+	// Shown as soon as its public half is in state, so no later failure can lose it.
+	yield* Console.log(
 		[
 			"",
 			"Your private age key decrypts the fleet's secrets. aett shows it only this once:",
@@ -144,11 +161,25 @@ export const create = Effect.fn("create")(function* (
 			"",
 			"Store it in your password manager. aett reads it from SOPS_AGE_KEY.",
 			"",
-			"Next:",
-			`  cd ${path.relative(cwd, root)}`,
-			next,
 		].join("\n"),
 	);
+
+	const failures = Arr.getSomes([yield* gitInit(root), yield* installDependencies(root, manager)]);
+
+	yield* Effect.forEach(failures, (failure) => Console.error(failure));
+
+	const next =
+		machines.length === 0
+			? "  Declare machines in fleet.ts, then boot one from the aett installer and run aett machine install <name>."
+			: `  Boot ${machines.length === 1 ? "the machine" : "a machine"} from the aett installer, then: aett machine install ${machines[0]?.name ?? "<name>"}`;
+
+	yield* Console.log(["", "Next:", `  cd ${path.relative(cwd, root)}`, next].join("\n"));
+
+	return yield* failures.length === 0
+		? Effect.void
+		: new CreateError({
+				message: `The fleet is written, but setting it up failed as shown above. Finish those steps in ${path.relative(cwd, root)}/ by hand.`,
+			});
 });
 
 // Asks for the fleet's first machines one by one until the operator stops, adding them to `machines`.
@@ -187,52 +218,49 @@ const askMachine = Effect.fnUntraced(function* (machines: ReadonlyArray<Machine>
 	return encrypted ? ({ name, role, disk: { encrypted } } satisfies Machine) : { name, role };
 });
 
-// Makes the fleet a Git repository with the pinned git.
+// Makes the fleet a Git repository with the pinned git. Returns why it failed, if it did.
 const gitInit = Effect.fn("gitInit")(function* (root: string) {
 	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 	const path = yield* Path.Path;
 	const git = path.join(yield* (yield* Engine).tools, "git");
 
-	return yield* spawner
+	const exitCode = yield* spawner
 		.exitCode(ChildProcess.make(git, ["init", "--quiet", root], { stdin: "ignore" }))
-		.pipe(
-			Effect.filterOrFail(
-				(exitCode) => exitCode === 0,
-				() => new CreateError({ message: `git init failed in ${root}.` }),
-			),
-			Effect.asVoid,
-		);
+		.pipe(Effect.catchTag("PlatformError", () => Effect.succeed(-1)));
+
+	return exitCode === 0 ? Option.none() : Option.some("git init failed.");
 });
 
-// Installs aett into the fleet with the package manager that started aett, its output on the terminal.
-const installDependencies = Effect.fn("installDependencies")(function* (root: string) {
-	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-	const userAgent = yield* Config.option(Config.String("npm_config_user_agent")).pipe(Effect.orDie);
-	const manager = packageManager(userAgent);
+// Installs the fleet's dependencies with `manager`. Its output shows only when it fails, as the reason.
+const installDependencies = Effect.fn("installDependencies")(
+	function* (root: string, manager: PackageManager) {
+		const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-	yield* Console.log(`Installing aett with ${manager}…`);
+		yield* Console.log(`Installing aett with ${manager}…`);
 
-	return yield* spawner
-		.exitCode(
-			ChildProcess.make(manager, ["install"], {
-				cwd: root,
-				stdin: "ignore",
-				stdout: "inherit",
-				stderr: "inherit",
-			}),
-		)
-		.pipe(
-			Effect.catchTag("PlatformError", () => Effect.succeed(-1)),
-			Effect.filterOrFail(
-				(exitCode) => exitCode === 0,
-				() =>
-					new CreateError({
-						message: `${manager} install failed in ${root}. The fleet is written; install its dependencies there by hand.`,
-					}),
-			),
-			Effect.asVoid,
+		const handle = yield* spawner.spawn(
+			ChildProcess.make(manager, ["install"], { cwd: root, stdin: "ignore" }),
 		);
-});
+
+		const [output, exitCode] = yield* Effect.all(
+			[Stream.mkString(Stream.decodeText(handle.all)), handle.exitCode],
+			{ concurrency: "unbounded" },
+		);
+
+		return exitCode === 0
+			? Option.none()
+			: Option.some(
+					`${manager} install failed:\n${output.trim().split("\n").slice(-20).join("\n")}`,
+				);
+	},
+	Effect.scoped,
+	(effect, _root, manager) =>
+		effect.pipe(
+			Effect.catchTag("PlatformError", (error) =>
+				Effect.succeed(Option.some(`Could not run ${manager}: ${error.message}`)),
+			),
+		),
+);
 
 /** Takes the operator's key from the SSH agent, asking which one when it holds several. */
 const agentKey = Effect.gen(function* () {

@@ -1,6 +1,7 @@
 import { Option, Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import {
+	aettDependency,
 	fleetSource,
 	newMachineName,
 	packageManager,
@@ -72,5 +73,15 @@ describe("newMachineName", () => {
 		expect(newMachineName(machines, "nas")).toEqual(Result.succeed("nas"));
 		expect(Result.isFailure(newMachineName(machines, "box"))).toBe(true);
 		expect(Result.isFailure(newMachineName(machines, "Nas"))).toBe(true);
+	});
+});
+
+describe("aettDependency", () => {
+	it("depends on a checkout with a link the package manager won't install from, else on the version", () => {
+		const checkout = Option.some("/src/aett/packages/aett");
+
+		expect(aettDependency("npm", checkout, "1.2.0")).toBe("file:/src/aett/packages/aett");
+		expect(aettDependency("pnpm", checkout, "1.2.0")).toBe("link:/src/aett/packages/aett");
+		expect(aettDependency("npm", Option.none(), "1.2.0")).toBe("^1.2.0");
 	});
 });
