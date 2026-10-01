@@ -110,7 +110,15 @@ export const Declaration = Schema.StructWithRest(
 
 export interface Declaration extends Schema.Schema.Type<typeof Declaration> {}
 
+/** A user's login name. */
+export const UserName = Schema.String.check(
+	Schema.isPattern(/^[a-z_][a-z0-9_-]{0,31}$/, {
+		expected: "a lowercase login name of at most 32 characters",
+	}),
+);
+
 const Top = Schema.Struct({
+	user: Schema.optionalKey(UserName),
 	machines: Schema.Record(Schema.String, Schema.Unknown),
 	stacks: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
 });
@@ -140,11 +148,15 @@ export interface Machine {
 	/** On the tailnet: a role default that only a stack can turn off, and never on a hypervisor. */
 	readonly tailscale: boolean;
 	readonly packages: ReadonlyArray<string>;
+	/** Its dotfile sets. Any set gives it a home: the fleet's user with a home directory that persists. */
+	readonly home: ReadonlyArray<string>;
 	/** What it declares that aett can't build yet; install and apply refuse it while there is any. */
 	readonly unsupported: ReadonlyArray<string>;
 }
 
 export interface Fleet {
+	/** The fleet's one user, whom every machine with a home has. */
+	readonly user: Option.Option<string>;
 	readonly machines: ReadonlyArray<Machine>;
 }
 
@@ -281,9 +293,16 @@ export const decodeFleet = (declaration: Declaration): Result.Result<Fleet, stri
 
 	if (problems.length > 0) return Result.fail(problems.join("\n"));
 
-	return Result.succeed({
-		machines: [...decoded].map(([name, machine]) => toMachine(name, machine, declaredStacks)),
-	});
+	const resolved = [...decoded].map(([name, machine]) => toMachine(name, machine, declaredStacks));
+	const homed = resolved.find(({ home }) => home.length > 0);
+
+	if (top.success.user === undefined && homed !== undefined) {
+		return Result.fail(
+			`fleet(): user is required, because a stack gives ${homed.name} a home. Name the fleet's user, such as user: "you".`,
+		);
+	}
+
+	return Result.succeed({ user: Option.fromUndefinedOr(top.success.user), machines: resolved });
 };
 
 // Each VM's host must be a hypervisor or a bare-metal server.
@@ -323,10 +342,6 @@ const reachProblems = (
 				return [`${at}.apps: ${machineName} is a server; apps need a computer`];
 			}
 
-			if (machine.role === "computer" && content.home !== undefined) {
-				return [`${at}.home: ${machineName} is a computer, which always has a home`];
-			}
-
 			return [];
 		}),
 	);
@@ -339,7 +354,7 @@ const toMachine = (
 ): Machine => {
 	const resolved =
 		machine.role === "hypervisor"
-			? { packages: [], fast: [], apps: [], services: [], off: [], home: false }
+			? { packages: [], fast: [], apps: [], services: [], off: [], home: [] }
 			: resolveStacks(
 					stacks.map(({ stack }) => stack),
 					{ name, computer: machine.role === "computer" },
@@ -352,7 +367,6 @@ const toMachine = (
 		system.desktop === undefined ? [] : ["desktops"],
 		resolved.fast.length > 0 ? ["fast packages"] : [],
 		resolved.apps.length > 0 ? ["apps"] : [],
-		resolved.home ? ["homes"] : [],
 	].flat();
 
 	return {
@@ -368,6 +382,7 @@ const toMachine = (
 			disk: mebibytes(system.disk ?? "20 GiB"),
 		})),
 		tailscale: !resolved.off.includes("tailscale"),
+		home: resolved.home,
 		packages: resolved.packages,
 		unsupported,
 	};

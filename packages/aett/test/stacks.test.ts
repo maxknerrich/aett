@@ -18,11 +18,11 @@ describe("resolveStacks", () => {
 		expect(resolveStacks(stacks.toReversed(), laptop)).toEqual(resolveStacks(stacks, laptop));
 	});
 
-	it("brings top-level apps only to computers and a top-level home only to servers", () => {
-		const stacks = [{ apps: ["firefox"], home: true as const }];
+	it("brings top-level apps only to computers", () => {
+		const stacks = [{ apps: ["firefox"], home: ["shell"] }];
 
-		expect(resolveStacks(stacks, laptop)).toMatchObject({ apps: ["firefox"], home: false });
-		expect(resolveStacks(stacks, server)).toMatchObject({ apps: [], home: true });
+		expect(resolveStacks(stacks, laptop)).toMatchObject({ apps: ["firefox"], home: ["shell"] });
+		expect(resolveStacks(stacks, server)).toMatchObject({ apps: [], home: ["shell"] });
 	});
 
 	it("keeps a service off when any stack turns it off, whatever the order", () => {

@@ -1,9 +1,11 @@
-import { Console, Effect, FileSystem, Option, Path, Redacted } from "effect";
+import { Console, Effect, FileSystem, Option, Path, Redacted, Stream } from "effect";
 import { Prompt } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Secrets, SecretsError } from "../adapters/secrets.ts";
 import type { Fleet } from "../domain/fleet.ts";
 import { type MachineSecret, machineSecrets } from "../domain/secrets.ts";
 import type { State } from "../domain/state.ts";
+import { Engine } from "../engine/engine.ts";
 import { machineAgeKeys } from "./identity.ts";
 import { loadFleet, readState } from "./load.ts";
 
@@ -22,10 +24,77 @@ const recipientsOf = Effect.fn("recipientsOf")(function* (
 	return [...state.operator.ageKeys, ...(yield* machineAgeKeys(root, readers))];
 });
 
+// Hashes a password the way NixOS reads hashedPasswordFile, with the pinned mkpasswd.
+const hashPassword = Effect.fn("hashPassword")(function* (password: Redacted.Redacted) {
+	const path = yield* Path.Path;
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const mkpasswd = path.join(yield* (yield* Engine).tools, "mkpasswd");
+
+	const hash = (yield* spawner.string(
+		ChildProcess.make(mkpasswd, ["--method=yescrypt", "--stdin"], {
+			stdin: Stream.make(new TextEncoder().encode(Redacted.value(password))),
+		}),
+	)).trim();
+
+	if (!hash.startsWith("$y$")) {
+		return yield* new SecretsError({ message: "mkpasswd could not hash the password." });
+	}
+
+	return hash;
+});
+
+// Asks for a secret's value: a token once, a password twice until both match, stored as its hash.
+const ask = (secret: MachineSecret) => {
+	const prompt = (message: string) =>
+		Prompt.Password({
+			message,
+			validate: (input) =>
+				Option.match(secret.invalid(input), {
+					onNone: () => Effect.succeed(input),
+					onSome: Effect.fail,
+				}),
+		});
+
+	if (secret.kind === "token") return Effect.map(prompt(secret.prompt), Redacted.value);
+
+	return Effect.gen(function* () {
+		const password = yield* prompt(secret.prompt);
+		const repeated = yield* Prompt.Password({ message: "The same password again" });
+		const matches = Redacted.value(repeated) === Redacted.value(password);
+
+		if (!matches) yield* Console.log("The two entries differ. Choose the password again.");
+
+		return { password, matches };
+	}).pipe(
+		Effect.repeat({ until: ({ matches }) => matches }),
+		Effect.flatMap(({ password }) => hashPassword(password)),
+	);
+};
+
+// Asks for a machine secret and stores it, encrypted to the operators and the machines that read it.
+const store = Effect.fn("store")(function* (
+	root: string,
+	fleet: Fleet,
+	state: State,
+	secret: MachineSecret,
+) {
+	const secrets = yield* Secrets;
+	const value = yield* ask(secret);
+
+	yield* secrets.write(
+		root,
+		secretFile(secret),
+		yield* recipientsOf(root, fleet, state, secret),
+		value,
+	);
+});
+
 /**
- * Encrypts each machine secret the fleet has to the operators and the
- * machines that read it now, decrypting it only when they changed. Returns
- * the names of the secrets that exist.
+ * Brings the machine secrets up to date for a build: asks for a required one
+ * that a declared machine reads and the fleet lacks, says which optional ones
+ * are missing, and encrypts each one the fleet has to the operators and the
+ * machines that read it now, decrypting it only when they changed. Returns the
+ * names of the secrets that exist.
  */
 export const shareSecrets = Effect.fn("shareSecrets")(function* (
 	root: string,
@@ -35,8 +104,21 @@ export const shareSecrets = Effect.fn("shareSecrets")(function* (
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const secrets = yield* Secrets;
+	const wanted = machineSecrets(fleet).filter((secret) => fleet.machines.some(secret.readBy));
 
-	const present = yield* Effect.filter(machineSecrets(fleet), (secret) =>
+	const missing = yield* Effect.filter(wanted, (secret) =>
+		Effect.map(fs.exists(path.join(root, secretFile(secret))), (exists) => !exists),
+	);
+
+	yield* Effect.forEach(missing, (secret) =>
+		secret.required
+			? store(root, fleet, state, secret)
+			: Console.log(
+					`${secretFile(secret)} is missing, so machines go without it until you run aett secret set ${secret.name}.`,
+				),
+	);
+
+	const present = yield* Effect.filter(wanted, (secret) =>
 		fs.exists(path.join(root, secretFile(secret))),
 	);
 
@@ -56,7 +138,6 @@ export const shareSecrets = Effect.fn("shareSecrets")(function* (
 
 /** Asks for a machine secret and stores it, encrypted to the operators and the machines that read it. */
 export const setSecret = Effect.fn("setSecret")(function* (root: string, name: string) {
-	const secrets = yield* Secrets;
 	const fleet = yield* loadFleet(root);
 	const known = machineSecrets(fleet);
 	const secret = known.find((candidate) => candidate.name === name);
@@ -67,18 +148,7 @@ export const setSecret = Effect.fn("setSecret")(function* (root: string, name: s
 		});
 	}
 
-	const value = yield* Prompt.Password({
-		message: secret.prompt,
-		validate: (input) =>
-			Option.match(secret.invalid(input), {
-				onNone: () => Effect.succeed(input),
-				onSome: Effect.fail,
-			}),
-	});
-
-	const recipients = yield* recipientsOf(root, fleet, yield* readState(root, fleet), secret);
-
-	yield* secrets.write(root, secretFile(secret), recipients, Redacted.value(value));
+	yield* store(root, fleet, yield* readState(root, fleet), secret);
 
 	return yield* Console.log(`Machines that read it get it with their next apply.`);
 });

@@ -17,5 +17,10 @@
       options = [ "bind" ];
       neededForBoot = true;
     });
+
+    # A directory added to the list later, such as /home, exists before a switch mounts it.
+    system.activationScripts.aett-persist = lib.concatMapStrings (dir: ''
+      mkdir -p /persist${dir}
+    '') config.aett.persist;
   };
 }

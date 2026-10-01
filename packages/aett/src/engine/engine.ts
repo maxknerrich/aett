@@ -47,7 +47,7 @@ export interface InstallSecrets {
 export class Engine extends Context.Service<
 	Engine,
 	{
-		/** Directory of the pinned tools aett runs on the controller: ssh, ssh-add, ssh-keygen, sops, age, age-keygen, ssh-to-age and git. */
+		/** Directory of the pinned tools aett runs on the controller: ssh, ssh-add, ssh-keygen, sops, age, age-keygen, ssh-to-age, mkpasswd and git. */
 		readonly tools: Effect.Effect<string, EngineError>;
 		/** Runs the installer's hardware probe on `target`, saves its report in `<root>/state/<name>/` and returns what install needs from it. */
 		readonly discover: (
