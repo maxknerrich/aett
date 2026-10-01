@@ -1,8 +1,11 @@
 import { Option, Schema } from "effect";
 import type { Disk } from "../../domain/disk.ts";
+import type { Discovered } from "../engine.ts";
 
-/** The part of a nixos-facter report that disk selection reads. */
+/** The part of a nixos-facter report install reads: UEFI support and the disks. */
 export const FacterReport = Schema.Struct({
+	// Present with `supported: true` when the installer booted via UEFI.
+	uefi: Schema.optionalKey(Schema.Struct({ supported: Schema.optionalKey(Schema.Boolean) })),
 	hardware: Schema.Struct({
 		disk: Schema.optionalKey(
 			Schema.Array(
@@ -72,3 +75,9 @@ export const internalDisks = (report: FacterReport): ReadonlyArray<Disk> =>
 			],
 		});
 	});
+
+/** What install needs from a report: its internal disks, and whether the installer booted via UEFI. */
+export const installFacts = (report: FacterReport): Discovered => ({
+	disks: internalDisks(report),
+	uefi: report.uefi?.supported === true,
+});

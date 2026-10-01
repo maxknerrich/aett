@@ -5,7 +5,7 @@ import { type Connection, shellQuote } from "../../adapters/ssh.ts";
 import type { Fleet } from "../../domain/fleet.ts";
 import type { State } from "../../domain/state.ts";
 import { type Build, Engine, EngineError, type InstallSecrets } from "../engine.ts";
-import { FacterReport, internalDisks } from "./facter.ts";
+import { FacterReport, installFacts } from "./facter.ts";
 import { fleetJson } from "./fleet-json.ts";
 
 // A local directory as a flake reference; nix parses it as a URL, so spaces and the like are percent-encoded.
@@ -180,7 +180,7 @@ export const nixEngine = (flake: string) =>
 				yield* fs.writeFileString(path.join(root, "state", name, "facter.json"), report);
 				yield* Console.log(`Wrote state/${name}/facter.json`);
 
-				return internalDisks(decoded);
+				return installFacts(decoded);
 			});
 
 			const discovered = (root: string, name: string) =>

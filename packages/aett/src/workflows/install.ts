@@ -70,7 +70,15 @@ export const install = Effect.fn("install")(function* (
 	}
 
 	const connection = yield* connect(options);
-	const disks = yield* engine.discover(root, name, connection);
+	const { disks, uefi } = yield* engine.discover(root, name, connection);
+
+	// Installed systems boot with systemd-boot, so a machine booted without UEFI would be left unbootable.
+	if (!uefi) {
+		return yield* new InstallError({
+			message: `The installer on ${name} didn't boot via UEFI, and aett installs UEFI systems only. Nothing was erased. Boot the stick in UEFI mode (the firmware's boot menu usually lists it with "UEFI") and run install again.`,
+		});
+	}
+
 	const disk = yield* chooseDisk(name, recorded?.disk, options.disk, disks);
 
 	yield* Console.log(`\n${layoutPreview(machine, disk)}\n`);

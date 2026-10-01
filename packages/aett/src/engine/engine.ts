@@ -14,6 +14,12 @@ export interface Build {
 	readonly machines: ReadonlyArray<string>;
 }
 
+/** What the hardware probe tells install: the internal disks, and whether the installer booted via UEFI. */
+export interface Discovered {
+	readonly disks: ReadonlyArray<Disk>;
+	readonly uefi: boolean;
+}
+
 /** What install puts on a machine besides its system: its SSH host key and, when encrypted, its disk passphrase. */
 export interface InstallSecrets {
 	readonly hostKey: { readonly privateKey: string; readonly publicKey: string };
@@ -30,12 +36,12 @@ export class Engine extends Context.Service<
 	{
 		/** Directory of the pinned tools aett runs on the controller: ssh, ssh-add, ssh-keygen, sops, age, age-keygen and git. */
 		readonly tools: Effect.Effect<string, EngineError>;
-		/** Runs the installer's hardware probe on `target`, saves its report in `<root>/state/<name>/` and returns the internal disks it found. */
+		/** Runs the installer's hardware probe on `target`, saves its report in `<root>/state/<name>/` and returns what install needs from it. */
 		readonly discover: (
 			root: string,
 			name: string,
 			target: Connection,
-		) => Effect.Effect<ReadonlyArray<Disk>, EngineError | SshError | PlatformError.PlatformError>;
+		) => Effect.Effect<Discovered, EngineError | SshError | PlatformError.PlatformError>;
 		/** Whether discover has saved the machine's hardware report in `<root>/state/<name>/`. */
 		readonly discovered: (
 			root: string,

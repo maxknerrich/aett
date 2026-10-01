@@ -1,7 +1,12 @@
 import { Option } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import { findDisk } from "../src/domain/disk.ts";
-import { byIdPath, type FacterReport, internalDisks } from "../src/engine/nix/facter.ts";
+import {
+	byIdPath,
+	installFacts,
+	type FacterReport,
+	internalDisks,
+} from "../src/engine/nix/facter.ts";
 
 // Trimmed from a real report: an NVMe disk and the installer stick on USB.
 const nvmeNames = [
@@ -81,5 +86,12 @@ describe("byIdPath", () => {
 		expect(byIdPath(["/dev/disk/by-path/pci-0000:00:01.0-nvme-1", "/dev/nvme0n1"])).toEqual(
 			Option.none(),
 		);
+	});
+});
+
+describe("installFacts", () => {
+	it("tells install whether the installer booted via UEFI", () => {
+		expect(installFacts({ uefi: { supported: true }, hardware: report.hardware }).uefi).toBe(true);
+		expect(installFacts(report).uefi).toBe(false);
 	});
 });

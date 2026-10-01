@@ -84,6 +84,7 @@
         })
         // {
           aarch64-darwin.tools = tools "aarch64-darwin";
+          x86_64-darwin.tools = tools "x86_64-darwin";
         };
     };
 }
