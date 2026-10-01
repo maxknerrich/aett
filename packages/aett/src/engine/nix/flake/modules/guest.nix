@@ -31,7 +31,8 @@ in
     microvm = {
       hypervisor = "qemu";
       vcpu = cfg.cpu;
-      mem = cfg.memory;
+      # QEMU's microvm machine hangs with exactly 2 GiB: https://github.com/microvm-nix/microvm.nix/issues/171
+      mem = if cfg.memory == 2048 then 2047 else cfg.memory;
       # Idle guests hand free pages back to the host.
       balloon = true;
       interfaces = [
