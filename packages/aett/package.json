@@ -7,7 +7,7 @@
 	},
 	"files": [
 		"dist",
-		"nix"
+		"src/engine/nix/flake"
 	],
 	"type": "module",
 	"exports": {

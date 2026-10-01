@@ -1,11 +1,6 @@
-import { Schema } from "effect";
 import type { Fleet, Machine } from "./domain/fleet.ts";
 
 export type { Channel, Fleet, Machine, Role } from "./domain/fleet.ts";
-
-export const OperatingSystem = Schema.Literals(["macos", "nixos"]);
-
-export type OperatingSystem = typeof OperatingSystem.Type;
 
 /** Everything a machine declares besides its name. */
 export type MachineOptions = Omit<Machine, "name">;

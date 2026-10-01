@@ -1,9 +1,8 @@
 import { Console, Effect, FileSystem, Option, Path, Redacted, Schema } from "effect";
 import { Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { Nix } from "../adapters/nix.ts";
 import { Secrets } from "../adapters/secrets.ts";
-import { type Connection, shellQuote, Ssh } from "../adapters/ssh.ts";
+import { type Connection, Ssh } from "../adapters/ssh.ts";
 import {
 	type Disk,
 	diskLabel,
@@ -16,6 +15,7 @@ import {
 import { type Fleet, isEncrypted } from "../domain/fleet.ts";
 import { formatHost, type Host, trustHost } from "../domain/host.ts";
 import { type MachineRecord, SshPublicKey } from "../domain/state.ts";
+import { Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
 import { loadFleet, readState } from "./load.ts";
 
@@ -59,7 +59,7 @@ export const install = Effect.fn("install")(function* (
 	name: string,
 	options: InstallOptions,
 ) {
-	const nix = yield* Nix;
+	const engine = yield* Engine;
 	const fleet = yield* loadFleet(root);
 	const machine = yield* declared(fleet, name);
 	const state = yield* readState(root, fleet);
@@ -106,36 +106,7 @@ export const install = Effect.fn("install")(function* (
 
 	const { build } = yield* emit(root);
 
-	yield* Console.log("Copying aett's flake and its inputs to the installer…");
-
-	const source = yield* nix.archive(build, connection);
-
-	yield* Console.log(`Building ${name} on the installer…`);
-
-	const [toplevel, formatDisk, prepare] = yield* buildOn(connection, source, name);
-
-	yield* Console.log(`Erasing ${disk.byId}…`);
-	yield* withPassphraseFile(
-		connection,
-		passphrase,
-		connection.run(
-			`${shellQuote(`${formatDisk}/bin/disko-destroy-format-mount`)} --yes-wipe-all-disks`,
-		),
-	);
-	yield* connection.run(`${shellQuote(prepare)} /mnt`);
-	// Where the NixOS module points sshd. sshd ignores a private key that others can read.
-	yield* connection.run(
-		"mkdir -p /mnt/persist/etc/ssh && umask 077 && cat > /mnt/persist/etc/ssh/ssh_host_ed25519_key",
-		hostKey.privateKey,
-	);
-	yield* connection.run(
-		"umask 022 && cat > /mnt/persist/etc/ssh/ssh_host_ed25519_key.pub",
-		`${hostKey.publicKey}\n`,
-	);
-	yield* Console.log("Installing…");
-	yield* connection.run(
-		`nixos-install --root /mnt --system ${shellQuote(toplevel)} --no-root-passwd --no-channel-copy`,
-	);
+	yield* engine.install(build, name, connection, { hostKey, passphrase });
 	yield* writeRecord(root, name, {
 		disk: disk.byId,
 		encrypted: isEncrypted(machine),
@@ -254,32 +225,6 @@ const chooseDisk = Effect.fn("chooseDisk")(function* (
 	});
 });
 
-// Builds the system, its disk script and its persist setup on the installer, streaming the build log.
-const buildOn = Effect.fn("buildOn")(function* (
-	connection: Connection,
-	source: string,
-	name: string,
-) {
-	const outputs = ["toplevel", "destroyFormatMount", "aettInstall"].map((output) =>
-		shellQuote(`${source}#nixosConfigurations.${name}.config.system.build.${output}`),
-	);
-
-	const printed = yield* connection.stream(
-		`nix build --no-link --print-out-paths ${outputs.join(" ")}`,
-	);
-
-	return yield* Schema.decodeUnknownEffect(BuiltPaths)(printed.trim().split("\n")).pipe(
-		Effect.catchTag("SchemaError", () =>
-			Effect.fail(
-				new InstallError({ message: `nix build printed unexpected store paths:\n${printed}` }),
-			),
-		),
-	);
-});
-
-// One store path per output nix build was asked for, in that order.
-const BuiltPaths = Schema.Tuple([Schema.String, Schema.String, Schema.String]);
-
 // Writes state/<name>/machine.json.
 const writeRecord = Effect.fn("writeRecord")(function* (
 	root: string,
@@ -312,7 +257,7 @@ const machineHostKey = Effect.fn("machineHostKey")(function* (
 	const path = yield* Path.Path;
 	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 	const secrets = yield* Secrets;
-	const keygen = path.join(yield* (yield* Nix).tools, "bin", "ssh-keygen");
+	const keygen = path.join(yield* (yield* Engine).tools, "ssh-keygen");
 	const file = path.join("secrets", name, "ssh_host_ed25519_key.json");
 
 	// ssh-keygen reads and writes private keys only as files. This one lives until the scope closes.
@@ -428,24 +373,3 @@ const choosePassphrase = (name: string) =>
 		Effect.repeat({ until: ({ matches }) => matches }),
 		Effect.map(({ passphrase }) => passphrase),
 	);
-
-// disk.nix's passwordFile, from which disko reads an encrypted disk's passphrase while it formats.
-const passphraseFile = "/tmp/aett-luks-passphrase";
-
-// Runs `format` with the passphrase, if there is one, in passphraseFile on the installer.
-// The file is removed afterwards, also when writing it or formatting fails.
-const withPassphraseFile = <A, E>(
-	connection: Connection,
-	passphrase: Option.Option<string>,
-	format: Effect.Effect<A, E>,
-) =>
-	Option.match(passphrase, {
-		onNone: () => format,
-		onSome: (value) =>
-			connection
-				.run(`umask 077 && cat > ${passphraseFile}`, value)
-				.pipe(
-					Effect.andThen(format),
-					Effect.ensuring(Effect.ignore(connection.run(`rm -f ${passphraseFile}`))),
-				),
-	});

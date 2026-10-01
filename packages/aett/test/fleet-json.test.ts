@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { fleetJson } from "../src/domain/emission.ts";
+import { fleetJson } from "../src/engine/nix/fleet-json.ts";
 import type { Operator, State } from "../src/domain/state.ts";
 import { fleet, machine } from "../src/index.ts";
 

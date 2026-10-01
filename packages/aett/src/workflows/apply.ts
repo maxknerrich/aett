@@ -1,9 +1,9 @@
 import { Console, Effect, Option, Path, Schema } from "effect";
 import { Prompt } from "effect/cli";
-import { Nix } from "../adapters/nix.ts";
-import { shellQuote, Ssh } from "../adapters/ssh.ts";
+import { Ssh } from "../adapters/ssh.ts";
 import { applyTargets } from "../domain/apply.ts";
 import { formatHost, type Host } from "../domain/host.ts";
+import { type Build, Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
 
 export class ApplyError extends Schema.TaggedError<ApplyError>()("ApplyError", {
@@ -26,7 +26,7 @@ export const apply = Effect.fn("apply")(function* (
 	name: Option.Option<string>,
 	options: ApplyOptions,
 ) {
-	const nix = yield* Nix;
+	const engine = yield* Engine;
 
 	if (Option.isSome(options.host) && Option.isNone(name)) {
 		return yield* new ApplyError({
@@ -46,7 +46,7 @@ export const apply = Effect.fn("apply")(function* (
 	);
 
 	yield* Effect.forEach(targets, (machine) =>
-		Console.log(`Evaluating ${machine}…`).pipe(Effect.andThen(nix.evalDrv(build, machine))),
+		Console.log(`Evaluating ${machine}…`).pipe(Effect.andThen(engine.evaluate(build, machine))),
 	);
 
 	return yield* Effect.forEach(
@@ -66,36 +66,25 @@ export const apply = Effect.fn("apply")(function* (
 // Builds the machine's system on it and, once the operator agrees, switches to it.
 const applyTo = Effect.fn("applyTo")(function* (
 	root: string,
-	build: string,
+	build: Build,
 	name: string,
 	host: Host,
 	yes: boolean,
 ) {
-	const nix = yield* Nix;
+	const engine = yield* Engine;
 	const ssh = yield* Ssh;
 	const path = yield* Path.Path;
 
 	yield* Console.log(`Connecting to ${name} at ${formatHost(host)}…`);
 
 	const connection = yield* ssh.machine(name, host, path.join(root, "state", "known_hosts"));
+	const system = yield* engine.buildSystem(build, name, connection);
 
-	yield* Console.log(`Copying aett's flake and its inputs to ${name}…`);
+	if (system === (yield* engine.currentSystem(connection))) {
+		return yield* Console.log(`${name} is up to date.`);
+	}
 
-	const source = yield* nix.archive(build, connection);
-
-	yield* Console.log(`Building the system on ${name}…`);
-
-	const system = (yield* connection.stream(
-		`nix build --no-link --print-out-paths ${shellQuote(`${source}#nixosConfigurations.${name}.config.system.build.toplevel`)}`,
-	)).trim();
-
-	const current = (yield* connection.run("readlink -f /run/current-system")).trim();
-
-	if (system === current) return yield* Console.log(`${name} is up to date.`);
-
-	const changes = (yield* connection.run(
-		`nix store diff-closures /run/current-system ${shellQuote(system)}`,
-	)).trim();
+	const changes = yield* engine.changes(connection, system);
 
 	yield* Console.log(
 		changes === ""
@@ -108,18 +97,7 @@ const applyTo = Effect.fn("applyTo")(function* (
 	}
 
 	yield* Console.log(`Switching ${name}…`);
-	yield* connection.run(`nix-env -p /nix/var/nix/profiles/system --set ${shellQuote(system)}`);
-
-	// nixos-rebuild's invocation: a transient unit finishes the switch even if the connection drops.
-	// Its output goes to stderr, which streams to the terminal.
-	yield* connection.stream(
-		[
-			"systemd-run -E LOCALE_ARCHIVE -E NIXOS_INSTALL_BOOTLOADER --collect --no-ask-password",
-			"--pipe --quiet --service-type=exec --unit=aett-switch-to-configuration --wait",
-			shellQuote(`${system}/bin/switch-to-configuration`),
-			"switch >&2",
-		].join(" "),
-	);
+	yield* engine.activate(connection, system);
 
 	return yield* Console.log(`Switched ${name} to ${system}.`);
 }, Effect.scoped);

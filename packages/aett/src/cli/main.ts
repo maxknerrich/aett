@@ -6,9 +6,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Console, Effect } from "effect";
 import { Command } from "effect/cli";
 import metadata from "../../package.json" with { type: "json" };
-import { Nix } from "../adapters/nix.ts";
 import { Secrets } from "../adapters/secrets.ts";
 import { Ssh } from "../adapters/ssh.ts";
+import { nixEngine } from "../engine/nix/nix.ts";
 import { command } from "./command.ts";
 
 // This file sits two levels below the package root in both src/ and dist/.
@@ -22,10 +22,10 @@ Command.run(command({ directory, version: metadata.version }), { version: metada
 	Effect.catchTag(
 		[
 			"ApplyError",
+			"EngineError",
 			"FleetError",
 			"InitError",
 			"InstallError",
-			"NixError",
 			"PlatformError",
 			"SecretsError",
 			"SshError",
@@ -41,7 +41,8 @@ Command.run(command({ directory, version: metadata.version }), { version: metada
 	),
 	Effect.provide(Ssh.layer),
 	Effect.provide(Secrets.layer),
-	Effect.provide(Nix.layer(join(directory, "nix"))),
+	// The flake ships as source in the package, also next to dist/.
+	Effect.provide(nixEngine(join(directory, "src", "engine", "nix", "flake"))),
 	Effect.provide(NodeServices.layer),
 	NodeRuntime.runMain,
 );
