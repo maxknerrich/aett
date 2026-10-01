@@ -152,11 +152,12 @@ export const create = Effect.fn("create")(function* (
 		`${JSON.stringify(manifest, null, "\t")}\n`,
 	);
 	yield* fs.writeFileString(path.join(root, ".gitignore"), "node_modules/\n.aett/build/\n");
+	// Before operator.json, so nothing that can fail comes between it and showing the private key.
+	yield* writePins(root, { inputs: yield* (yield* Engine).defaultInputs, releases: {} });
 	yield* fs.writeFileString(
 		path.join(root, "state", "operator.json"),
 		`${JSON.stringify({ sshKeys: [key], ageKeys: [age.publicKey] } satisfies Operator, null, "\t")}\n`,
 	);
-	yield* writePins(root, { inputs: yield* (yield* Engine).defaultInputs, releases: {} });
 	yield* Console.log(`\nWrote the fleet to ${path.relative(cwd, root)}/.`);
 
 	// Shown as soon as its public half is in state, so no later failure can lose it.

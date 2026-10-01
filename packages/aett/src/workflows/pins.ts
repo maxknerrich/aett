@@ -163,8 +163,8 @@ export const completePins = Effect.fn("completePins")(function* (root: string, f
 export const update = Effect.fn("update")(function* (root: string, names: ReadonlyArray<string>) {
 	const engine = yield* Engine;
 	const fleet = yield* loadFleet(root);
-	const pins = yield* completePins(root, fleet);
-	const inputs = Object.keys(pins.inputs.nodes[pins.inputs.root]?.inputs ?? {});
+	const defaults = yield* engine.defaultInputs;
+	const inputs = Object.keys(defaults.nodes[defaults.root]?.inputs ?? {});
 	const declared = declaredReleases(fleet);
 
 	const unknown = names.filter(
@@ -179,6 +179,7 @@ export const update = Effect.fn("update")(function* (root: string, names: Readon
 		});
 	}
 
+	const pins = yield* completePins(root, fleet);
 	const everything = names.length === 0;
 	const movedInputs = everything ? inputs : names.filter((name) => inputs.includes(name));
 
