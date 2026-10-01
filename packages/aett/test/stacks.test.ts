@@ -14,7 +14,8 @@ describe("resolveStacks", () => {
 		];
 
 		expect(resolveStacks(stacks, server).packages).toEqual(["fish", "git", "htop"]);
-		expect(resolveStacks(stacks, laptop).packages).toEqual(["fish", "htop", "gh"]);
+		expect(resolveStacks(stacks, laptop).packages).toEqual(["fish", "gh", "htop"]);
+		expect(resolveStacks(stacks.toReversed(), laptop)).toEqual(resolveStacks(stacks, laptop));
 	});
 
 	it("brings top-level apps only to computers and a top-level home only to servers", () => {

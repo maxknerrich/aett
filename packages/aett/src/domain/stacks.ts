@@ -67,14 +67,16 @@ const serviceNames = Struct.keys(Services.fields);
 export const resolveStacks = (stacks: ReadonlyArray<Stack>, target: Target): Resolved => {
 	const contents = stacks.map((stack) => ({ top: stack, own: stack.machines?.[target.name] }));
 
-	const union = (pick: (content: StackContent) => ReadonlyArray<string> | undefined) => [
-		...new Set(
-			contents.flatMap(({ top, own }) => [
-				...(pick(top) ?? []),
-				...(own === undefined ? [] : (pick(own) ?? [])),
-			]),
-		),
-	];
+	// Sorted, so the order stacks are written in can't change fleet.json or the build.
+	const union = (pick: (content: StackContent) => ReadonlyArray<string> | undefined) =>
+		[
+			...new Set(
+				contents.flatMap(({ top, own }) => [
+					...(pick(top) ?? []),
+					...(own === undefined ? [] : (pick(own) ?? [])),
+				]),
+			),
+		].toSorted();
 
 	// Each stack's say about a service: its machine entry wins over its top level. No catalog
 	// service has options yet; merging options and replacing them on a role change, as

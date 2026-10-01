@@ -38,7 +38,7 @@ describe("decodeFleet", () => {
 				role: "server",
 				encrypted: false,
 				channel: "unstable",
-				packages: ["fish", "git", "gh"],
+				packages: ["fish", "gh", "git"],
 				unsupported: [],
 			},
 			{
@@ -54,7 +54,7 @@ describe("decodeFleet", () => {
 				role: "computer",
 				encrypted: false,
 				channel: "stable",
-				packages: ["fish", "git", "gh"],
+				packages: ["fish", "gh", "git"],
 				unsupported: ["Macs", "apps"],
 			},
 		]);
