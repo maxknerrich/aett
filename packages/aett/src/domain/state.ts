@@ -27,10 +27,13 @@ export const ageKeyPair = (output: string) => {
 		: Option.none();
 };
 
-/** state/operator.json: the operator's public keys, for SSH and for the fleet's secrets. */
+/**
+ * state/operator.json: the operators' public keys. Each SSH key logs in to
+ * the machines as root; each age key can decrypt the secrets aett makes.
+ */
 export const Operator = Schema.Struct({
 	sshKeys: Schema.NonEmptyArray(SshPublicKey),
-	age: AgePublicKey,
+	ageKeys: Schema.NonEmptyArray(AgePublicKey),
 });
 
 export interface Operator extends Schema.Schema.Type<typeof Operator> {}

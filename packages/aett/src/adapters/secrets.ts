@@ -26,13 +26,13 @@ export class Secrets extends Context.Service<
 		/**
 		 * Returns the plaintext of the secret `file`, a path under the fleet
 		 * `root`. A secret that does not exist yet comes from `produce` and is
-		 * stored encrypted to `recipient`, an age public key. Decrypting takes
+		 * stored encrypted to `recipients`, age public keys. Decrypting takes
 		 * the private key from SOPS_AGE_KEY, else from what SOPS_AGE_KEY_CMD prints.
 		 */
 		readonly ensure: <E, R>(
 			root: string,
 			file: string,
-			recipient: string,
+			recipients: ReadonlyArray<string>,
 			produce: Effect.Effect<string, E, R>,
 		) => Effect.Effect<string, E | SecretsError | EngineError | PlatformError.PlatformError, R>;
 	}
@@ -122,7 +122,7 @@ export class Secrets extends Context.Service<
 						found,
 						() =>
 							new SecretsError({
-								message: `${file} is encrypted. Set SOPS_AGE_KEY to your private age key (AGE-SECRET-KEY-1…), which aett create showed, or SOPS_AGE_KEY_CMD to a command that prints it.`,
+								message: `${file} is encrypted. Set SOPS_AGE_KEY to the private half of your age key in state/operator.json (AGE-SECRET-KEY-1…), or SOPS_AGE_KEY_CMD to a command that prints it.`,
 							}),
 					),
 				);
@@ -135,7 +135,7 @@ export class Secrets extends Context.Service<
 				// sops exits with 128 when none of its keys opens the file.
 				if (result.exitCode === 128) {
 					return yield* new SecretsError({
-						message: `The key from ${Option.isSome(keyVariable) ? "SOPS_AGE_KEY" : "SOPS_AGE_KEY_CMD"} cannot decrypt ${file}. It must be your private age key, which aett create showed.`,
+						message: `The key from ${Option.isSome(keyVariable) ? "SOPS_AGE_KEY" : "SOPS_AGE_KEY_CMD"} cannot decrypt ${file}. It must be the private half of an age key in state/operator.json, and one that was there when ${file} was written.`,
 					});
 				}
 
@@ -151,7 +151,7 @@ export class Secrets extends Context.Service<
 			const encrypt = Effect.fn("Secrets.encrypt")(function* (
 				root: string,
 				file: string,
-				recipient: string,
+				recipients: ReadonlyArray<string>,
 				plaintext: string,
 			) {
 				// sops reads stdin when no file is given and takes the file name for its formats alone.
@@ -159,7 +159,7 @@ export class Secrets extends Context.Service<
 					[
 						"encrypt",
 						"--age",
-						recipient,
+						recipients.join(","),
 						"--input-type",
 						"binary",
 						"--output-type",
@@ -178,7 +178,7 @@ export class Secrets extends Context.Service<
 
 				yield* fs.makeDirectory(path.dirname(path.join(root, file)), { recursive: true });
 				yield* fs.writeFileString(path.join(root, file), result.stdout);
-				yield* Console.log(`Wrote ${file}, encrypted to ${recipient}`);
+				yield* Console.log(`Wrote ${file}, encrypted to ${recipients.join(", ")}`);
 
 				return plaintext;
 			});
@@ -186,13 +186,13 @@ export class Secrets extends Context.Service<
 			const ensure = <E, R>(
 				root: string,
 				file: string,
-				recipient: string,
+				recipients: ReadonlyArray<string>,
 				produce: Effect.Effect<string, E, R>,
 			) =>
 				Effect.flatMap(fs.exists(path.join(root, file)), (exists) =>
 					exists
 						? decrypt(root, file)
-						: Effect.flatMap(produce, (plaintext) => encrypt(root, file, recipient, plaintext)),
+						: Effect.flatMap(produce, (plaintext) => encrypt(root, file, recipients, plaintext)),
 				);
 
 			return Secrets.of({ ensure });

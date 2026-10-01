@@ -152,7 +152,7 @@ export const create = Effect.fn("create")(function* (
 	yield* fs.writeFileString(path.join(root, ".gitignore"), "node_modules/\n.aett/build/\n");
 	yield* fs.writeFileString(
 		path.join(root, "state", "operator.json"),
-		`${JSON.stringify({ sshKeys: [key], age: age.publicKey } satisfies Operator, null, "\t")}\n`,
+		`${JSON.stringify({ sshKeys: [key], ageKeys: [age.publicKey] } satisfies Operator, null, "\t")}\n`,
 	);
 	yield* Console.log(`\nWrote the fleet to ${path.relative(cwd, root)}/.`);
 

@@ -95,10 +95,10 @@ export const install = Effect.fn("install")(function* (
 
 	// Secrets come after connecting, so a run that can't reach the installer leaves none
 	// behind, and before anything is erased, so a reinstall that can't decrypt them stops here.
-	const hostKey = yield* machineHostKey(root, name, state.operator.age);
+	const hostKey = yield* machineHostKey(root, name, state.operator.ageKeys);
 
 	const passphrase = machine.encrypted
-		? Option.some(yield* diskPassphrase(root, name, state.operator.age, options.passphrase))
+		? Option.some(yield* diskPassphrase(root, name, state.operator.ageKeys, options.passphrase))
 		: Option.none();
 
 	// Later runs read the disk from state and never derive it again.
@@ -240,7 +240,7 @@ const isSshPublicKey = Schema.is(SshPublicKey);
 const machineHostKey = Effect.fn("machineHostKey")(function* (
 	root: string,
 	name: string,
-	recipient: string,
+	recipients: ReadonlyArray<string>,
 ) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
@@ -268,7 +268,7 @@ const machineHostKey = Effect.fn("machineHostKey")(function* (
 			Effect.andThen(fs.readFileString(keyFile)),
 		);
 
-	const privateKey = yield* secrets.ensure(root, file, recipient, generate);
+	const privateKey = yield* secrets.ensure(root, file, recipients, generate);
 
 	// The public key is derived rather than stored. ssh-keygen wants the private key in a file only its owner can read.
 	yield* fs.writeFileString(keyFile, privateKey, { mode: 0o600 });
@@ -307,7 +307,7 @@ const trustHostKey = Effect.fn("trustHostKey")(function* (
 const diskPassphrase = Effect.fn("diskPassphrase")(function* (
 	root: string,
 	name: string,
-	recipient: string,
+	recipients: ReadonlyArray<string>,
 	given: Option.Option<Redacted.Redacted>,
 ) {
 	const path = yield* Path.Path;
@@ -324,7 +324,7 @@ const diskPassphrase = Effect.fn("diskPassphrase")(function* (
 	const passphrase = yield* secrets.ensure(
 		root,
 		file,
-		recipient,
+		recipients,
 		Option.match(chosen, { onSome: Effect.succeed, onNone: () => choosePassphrase(name) }),
 	);
 

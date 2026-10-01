@@ -12,7 +12,7 @@ const sshKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOperatorKey operator@mac";
 
 const operator: Operator = {
 	sshKeys: [sshKey],
-	age: "age1gejw6jhjj3pdapugaevecrtsla2kcjhrdzykaznyh5xv4fjukuqq42qv3d",
+	ageKeys: ["age1gejw6jhjj3pdapugaevecrtsla2kcjhrdzykaznyh5xv4fjukuqq42qv3d"],
 };
 
 const disk = "/dev/disk/by-id/nvme-test";
