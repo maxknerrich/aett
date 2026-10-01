@@ -43,6 +43,8 @@ in
     services.avahi = {
       enable = true;
       nssmdns4 = true;
+      # Only IPv4 addresses, which the controller reaches on the LAN; a published IPv6 one can be unroutable.
+      ipv6 = false;
       publish = {
         enable = true;
         addresses = true;

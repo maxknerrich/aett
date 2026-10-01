@@ -133,7 +133,7 @@ export class Ssh extends Context.Service<
 							({ exitCode }) => exitCode === 0,
 							({ stderr }) =>
 								new SshError({
-									message: `Could not log in to ${login.target} at ${formatHost(host)}:\n${stderr}`,
+									message: `Could not log in to ${login.target} at ${formatHost(host)}:\n${stderr}${unreachedHint(host, stderr)}`,
 								}),
 						),
 					),
@@ -221,6 +221,12 @@ export class Ssh extends Context.Service<
 		}),
 	);
 }
+
+// When an mDNS name led nowhere, the machine's address is the way around it.
+const unreachedHint = (host: Host, stderr: string) =>
+	host.name.endsWith(".local") && !stderr.includes("Permission denied")
+		? `\nIf ${host.name} doesn't reach the machine, pass its IP address with --host.`
+		: "";
 
 // How aett logs in to one kind of host.
 interface Login {
