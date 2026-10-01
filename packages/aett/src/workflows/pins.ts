@@ -203,11 +203,16 @@ export const update = Effect.fn("update")(function* (root: string, names: Readon
 
 	const changes = [
 		...inputChanges(pins.inputs, lock),
-		...releases.flatMap(({ release, pin, before }) =>
-			before?.version === pin.version
+		...releases.flatMap(({ release, pin, before }) => {
+			if (before?.version !== pin.version) {
+				return [`${release.bin}: ${before?.version ?? "new"} → ${pin.version}`];
+			}
+
+			// The publisher replaced or added an asset under the same tag.
+			return JSON.stringify(before.assets) === JSON.stringify(pin.assets)
 				? []
-				: [`${release.bin}: ${before?.version ?? "new"} → ${pin.version}`],
-		),
+				: [`${release.bin}: ${pin.version}, its assets changed`];
+		}),
 	];
 
 	yield* writePins(root, {
