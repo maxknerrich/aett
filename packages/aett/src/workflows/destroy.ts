@@ -11,7 +11,7 @@ export class DestroyError extends Schema.TaggedError<DestroyError>()("DestroyErr
 
 /**
  * Deletes a VM that fleet.ts no longer declares and that its host has
- * stopped: its state volume and identity on the host, then its secrets, its
+ * stopped: its state volume and identity on the host, then its host key, its
  * state and its known_hosts entry in the fleet. Asks for the name first
  * unless `yes`.
  */
@@ -72,7 +72,15 @@ export const destroy = Effect.fn("destroy")(function* (
 	}
 
 	yield* engine.removeGuest(connection, name);
-	yield* fs.remove(path.join(root, "secrets", name), { recursive: true, force: true });
+	// Only the guest's own key: secrets/<name>/ may also hold fleet secrets that share the name.
+	const secrets = path.join(root, "secrets", name);
+
+	yield* fs.remove(path.join(secrets, "ssh_host_ed25519_key.json"), { force: true });
+
+	if ((yield* fs.exists(secrets)) && (yield* fs.readDirectory(secrets)).length === 0) {
+		yield* fs.remove(secrets);
+	}
+
 	yield* fs.remove(path.join(root, "state", name), { recursive: true, force: true });
 
 	if (yield* fs.exists(knownHostsFile)) {
