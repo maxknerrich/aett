@@ -1,7 +1,7 @@
 import { Console, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import { Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { Nix } from "../adapters/nix.ts";
+import { Engine } from "../engine/engine.ts";
 import { ageKeyPair, type Operator, SshPublicKey } from "../domain/state.ts";
 
 export class InitError extends Schema.TaggedError<InitError>()("InitError", {
@@ -112,8 +112,8 @@ export const init = Effect.fn("init")(function* (
 const agentKey = Effect.gen(function* () {
 	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 	const path = yield* Path.Path;
-	const tools = yield* (yield* Nix).tools;
-	const lines = yield* spawner.lines(ChildProcess.make(path.join(tools, "bin", "ssh-add"), ["-L"]));
+	const tools = yield* (yield* Engine).tools;
+	const lines = yield* spawner.lines(ChildProcess.make(path.join(tools, "ssh-add"), ["-L"]));
 	const [first, ...rest] = lines.filter(isSshPublicKey);
 
 	if (first === undefined) {
@@ -134,10 +134,10 @@ const agentKey = Effect.gen(function* () {
 const ageKey = Effect.gen(function* () {
 	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 	const path = yield* Path.Path;
-	const tools = yield* (yield* Nix).tools;
+	const tools = yield* (yield* Engine).tools;
 
 	const output = yield* spawner.string(
-		ChildProcess.make(path.join(tools, "bin", "age-keygen"), [], {
+		ChildProcess.make(path.join(tools, "age-keygen"), [], {
 			stdin: "ignore",
 			stderr: "ignore",
 		}),
@@ -153,10 +153,10 @@ const ageKey = Effect.gen(function* () {
 const keygenAccepts = Effect.fnUntraced(function* (key: string) {
 	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 	const path = yield* Path.Path;
-	const tools = yield* (yield* Nix).tools;
+	const tools = yield* (yield* Engine).tools;
 
 	const exitCode = yield* spawner.exitCode(
-		ChildProcess.make(path.join(tools, "bin", "ssh-keygen"), ["-l", "-f", "/dev/stdin"], {
+		ChildProcess.make(path.join(tools, "ssh-keygen"), ["-l", "-f", "/dev/stdin"], {
 			stdin: Stream.make(new TextEncoder().encode(`${key}\n`)),
 			stdout: "ignore",
 			stderr: "ignore",

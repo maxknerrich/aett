@@ -3,13 +3,13 @@ name: Installer image
 on:
   pull_request:
     paths:
-      - packages/aett/nix/**
+      - packages/aett/src/engine/nix/flake/**
       - .github/workflows/installer.yml
   push:
     branches:
       - main
     paths:
-      - packages/aett/nix/**
+      - packages/aett/src/engine/nix/flake/**
       - .github/workflows/installer.yml
   workflow_dispatch:
 
@@ -45,7 +45,7 @@ jobs:
           nix build \
             --print-build-logs \
             --out-link result \
-            ./packages/aett/nix#packages.${{ matrix.system }}.installer
+            ./packages/aett/src/engine/nix/flake#packages.${{ matrix.system }}.installer
 
       - name: Prepare assets
         env:

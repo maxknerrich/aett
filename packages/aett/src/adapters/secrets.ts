@@ -12,7 +12,7 @@ import {
 	Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { Nix, type NixError } from "./nix.ts";
+import { Engine, type EngineError } from "../engine/engine.ts";
 
 export class SecretsError extends Schema.TaggedError<SecretsError>()("SecretsError", {
 	message: Schema.String,
@@ -33,7 +33,7 @@ export class Secrets extends Context.Service<
 			file: string,
 			recipient: string,
 			produce: Effect.Effect<string, E, R>,
-		) => Effect.Effect<string, E | SecretsError | NixError | PlatformError.PlatformError, R>;
+		) => Effect.Effect<string, E | SecretsError | EngineError | PlatformError.PlatformError, R>;
 	}
 >()("aett/adapters/Secrets") {
 	static readonly layer = Layer.effect(
@@ -42,7 +42,7 @@ export class Secrets extends Context.Service<
 			const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
-			const nix = yield* Nix;
+			const engine = yield* Engine;
 
 			const ageKey = yield* Config.option(Config.Redacted("SOPS_AGE_KEY")).pipe(Effect.orDie);
 
@@ -54,7 +54,7 @@ export class Secrets extends Context.Service<
 			) {
 				const handle = yield* spawner.spawn(
 					ChildProcess.make(
-						path.join(yield* nix.tools, "bin", "sops"),
+						path.join(yield* engine.tools, "sops"),
 						["--config", "/dev/null", ...args],
 						{
 							env: options.env ?? {},

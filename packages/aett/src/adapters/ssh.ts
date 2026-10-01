@@ -1,5 +1,4 @@
 import {
-	Config,
 	Context,
 	Effect,
 	FileSystem,
@@ -13,7 +12,7 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { formatHost, type Host } from "../domain/host.ts";
-import { Nix, type NixError } from "./nix.ts";
+import { Engine, type EngineError } from "../engine/engine.ts";
 
 export class SshError extends Schema.TaggedError<SshError>()("SshError", {
 	message: Schema.String,
@@ -21,10 +20,10 @@ export class SshError extends Schema.TaggedError<SshError>()("SshError", {
 
 /** An SSH connection to root on one host. Every command reuses its one master connection. */
 export interface Connection {
-	/** The host's Nix store as nix addresses it, an ssh-ng:// URL. */
-	readonly store: string;
-	/** Environment for nix commands that reach `store`: the pinned ssh first on PATH, NIX_SSHOPTS on the master connection. */
-	readonly nixEnv: Readonly<Record<string, string>>;
+	/** Where ssh logs in: root@<host>. */
+	readonly destination: string;
+	/** The pinned ssh's options that reach the host through the master connection, for other programs that run ssh. */
+	readonly sshOptions: ReadonlyArray<string>;
 	/**
 	 * Runs a shell command on the host and returns its stdout. `input`, if
 	 * given, is the command's stdin. A failure carries the end of its stderr.
@@ -54,7 +53,11 @@ export class Ssh extends Context.Service<
 		readonly installer: (
 			host: Host,
 			code: Redacted.Redacted,
-		) => Effect.Effect<Connection, SshError | NixError | PlatformError.PlatformError, Scope.Scope>;
+		) => Effect.Effect<
+			Connection,
+			SshError | EngineError | PlatformError.PlatformError,
+			Scope.Scope
+		>;
 		/**
 		 * Logs in to an installed machine as root with the operator's key from the
 		 * SSH agent and keeps the connection open for the scope. The host key is
@@ -65,7 +68,11 @@ export class Ssh extends Context.Service<
 			name: string,
 			host: Host,
 			knownHosts: string,
-		) => Effect.Effect<Connection, SshError | NixError | PlatformError.PlatformError, Scope.Scope>;
+		) => Effect.Effect<
+			Connection,
+			SshError | EngineError | PlatformError.PlatformError,
+			Scope.Scope
+		>;
 	}
 >()("aett/adapters/Ssh") {
 	static readonly layer = Layer.effect(
@@ -74,20 +81,17 @@ export class Ssh extends Context.Service<
 			const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 			const fs = yield* FileSystem.FileSystem;
 			const path = yield* Path.Path;
-			const nix = yield* Nix;
-
-			const inheritedPath = yield* Config.String("PATH").pipe(Config.withDefault(""), Effect.orDie);
+			const engine = yield* Engine;
 
 			// Holds the control socket. Socket paths are limited to about 100 bytes, and the Mac's per-user temp directory is long.
 			const temporaryDirectory = fs.makeTempDirectoryScoped({ directory: "/tmp", prefix: "aett-" });
 
 			// Opens the master connection to root on `host` for the scope and returns the connection that reuses it.
 			const open = Effect.fnUntraced(function* (host: Host, directory: string, login: Login) {
-				const bin = path.join(yield* nix.tools, "bin");
-				const ssh = path.join(bin, "ssh");
+				const ssh = path.join(yield* engine.tools, "ssh");
 				const destination = `root@${host.name}`;
 
-				// Shared by the master, the commands that reuse it and nix.
+				// Shared by the master, the commands that reuse it and other programs that run ssh.
 				const options = [
 					["-F", "none"],
 					["-p", String(host.port)],
@@ -157,13 +161,8 @@ export class Ssh extends Context.Service<
 					});
 
 				return {
-					// With more than one connection nix opens its own master, which could not log in to an installer.
-					store: `ssh-ng://${destination}?max-connections=1`,
-					// nix splits NIX_SSHOPTS like a shell.
-					nixEnv: {
-						PATH: `${bin}:${inheritedPath}`,
-						NIX_SSHOPTS: options.map(shellQuote).join(" "),
-					},
+					destination,
+					sshOptions: options,
 					run: remote("pipe"),
 					stream: remote("inherit"),
 				} satisfies Connection;
@@ -227,7 +226,7 @@ export class Ssh extends Context.Service<
 interface Login {
 	/** Names the host in errors, such as "the installer". */
 	readonly target: string;
-	/** ssh -o options for authentication and host keys, shared by every command and nix. */
+	/** ssh -o options for authentication and host keys, shared by every command and other programs that run ssh. */
 	readonly options: ReadonlyArray<string>;
 	/** Environment for the master connection alone, which is the only one that authenticates. */
 	readonly env: Readonly<Record<string, string>>;

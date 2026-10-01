@@ -1,5 +1,5 @@
-import { type Fleet, isEncrypted } from "./fleet.ts";
-import type { State } from "./state.ts";
+import { type Fleet, isEncrypted } from "../../domain/fleet.ts";
+import type { State } from "../../domain/state.ts";
 
 /**
  * Builds fleet.json, the flake's view of the fleet. It lists only machines
