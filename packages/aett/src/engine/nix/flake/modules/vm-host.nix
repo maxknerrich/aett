@@ -55,5 +55,9 @@ in
       enable = true;
       internalInterfaces = [ "guests" ];
     };
+
+    # Forwarding carries what guests start, which the NAT module allows. Nothing reaches a guest
+    # through the host otherwise, not even from a LAN machine that routes 10.100.0.0/16 here.
+    networking.firewall.filterForward = true;
   };
 }
