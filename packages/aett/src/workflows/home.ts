@@ -110,14 +110,17 @@ inside() {
 `;
 
 // Run as root: prints the user's home directory on the first line, then the manifest if there is one.
-// A manifest whose directory leads out of the home stays unread; the fingerprints then report it.
+// A manifest that is a symlink or whose directory leads out of the home stays unread; the fingerprints
+// then report it.
 const locateScript = (user: string) => `set -eu
 home=$(getent passwd ${shellQuote(user)} | cut -d: -f6)
 if [ -z "$home" ]; then echo ${shellQuote(`There is no user ${user}.`)} >&2; exit 1; fi
 printf '%s\\n' "$home"
 cd -- "$home"
 ${insideFunction}
-if inside ${shellQuote(manifestPath)} && [ -f ${shellQuote(manifestPath)} ]; then cat -- ${shellQuote(manifestPath)}; fi
+if inside ${shellQuote(manifestPath)} && [ ! -L ${shellQuote(manifestPath)} ] && [ -f ${shellQuote(manifestPath)} ]; then
+	cat -- ${shellQuote(manifestPath)}
+fi
 `;
 
 // Run as root: prints a line per path in the home, its fingerprint as domain/home.ts computes it,
@@ -147,8 +150,8 @@ const putFile = (path: string, mode: string, content: string) =>
 
 // Run as the user in their home: removes first, with the directories that leaves empty, so a file
 // can give way to a directory and back. Then writes each file through a temporary one next to it and
-// each link, and records the manifest last. A directory still standing where a file or link goes
-// stops the sync, and -T keeps mv and ln from ever writing into one.
+// each link, and records the manifest last. An empty directory where a file or link goes is removed,
+// any other stops the sync, and -T keeps mv and ln from ever writing into one.
 const applyScript = (home: string, plan: HomePlan) => {
 	const steps = [
 		...plan.remove.map((path) => `remove ${shellQuote(path)}\n`),
@@ -180,7 +183,7 @@ remove() {
 	while [ "$dir" != . ] && rmdir -- "$dir" 2>/dev/null; do dir=$(dirname -- "$dir"); done
 }
 make_room() {
-	if [ -d "$1" ] && [ ! -L "$1" ]; then
+	if [ -d "$1" ] && [ ! -L "$1" ] && ! rmdir -- "$1" 2>/dev/null; then
 		printf '%s is a directory, where aett puts a %s. Move it away and sync again.\\n' "$1" "$2" >&2
 		exit 1
 	fi
@@ -279,6 +282,12 @@ export const planHome = Effect.fn("planHome")(function* (
 	}
 
 	const current = new Map(printed.filter(([, print]) => print !== "missing"));
+
+	if (current.get(manifestPath)?.startsWith("link:") === true) {
+		return yield* new HomeError({
+			message: `${home}/${manifestPath} on ${machine} is a symlink. aett keeps its manifest there as a plain file: remove the link and sync again.`,
+		});
+	}
 
 	const sync = {
 		machine,
