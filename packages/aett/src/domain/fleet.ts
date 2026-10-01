@@ -110,11 +110,14 @@ export const Declaration = Schema.StructWithRest(
 
 export interface Declaration extends Schema.Schema.Type<typeof Declaration> {}
 
-/** A user's login name. */
+/** A user's login name, which NixOS takes: lowercase, shorter than 32 characters, and not root. */
 export const UserName = Schema.String.check(
-	Schema.isPattern(/^[a-z_][a-z0-9_-]{0,31}$/, {
-		expected: "a lowercase login name of at most 32 characters",
+	Schema.isPattern(/^[a-z_][a-z0-9_-]{0,30}$/, {
+		expected: "a lowercase login name of at most 31 characters",
 	}),
+	Schema.makeFilter(
+		(name: string) => name !== "root" || "Expected a user other than root, which aett keeps locked",
+	),
 );
 
 const Top = Schema.Struct({

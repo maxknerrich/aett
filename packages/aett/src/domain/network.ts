@@ -170,14 +170,14 @@ export const bridgeAddress = (subnet: string | undefined) =>
  * ~/.ssh/config. Empty when no guest has a home.
  */
 export const sshConfig = (fleet: Fleet, state: State, knownHosts: string) => {
-	const blocks = fleet.machines.flatMap(({ name, vm }) => {
+	const blocks = fleet.machines.flatMap(({ name, vm, home }) => {
 		const recorded = state.machines.get(name);
 
 		return Option.toArray(
 			Option.all({
 				user: fleet.user,
 				host: Option.map(vm, ({ host }) => host),
-				forwards: Option.fromUndefinedOr(recorded?.forwards),
+				forwards: Option.filter(Option.fromUndefinedOr(recorded?.forwards), () => home.length > 0),
 			}),
 		).map(({ user, host, forwards }) =>
 			[

@@ -1,10 +1,8 @@
 import { Option } from "effect";
 import type { Fleet, Machine } from "../../domain/fleet.ts";
+import { buildable } from "../../domain/build.ts";
 import { bridgeAddress, guestInterface } from "../../domain/network.ts";
 import type { State } from "../../domain/state.ts";
-
-// Whether fleet.ts declares nothing for the machine that aett can't build yet.
-const buildable = (machine: Machine) => machine.unsupported.length === 0;
 
 // What every listed machine has: its settings, Tailscale, and the fleet's user when it has a home.
 // `secrets` are the machine secrets the fleet has.
@@ -30,34 +28,19 @@ const base = (fleet: Fleet, machine: Machine, secrets: ReadonlyArray<string>) =>
  * bridge address and the ports it forwards to guests with a home.
  */
 export const fleetJson = (fleet: Fleet, state: State, secrets: ReadonlyArray<string>) => {
-	const metal = fleet.machines.filter((machine) => {
-		const recorded = state.machines.get(machine.name);
-
-		return (
-			buildable(machine) &&
-			machine.kind === "nixos" &&
-			recorded?.facts === true &&
-			recorded.disk !== undefined
-		);
-	});
-
-	const hosts = new Set(metal.map(({ name }) => name));
+	const included = buildable(fleet, state);
+	const metal = fleet.machines.filter(({ name, vm }) => included.has(name) && Option.isNone(vm));
 
 	const guests = fleet.machines.flatMap((machine) => {
 		const recorded = state.machines.get(machine.name);
-
-		const vm = Option.filter(
-			machine.vm,
-			({ host }) => buildable(machine) && hosts.has(host) && recorded?.host === host,
-		);
-
+		const vm = Option.filter(machine.vm, () => included.has(machine.name));
 		const network = Option.flatMap(Option.fromUndefinedOr(recorded?.address), guestInterface);
 
-		const forwards = Option.getOrNull(
-			Option.map(Option.fromUndefinedOr(recorded?.forwards), ({ ssh, mosh }) => ({
-				ssh,
-				mosh: { from: mosh[0], to: mosh[1] },
-			})),
+		// Only a guest with a home is reached from the LAN; the ports stay reserved in state without one.
+		const forwards = Option.fromUndefinedOr(recorded?.forwards).pipe(
+			Option.filter(() => machine.home.length > 0),
+			Option.map(({ ssh, mosh }) => ({ ssh, mosh: { from: mosh[0], to: mosh[1] } })),
+			Option.getOrNull,
 		);
 
 		return Option.toArray(

@@ -4,6 +4,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Secrets, SecretsError } from "../adapters/secrets.ts";
 import type { Fleet } from "../domain/fleet.ts";
 import { type MachineSecret, machineSecrets } from "../domain/secrets.ts";
+import { buildable } from "../domain/build.ts";
 import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { machineAgeKeys } from "./identity.ts";
@@ -91,10 +92,10 @@ const store = Effect.fn("store")(function* (
 
 /**
  * Brings the machine secrets up to date for a build: asks for a required one
- * that a declared machine reads and the fleet lacks, says which optional ones
- * are missing, and encrypts each one the fleet has to the operators and the
- * machines that read it now, decrypting it only when they changed. Returns the
- * names of the secrets that exist.
+ * that a machine the build covers reads and the fleet lacks, says which
+ * optional ones are missing, and encrypts each one the fleet has to the
+ * operators and the machines that read it now, decrypting it only when they
+ * changed. Returns the names of the secrets that exist.
  */
 export const shareSecrets = Effect.fn("shareSecrets")(function* (
 	root: string,
@@ -104,7 +105,11 @@ export const shareSecrets = Effect.fn("shareSecrets")(function* (
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const secrets = yield* Secrets;
-	const wanted = machineSecrets(fleet).filter((secret) => fleet.machines.some(secret.readBy));
+	const included = buildable(fleet, state);
+
+	const wanted = machineSecrets(fleet).filter((secret) =>
+		fleet.machines.some((machine) => included.has(machine.name) && secret.readBy(machine)),
+	);
 
 	const missing = yield* Effect.filter(wanted, (secret) =>
 		Effect.map(fs.exists(path.join(root, secretFile(secret))), (exists) => !exists),
