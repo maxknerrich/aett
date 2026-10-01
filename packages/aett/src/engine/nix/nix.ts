@@ -548,7 +548,6 @@ export const nixEngine = (flake: string) =>
 				discovered,
 				emit,
 				evaluate,
-				systemPath,
 				buildSystem,
 				currentSystem,
 				changes,

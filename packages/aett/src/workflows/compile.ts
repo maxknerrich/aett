@@ -5,8 +5,8 @@ import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { ensureGuestKeys } from "./identity.ts";
 import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
-import { completePins } from "./pins.ts";
-import { shareSecrets } from "./secrets.ts";
+import { completePins, readPins } from "./pins.ts";
+import { existingSecrets, shareSecrets } from "./secrets.ts";
 
 /**
  * Loads the fleet and its state, records the guest addresses and host keys
@@ -56,6 +56,27 @@ const writeSshConfig = Effect.fn("writeSshConfig")(function* (root: string, cont
 	return yield* Console.log(
 		"Wrote state/ssh_config. Include it from ~/.ssh/config to reach the fleet's VMs from the LAN.",
 	);
+});
+
+/**
+ * Writes the build from fleet.ts and what the fleet records as it is: no
+ * address, key, secret or pin is made, asked for or changed. Machines that
+ * need one of them are left out or built without it.
+ */
+export const emitAsIs = Effect.fn("emitAsIs")(function* (root: string) {
+	const engine = yield* Engine;
+	const fleet = yield* loadFleet(root);
+	const state = yield* readState(root, fleet);
+	const secrets = yield* existingSecrets(root, fleet);
+	const recorded = yield* readPins(root);
+
+	const pins = Option.isSome(recorded)
+		? recorded.value
+		: { inputs: yield* engine.defaultInputs, releases: {} };
+
+	const build = yield* engine.emit(root, fleet, state, secrets, pins);
+
+	return { build, fleet, state };
 });
 
 /**

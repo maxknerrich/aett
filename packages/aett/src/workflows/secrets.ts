@@ -142,6 +142,18 @@ export const shareSecrets = Effect.fn("shareSecrets")(function* (
 	return present.map(({ name }) => name);
 });
 
+/** The names of the machine secrets the fleet has, as they are. */
+export const existingSecrets = Effect.fn("existingSecrets")(function* (root: string, fleet: Fleet) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+
+	const present = yield* Effect.filter(machineSecrets(fleet), (secret) =>
+		fs.exists(path.join(root, secretFile(secret))),
+	);
+
+	return present.map(({ name }) => name);
+});
+
 /** Asks for a machine secret and stores it, encrypted to the operators and the machines that read it. */
 export const setSecret = Effect.fn("setSecret")(function* (root: string, name: string) {
 	const fleet = yield* loadFleet(root);

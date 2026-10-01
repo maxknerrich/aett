@@ -4,7 +4,7 @@ import { guestsOf } from "../domain/fleet.ts";
 import type { Host } from "../domain/host.ts";
 import type { State } from "../domain/state.ts";
 import { Engine, type EngineError } from "../engine/engine.ts";
-import { emit, notBuilt } from "./compile.ts";
+import { emitAsIs, notBuilt } from "./compile.ts";
 
 // One way to a machine: how the line names it, and the login it takes.
 interface Way {
@@ -33,14 +33,15 @@ const tailnetHost = (state: State, name: string) =>
  * Prints a line per declared machine, from asking each one: how aett reached
  * it, its tailnet address, whether it runs the system fleet.ts would build,
  * and for a machine that runs VMs, whether each guest runs. A machine the
- * build leaves out says why.
+ * build leaves out says why. It builds from what the fleet records and
+ * changes none of it.
  */
 export const status = Effect.fn("status")(function* (root: string) {
 	const engine = yield* Engine;
 	const ssh = yield* Ssh;
 	const path = yield* Path.Path;
 	const knownHosts = path.join(root, "state", "known_hosts");
-	const { build, fleet, state } = yield* emit(root);
+	const { build, fleet, state } = yield* emitAsIs(root);
 	const width = Math.max(...fleet.machines.map(({ name }) => name.length));
 
 	// A bare-metal machine's ways in: <name>.local first, the tailnet second.
@@ -100,9 +101,16 @@ export const status = Effect.fn("status")(function* (root: string) {
 			if (Option.isNone(reached)) return "unreachable";
 
 			const { label, connection } = reached.value;
-			const expected = yield* engine.systemPath(build, name);
 			const running = yield* engine.currentSystem(connection);
 			const tailnet = (yield* connection.run("tailscale ip -4 2>/dev/null || true")).trim();
+
+			// A declaration that doesn't evaluate still leaves what the machine said.
+			const comparison = yield* engine.systemPath(build, name).pipe(
+				Effect.map((expected) =>
+					running === expected ? "runs fleet.ts" : "differs from fleet.ts",
+				),
+				Effect.catchTag("EngineError", () => Effect.succeed("fleet.ts doesn't evaluate for it")),
+			);
 
 			const guests = yield* Effect.forEach(guestsOn(name), (on) =>
 				Effect.map(engine.guestState(connection, on), (unit) => `${on} ${unit}`),
@@ -111,10 +119,14 @@ export const status = Effect.fn("status")(function* (root: string) {
 			return [
 				`reached at ${label}`,
 				tailnet === "" ? "not on the tailnet" : `tailnet ${tailnet.split("\n")[0]}`,
-				running === expected ? "runs fleet.ts" : "differs from fleet.ts",
+				comparison,
 				...(guests.length > 0 ? [`guests: ${guests.join(", ")}`] : []),
 			].join(" · ");
-		}).pipe(Effect.scoped);
+		}).pipe(
+			Effect.scoped,
+			// One machine that fails halfway leaves its line and the others.
+			Effect.catch((error) => Effect.succeed(`failed: ${error.message}`)),
+		);
 
 	yield* Effect.forEach(fleet.machines, ({ name }) =>
 		describe(name).pipe(Effect.flatMap((text) => Console.log(`${name.padEnd(width)}  ${text}`))),
