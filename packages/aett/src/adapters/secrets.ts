@@ -85,9 +85,14 @@ export class Secrets extends Context.Service<
 
 			// Runs SOPS_AGE_KEY_CMD in a shell with the operator's environment and terminal, so a
 			// password manager can ask to be unlocked, and takes what it prints as the private key.
+			// It stays in aett's session; a detached one has no /dev/tty to prompt on.
 			const keyFromCommand = Effect.fnUntraced(function* (command: string) {
 				const result = yield* run(
-					ChildProcess.make("/bin/sh", ["-c", command], { stdin: "inherit", stderr: "inherit" }),
+					ChildProcess.make("/bin/sh", ["-c", command], {
+						stdin: "inherit",
+						stderr: "inherit",
+						detached: false,
+					}),
 				);
 
 				if (result.exitCode !== 0) {
