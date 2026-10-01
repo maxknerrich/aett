@@ -98,7 +98,7 @@ const needsRestart = (guest: Connection, system: string) =>
 // microvm.nix's per-guest directory on its host, where vm-host.nix sets its stateDir.
 const guestDirectory = (guest: string) => `/persist/microvms/${guest}`;
 
-// Where vm-host.nix links each guest's runners as GC roots.
+// Where vm-host.nix links each guest's runners as GC roots, a directory per guest.
 const gcRoots = "/nix/var/nix/gcroots/aett-guests";
 
 const guestUnit = (guest: string) => shellQuote(`microvm@${guest}.service`);
@@ -108,9 +108,7 @@ const controlGuest = (host: Connection, guest: string, action: "start" | "restar
 
 const removeGuest = (host: Connection, guest: string) =>
 	host
-		.run(
-			`rm -rf -- ${shellQuote(guestDirectory(guest))} && rm -f -- ${shellQuote(`${gcRoots}/${guest}`)} ${shellQuote(`${gcRoots}/booted-${guest}`)}`,
-		)
+		.run(`rm -rf -- ${shellQuote(guestDirectory(guest))} ${shellQuote(`${gcRoots}/${guest}`)}`)
 		.pipe(Effect.asVoid);
 
 // A unit that is active or on its way up or down counts as running. Otherwise the guest is

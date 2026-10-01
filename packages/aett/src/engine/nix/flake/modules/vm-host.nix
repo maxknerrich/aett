@@ -21,8 +21,9 @@ in
     # The runner a guest boots next and the one it runs keep their closures, whichever system linked
     # them; aett's apply links a guest's runner without switching the host.
     systemd.tmpfiles.rules = lib.concatMap (guest: [
-      "L+ /nix/var/nix/gcroots/aett-guests/${guest} - - - - ${config.microvm.stateDir}/${guest}/current"
-      "L+ /nix/var/nix/gcroots/aett-guests/booted-${guest} - - - - ${config.microvm.stateDir}/${guest}/booted"
+      "d /nix/var/nix/gcroots/aett-guests/${guest} 0755 root root -"
+      "L+ /nix/var/nix/gcroots/aett-guests/${guest}/current - - - - ${config.microvm.stateDir}/${guest}/current"
+      "L+ /nix/var/nix/gcroots/aett-guests/${guest}/booted - - - - ${config.microvm.stateDir}/${guest}/booted"
     ]) cfg.guests;
 
     # networkd runs the bridge and the guests' taps; NetworkManager keeps the uplink and leaves them alone.
