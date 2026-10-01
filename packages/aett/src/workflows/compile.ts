@@ -76,7 +76,7 @@ export const emitAsIs = Effect.fn("emitAsIs")(function* (root: string) {
 
 	const build = yield* engine.emit(root, fleet, state, secrets, pins);
 
-	return { build, fleet, state };
+	return { build, fleet, state, pins };
 });
 
 /**

@@ -3,6 +3,7 @@ import { type Connection, Ssh, type SshError } from "../adapters/ssh.ts";
 import { guestsOf } from "../domain/fleet.ts";
 import type { Host } from "../domain/host.ts";
 import type { State } from "../domain/state.ts";
+import { pinFits } from "../domain/pins.ts";
 import { Engine, type EngineError } from "../engine/engine.ts";
 import { emitAsIs, notBuilt } from "./compile.ts";
 
@@ -41,7 +42,7 @@ export const status = Effect.fn("status")(function* (root: string) {
 	const ssh = yield* Ssh;
 	const path = yield* Path.Path;
 	const knownHosts = path.join(root, "state", "known_hosts");
-	const { build, fleet, state } = yield* emitAsIs(root);
+	const { build, fleet, state, pins } = yield* emitAsIs(root);
 	const width = Math.max(...fleet.machines.map(({ name }) => name.length));
 
 	// A bare-metal machine's ways in: <name>.local first, the tailnet second.
@@ -89,10 +90,11 @@ export const status = Effect.fn("status")(function* (root: string) {
 		Effect.gen(function* () {
 			if (!build.machines.includes(name)) return notBuilt(fleet, state, name);
 
-			const host = Option.flatMap(
-				Option.fromUndefinedOr(fleet.machines.find((machine) => machine.name === name)),
-				({ vm }) => vm,
+			const machine = Option.fromUndefinedOr(
+				fleet.machines.find((declared) => declared.name === name),
 			);
+
+			const host = Option.flatMap(machine, ({ vm }) => vm);
 
 			const reached = yield* reach(
 				Option.match(host, { onNone: () => metal(name), onSome: (vm) => guest(name, vm.host) }),
@@ -104,13 +106,29 @@ export const status = Effect.fn("status")(function* (root: string) {
 			const running = yield* engine.currentSystem(connection);
 			const tailnet = (yield* connection.run("tailscale ip -4 2>/dev/null || true")).trim();
 
-			// A declaration that doesn't evaluate still leaves what the machine said.
-			const comparison = yield* engine.systemPath(build, name).pipe(
-				Effect.map((expected) =>
-					running === expected ? "runs fleet.ts" : "differs from fleet.ts",
-				),
-				Effect.catchTag("EngineError", () => Effect.succeed("fleet.ts doesn't evaluate for it")),
+			// The build leaves out a release without a fitting pin, so it can't say what apply would build.
+			const unpinned = Option.match(machine, {
+				onNone: () => [],
+				onSome: ({ releases }) => releases,
+			}).filter((release) =>
+				Option.match(Option.fromUndefinedOr(pins.releases[release.github]), {
+					onNone: () => true,
+					onSome: (pin) => !pinFits(pin, release),
+				}),
 			);
+
+			// A declaration that doesn't evaluate still leaves what the machine said.
+			const comparison =
+				unpinned.length > 0
+					? `${unpinned.map(({ bin }) => bin).join(", ")} not pinned yet, which apply does`
+					: yield* engine.systemPath(build, name).pipe(
+							Effect.map((expected) =>
+								running === expected ? "runs fleet.ts" : "differs from fleet.ts",
+							),
+							Effect.catchTag("EngineError", () =>
+								Effect.succeed("fleet.ts doesn't evaluate for it"),
+							),
+						);
 
 			const guests = yield* Effect.forEach(guestsOn(name), (on) =>
 				Effect.map(engine.guestState(connection, on), (unit) => `${on} ${unit}`),
