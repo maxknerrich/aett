@@ -6,6 +6,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Console, Effect, Option } from "effect";
 import { Command } from "effect/cli";
 import metadata from "../../package.json" with { type: "json" };
+import { GitHub } from "../adapters/github.ts";
 import { Secrets } from "../adapters/secrets.ts";
 import { Ssh } from "../adapters/ssh.ts";
 import { nixEngine } from "../engine/nix/nix.ts";
@@ -37,8 +38,10 @@ fleetAett(directory).pipe(
 			"DestroyError",
 			"EngineError",
 			"FleetError",
+			"GitHubError",
 			"HomeError",
 			"InstallError",
+			"PinsError",
 			"PlatformError",
 			"SecretsError",
 			"SshError",
@@ -53,6 +56,7 @@ fleetAett(directory).pipe(
 			),
 	),
 	Effect.provide(Ssh.layer),
+	Effect.provide(GitHub.layer),
 	Effect.provide(Secrets.layer),
 	// The flake ships as source in the package, also next to dist/.
 	Effect.provide(nixEngine(join(directory, "src", "engine", "nix", "flake"))),

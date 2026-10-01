@@ -3,7 +3,7 @@ import { Argument, Command, Flag } from "effect/cli";
 import { installerHost, parseHost } from "../domain/host.ts";
 import { PackageManager, parseMachineFlag } from "../domain/scaffold.ts";
 import { apply } from "../workflows/apply.ts";
-import { compile } from "../workflows/compile.ts";
+import { compile, update } from "../workflows/compile.ts";
 import { type AettPackage, create } from "../workflows/create.ts";
 import { destroy } from "../workflows/destroy.ts";
 import { fleetRoot } from "../workflows/load.ts";
@@ -192,6 +192,22 @@ export const command = (aett: AettPackage) =>
 			).pipe(
 				Command.withDescription(
 					"Build the declared system on installed machines and their VMs and switch to it.",
+				),
+			),
+			Command.make(
+				"update",
+				{
+					names: Argument.String("name").pipe(
+						Argument.withDescription(
+							"An input such as nixpkgs, or a release source by repository or binary. Defaults to every pin.",
+						),
+						Argument.atLeast(0),
+					),
+				},
+				({ names }) => Effect.flatMap(fleet, (root) => update(root, names)),
+			).pipe(
+				Command.withDescription(
+					"Move the fleet's pins in state/pins.json forward and print what changes.",
 				),
 			),
 			machine,

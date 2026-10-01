@@ -25,11 +25,6 @@ in
         "unstable"
       ];
     };
-    # nixpkgs attribute paths such as "htop" or "python3Packages.rich".
-    packages = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-    };
     operator.sshKeys = lib.mkOption { type = lib.types.listOf lib.types.str; };
   };
 
@@ -63,10 +58,6 @@ in
       hashedPassword = "!";
       openssh.authorizedKeys.keys = cfg.operator.sshKeys;
     };
-
-    environment.systemPackages = map (
-      path: lib.getAttrFromPath (lib.splitString "." path) pkgs
-    ) cfg.packages;
 
     nix.settings.experimental-features = [
       "nix-command"

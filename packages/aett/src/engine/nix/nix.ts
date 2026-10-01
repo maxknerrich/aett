@@ -3,6 +3,7 @@ import { Config, Console, Effect, FileSystem, Layer, Option, Path, Schema, Strea
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { type Connection, shellQuote } from "../../adapters/ssh.ts";
 import type { Fleet } from "../../domain/fleet.ts";
+import { InputsLock, type Pins } from "../../domain/pins.ts";
 import type { State } from "../../domain/state.ts";
 import { type Build, Engine, EngineError, type HostKey, type InstallSecrets } from "../engine.ts";
 import { FacterReport, installFacts } from "./facter.ts";
@@ -13,6 +14,11 @@ const flakeAt = (directory: string) => `path:${pathToFileURL(directory).pathname
 
 // What `nix flake archive --json` prints; `path` is the flake's own store path.
 const ArchiveOutput = Schema.fromJsonString(Schema.Struct({ path: Schema.String }));
+
+// What `nix store prefetch-file --json` prints; `hash` is the file's SRI hash.
+const PrefetchOutput = Schema.fromJsonString(Schema.Struct({ hash: Schema.String }));
+
+const Lock = Schema.fromJsonString(InputsLock);
 
 // What `nix build --print-out-paths` prints for the system alone: its store path.
 const SystemOutput = Schema.Tuple([Schema.String]);
@@ -277,13 +283,29 @@ export const nixEngine = (flake: string) =>
 			const discovered = (root: string, name: string) =>
 				fs.exists(path.join(root, "state", name, "facter.json"));
 
+			// Reads a flake.lock, failing with an EngineError that names it when it isn't one.
+			const readLock = (file: string) =>
+				fs.readFileString(file).pipe(
+					Effect.flatMap(Schema.decodeUnknownEffect(Lock)),
+					Effect.catchTag("SchemaError", (error) =>
+						Effect.fail(
+							new EngineError({
+								message: `${file} is not a flake lock aett can read: ${error.message}`,
+							}),
+						),
+					),
+				);
+
+			const defaultInputs = readLock(path.join(flake, "flake.lock"));
+
 			const emit = Effect.fn("NixEngine.emit")(function* (
 				root: string,
 				fleet: Fleet,
 				state: State,
 				secrets: ReadonlyArray<string>,
+				pins: Pins,
 			) {
-				const emitted = fleetJson(fleet, state, secrets);
+				const emitted = fleetJson(fleet, state, secrets, pins);
 				const directory = path.join(root, ".aett", "build");
 
 				yield* fs.remove(directory, { recursive: true, force: true });
@@ -302,6 +324,12 @@ export const nixEngine = (flake: string) =>
 				yield* fs.writeFileString(
 					path.join(directory, "fleet.json"),
 					`${JSON.stringify(emitted, null, "\t")}\n`,
+				);
+
+				// The fleet's pins replace the lock aett ships.
+				yield* fs.writeFileString(
+					path.join(directory, "flake.lock"),
+					`${JSON.stringify(pins.inputs, null, 2)}\n`,
 				);
 
 				const machines = Object.keys(emitted.machines);
@@ -469,8 +497,38 @@ export const nixEngine = (flake: string) =>
 				);
 			});
 
+			const updateInputs = Effect.fn("NixEngine.updateInputs")(function* (
+				build: Build,
+				names: ReadonlyArray<string>,
+			) {
+				yield* nix(["flake", "update", ...names, "--flake", flakeAt(build.directory)]);
+
+				return yield* readLock(path.join(build.directory, "flake.lock"));
+			});
+
+			const prefetch = Effect.fn("NixEngine.prefetch")(function* (url: string) {
+				const output = yield* nix([
+					"store",
+					"prefetch-file",
+					"--json",
+					"--hash-type",
+					"sha256",
+					url,
+				]);
+
+				return yield* Schema.decodeUnknownEffect(PrefetchOutput)(output).pipe(
+					Effect.map(({ hash }) => hash),
+					Effect.catchTag("SchemaError", () =>
+						Effect.fail(new EngineError({ message: `nix printed no hash for ${url}.` })),
+					),
+				);
+			});
+
 			return Engine.of({
 				tools,
+				defaultInputs,
+				updateInputs,
+				prefetch,
 				discover,
 				discovered,
 				emit,

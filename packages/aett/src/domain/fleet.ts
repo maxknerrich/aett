@@ -1,5 +1,5 @@
 import { Option, Predicate, Result, Schema, SchemaIssue } from "effect";
-import { resolveStacks, Stack } from "./stacks.ts";
+import { type Release, resolveStacks, Stack } from "./stacks.ts";
 
 export const MachineName = Schema.String.check(
 	Schema.isPattern(/^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/, {
@@ -151,6 +151,11 @@ export interface Machine {
 	/** On the tailnet: a role default that only a stack can turn off, and never on a hypervisor. */
 	readonly tailscale: boolean;
 	readonly packages: ReadonlyArray<string>;
+	readonly unstable: ReadonlyArray<string>;
+	/** Fast tools from llm-agents.nix, by name. */
+	readonly fast: ReadonlyArray<string>;
+	/** Fast tools from GitHub releases. */
+	readonly releases: ReadonlyArray<Release>;
 	/** Its dotfile sets. Any set gives it a home: the fleet's user with a home directory that persists. */
 	readonly home: ReadonlyArray<string>;
 	/** What it declares that aett can't build yet; install and apply refuse it while there is any. */
@@ -292,7 +297,11 @@ export const decodeFleet = (declaration: Declaration): Result.Result<Fleet, stri
 		Result.isSuccess(result) ? [result.success] : [],
 	);
 
-	const problems = [...hostProblems(decoded), ...reachProblems(decoded, declaredStacks)];
+	const problems = [
+		...hostProblems(decoded),
+		...reachProblems(decoded, declaredStacks),
+		...releaseProblems(declaredStacks),
+	];
 
 	if (problems.length > 0) return Result.fail(problems.join("\n"));
 
@@ -306,6 +315,27 @@ export const decodeFleet = (declaration: Declaration): Result.Result<Fleet, stri
 	}
 
 	return Result.succeed({ user: Option.fromUndefinedOr(top.success.user), machines: resolved });
+};
+
+// A repository's release is declared the same way wherever it appears, since aett pins one per repository.
+const releaseProblems = (
+	stacks: ReadonlyArray<{ readonly name: string; readonly stack: Stack }>,
+) => {
+	const declared = stacks.flatMap(({ name, stack }) =>
+		[stack, ...Object.values(stack.machines ?? {})].flatMap((content) =>
+			(content.fast ?? []).flatMap((tool) =>
+				Predicate.isString(tool) ? [] : [{ stack: name, release: tool }],
+			),
+		),
+	);
+
+	return [...Map.groupBy(declared, ({ release }) => release.github)].flatMap(([github, uses]) =>
+		new Set(uses.map(({ release }) => `${release.asset}\0${release.bin}`)).size > 1
+			? [
+					`stacks: ${github} is released with different asset or bin in ${[...new Set(uses.map(({ stack }) => stack))].join(" and ")}; declare it once and share it.`,
+				]
+			: [],
+	);
 };
 
 // Each VM's host must be a hypervisor or a bare-metal server.
@@ -357,7 +387,16 @@ const toMachine = (
 ): Machine => {
 	const resolved =
 		machine.role === "hypervisor"
-			? { packages: [], fast: [], apps: [], services: [], off: [], home: [] }
+			? {
+					packages: [],
+					unstable: [],
+					fast: [],
+					releases: [],
+					apps: [],
+					services: [],
+					off: [],
+					home: [],
+				}
 			: resolveStacks(
 					stacks.map(({ stack }) => stack),
 					{ name, computer: machine.role === "computer" },
@@ -368,7 +407,6 @@ const toMachine = (
 	const unsupported = [
 		machine.kind === "macos" ? ["Macs"] : [],
 		system.desktop === undefined ? [] : ["desktops"],
-		resolved.fast.length > 0 ? ["fast packages"] : [],
 		resolved.apps.length > 0 ? ["apps"] : [],
 	].flat();
 
@@ -387,6 +425,9 @@ const toMachine = (
 		tailscale: !resolved.off.includes("tailscale"),
 		home: resolved.home,
 		packages: resolved.packages,
+		unstable: resolved.unstable,
+		fast: resolved.fast,
+		releases: resolved.releases,
 		unsupported,
 	};
 };

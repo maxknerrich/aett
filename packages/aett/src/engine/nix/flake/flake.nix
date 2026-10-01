@@ -12,6 +12,8 @@
       url = "github:Mic92/sops-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Keeps its own nixpkgs, so its binary cache has what it builds.
+    llm-agents.url = "github:numtide/llm-agents.nix";
     microvm = {
       url = "github:microvm-nix/microvm.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -27,6 +29,7 @@
       nixpkgs-unstable,
       disko,
       sops-nix,
+      llm-agents,
       microvm,
       ...
     }:
@@ -87,8 +90,11 @@
             ./modules/tailscale.nix
             ./modules/user.nix
             ./modules/shell.nix
+            ./modules/packages.nix
             {
               _file = "fleet.ts -> machine(${name})";
+              # The other sources packages.nix takes tools from.
+              _module.args.sources = { inherit nixpkgs-unstable llm-agents; };
               aett = declared // {
                 inherit name;
                 inherit (fleet) operator;
