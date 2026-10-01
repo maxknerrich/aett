@@ -107,6 +107,15 @@ describe("decodeFleet", () => {
 			},
 		});
 
+		const unknownKeys = fleet({
+			machines: {
+				// @ts-expect-error system has no such setting
+				box: server({ system: { encrypted: true, typo: true } }),
+				// @ts-expect-error packages belong in a stack
+				nas: server({ system: { encrypted: true }, packages: ["git"] }),
+			},
+		});
+
 		const small = fleet({
 			machines: { host: hypervisor(), vm: server({ host: "host", system: { memory: "1 GiB" } }) },
 		});
@@ -115,6 +124,8 @@ describe("decodeFleet", () => {
 		expect(problems(mac)).toContain("machines.mac.system.encrypted: Expected never");
 		expect(problems(small)).toContain("machines.vm.system.memory: Expected at least 2 GiB");
 		expect(problems(mixed)).toContain("machines.box.system.memory: Unexpected key");
+		expect(problems(unknownKeys)).toContain("machines.box.system.typo: Unexpected key");
+		expect(problems(unknownKeys)).toContain("machines.nas.packages: Unexpected key");
 	});
 
 	it("keeps stacks off hypervisors and fits what they bring to each machine", () => {

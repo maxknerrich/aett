@@ -76,7 +76,9 @@ export const resolveStacks = (stacks: ReadonlyArray<Stack>, target: Target): Res
 		),
 	];
 
-	// Each stack's say about a service: its machine entry wins over its top level.
+	// Each stack's say about a service: its machine entry wins over its top level. No catalog
+	// service has options yet; merging options and replacing them on a role change, as
+	// docs/declaration.md describes, arrive with the first service that has some.
 	const settings = (service: keyof Services) =>
 		contents.map(({ top, own }) => own?.services?.[service] ?? top.services?.[service]);
 

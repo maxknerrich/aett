@@ -57,6 +57,14 @@ interface Mac {
 	readonly system?: { readonly [key: string]: never };
 }
 
+// Rejects keys a config doesn't know, at its top level and in its system. Inferring a
+// generic skips TypeScript's usual check for unknown keys in object literals.
+type Known<Config> = {
+	readonly [Key in Exclude<keyof Config, "os" | "host" | "system">]: never;
+} & (Config extends { readonly system: infer System }
+	? { readonly system: { readonly [Key in Exclude<keyof System, keyof AnySystem>]: never } }
+	: unknown);
+
 export type HypervisorConfig = BareMetal<NixosSystem>;
 
 export type ServerConfig = BareMetal<NixosSystem> | Vm;
@@ -66,7 +74,7 @@ export type ComputerConfig = BareMetal<ComputerSystem> | Mac;
 /** An appliance that only runs VMs, like Proxmox. Stacks never reach it. */
 export function hypervisor(): { readonly role: "hypervisor" };
 export function hypervisor<const Config extends HypervisorConfig>(
-	config: Config,
+	config: Config & Known<Config>,
 ): Config & { readonly role: "hypervisor" };
 export function hypervisor(config: HypervisorConfig = {}) {
 	return { ...config, role: "hypervisor" as const };
@@ -75,7 +83,7 @@ export function hypervisor(config: HypervisorConfig = {}) {
 /** A headless machine reached over SSH, on bare metal or as a VM with `host`. Its stacks make it what it is. */
 export function server(): { readonly role: "server" };
 export function server<const Config extends ServerConfig>(
-	config: Config,
+	config: Config & Known<Config>,
 ): Config & { readonly role: "server" };
 export function server(config: ServerConfig = {}) {
 	return { ...config, role: "server" as const };
@@ -84,7 +92,7 @@ export function server(config: ServerConfig = {}) {
 /** A machine someone sits in front of: bare-metal NixOS, or a Mac with `os: "macos"`. Always graphical. */
 export function computer(): { readonly role: "computer" };
 export function computer<const Config extends ComputerConfig>(
-	config: Config,
+	config: Config & Known<Config>,
 ): Config & { readonly role: "computer" };
 export function computer(config: ComputerConfig = {}) {
 	return { ...config, role: "computer" as const };
