@@ -28,6 +28,7 @@ describe("decodeFleet", () => {
 			{
 				name: "kronos",
 				role: "hypervisor",
+				kind: "nixos",
 				encrypted: true,
 				channel: "stable",
 				packages: [],
@@ -36,6 +37,7 @@ describe("decodeFleet", () => {
 			{
 				name: "astraeus",
 				role: "server",
+				kind: "nixos",
 				encrypted: false,
 				channel: "unstable",
 				packages: ["fish", "gh", "git"],
@@ -44,6 +46,7 @@ describe("decodeFleet", () => {
 			{
 				name: "hades",
 				role: "server",
+				kind: "vm",
 				encrypted: false,
 				channel: "stable",
 				packages: ["fish"],
@@ -52,6 +55,7 @@ describe("decodeFleet", () => {
 			{
 				name: "fawkes",
 				role: "computer",
+				kind: "macos",
 				encrypted: false,
 				channel: "stable",
 				packages: ["fish", "gh", "git"],

@@ -115,10 +115,14 @@ const Top = Schema.Struct({
 	stacks: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
 });
 
+export type Kind = "nixos" | "macos" | "vm";
+
 /** A machine as aett works with it: what fleet.ts declares, with its stacks resolved. */
 export interface Machine {
 	readonly name: string;
 	readonly role: Role;
+	/** Bare-metal NixOS, a Mac, or a VM; only bare-metal NixOS comes from the installer. */
+	readonly kind: Kind;
 	readonly encrypted: boolean;
 	readonly channel: Channel;
 	readonly packages: ReadonlyArray<string>;
@@ -155,7 +159,7 @@ const decodeAt = <S extends Schema.Decoder<unknown>>(
 /** A machine as declared, after its shape was checked: what it is, where it runs and its settings. */
 interface Decoded {
 	readonly role: Role;
-	readonly kind: "nixos" | "macos" | "vm";
+	readonly kind: Kind;
 	readonly host: string | undefined;
 	readonly system: {
 		readonly encrypted?: boolean;
@@ -339,6 +343,7 @@ const toMachine = (
 	return {
 		name,
 		role: machine.role,
+		kind: machine.kind,
 		encrypted: system.encrypted === true,
 		channel: system.channel ?? "stable",
 		packages: resolved.packages,

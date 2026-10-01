@@ -36,7 +36,7 @@ export const discover = Effect.fn("discover")(function* (
 	name: string,
 	access: InstallerAccess,
 ) {
-	yield* installable(yield* loadFleet(root), name);
+	yield* discoverable(yield* loadFleet(root), name);
 	yield* (yield* Engine).discover(root, name, yield* connect(access));
 }, Effect.scoped);
 
@@ -111,12 +111,24 @@ export const install = Effect.fn("install")(function* (
 	return yield* Effect.ignore(connection.run("systemctl reboot"));
 }, Effect.scoped);
 
-// The machine fleet.ts declares as `name`, when it's one aett can install.
-const installable = (fleet: Fleet, name: string) =>
+// The bare-metal NixOS machine fleet.ts declares as `name`: what the installer can discover.
+const discoverable = (fleet: Fleet, name: string) =>
 	Effect.fromOption(
 		Option.fromUndefinedOr(fleet.machines.find((machine) => machine.name === name)),
 		() => new InstallError({ message: `fleet.ts declares no machine named "${name}".` }),
 	).pipe(
+		Effect.filterOrFail(
+			(machine) => machine.kind === "nixos",
+			(machine) =>
+				new InstallError({
+					message: `${name} is ${machine.kind === "vm" ? "a VM" : "a Mac"}; the installer sets up bare-metal NixOS machines.`,
+				}),
+		),
+	);
+
+// The machine as discover allows it, and only if it declares nothing aett can't install yet.
+const installable = (fleet: Fleet, name: string) =>
+	discoverable(fleet, name).pipe(
 		Effect.filterOrFail(
 			(machine) => machine.unsupported.length === 0,
 			(machine) =>
