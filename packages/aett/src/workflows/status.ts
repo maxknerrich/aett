@@ -106,21 +106,38 @@ export const status = Effect.fn("status")(function* (root: string) {
 			const running = yield* engine.currentSystem(connection);
 			const tailnet = (yield* connection.run("tailscale ip -4 2>/dev/null || true")).trim();
 
-			// The build leaves out a release without a fitting pin, so it can't say what apply would build.
-			const unpinned = Option.match(machine, {
-				onNone: () => [],
-				onSome: ({ releases }) => releases,
-			}).filter((release) =>
-				Option.match(Option.fromUndefinedOr(pins.releases[release.github]), {
-					onNone: () => true,
-					onSome: (pin) => !pinFits(pin, release),
-				}),
+			// What apply would add to this machine's system that the build leaves out: a release without
+			// a fitting pin, its own or a guest's, since a host's system holds its guests', and a guest
+			// apply has yet to give an address. Comparing would then say nothing.
+			const included = fleet.machines.filter(
+				({ name: other, vm }) => other === name || Option.exists(vm, ({ host: on }) => on === name),
 			);
+
+			const unpinned = included
+				.flatMap(({ releases }) => releases)
+				.filter((release) =>
+					Option.match(Option.fromUndefinedOr(pins.releases[release.github]), {
+						onNone: () => true,
+						onSome: (pin) => !pinFits(pin, release),
+					}),
+				);
+
+			const unplaced = included.filter(
+				({ name: other, vm, unsupported }) =>
+					Option.isSome(vm) &&
+					unsupported.length === 0 &&
+					state.machines.get(other)?.address === undefined,
+			);
+
+			const pending = [
+				...unpinned.map(({ bin }) => `${bin} isn't pinned yet`),
+				...unplaced.map(({ name: vm }) => `${vm} has no address yet`),
+			];
 
 			// A declaration that doesn't evaluate still leaves what the machine said.
 			const comparison =
-				unpinned.length > 0
-					? `${unpinned.map(({ bin }) => bin).join(", ")} not pinned yet, which apply does`
+				pending.length > 0
+					? `${pending.join(", ")}; apply does that`
 					: yield* engine.systemPath(build, name).pipe(
 							Effect.map((expected) =>
 								running === expected ? "runs fleet.ts" : "differs from fleet.ts",
