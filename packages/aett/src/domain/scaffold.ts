@@ -45,13 +45,14 @@ export const fleetSource = (machines: ReadonlyArray<Machine>) => {
 		: `import { fleet, machine } from "aett"\n\nexport default fleet({\n\tmachines: [\n${declared.join("")}\t],\n})\n`;
 };
 
-const PackageManager = Schema.Literals(["npm", "pnpm", "yarn", "bun"]);
+const PackageManager = Schema.Literals(["npm", "pnpm"]);
 
 export type PackageManager = typeof PackageManager.Type;
 
 /**
  * The package manager that started aett, read from npm_config_user_agent
- * (`pnpm/10.0.0 npm/? node/…`). npm, which ships with Node, otherwise.
+ * (`pnpm/10.0.0 npm/? node/…`), when it is npm or pnpm. npm, which ships with
+ * Node, otherwise.
  */
 export const packageManager = (userAgent: Option.Option<string>): PackageManager =>
 	userAgent.pipe(
@@ -70,8 +71,8 @@ export const newMachineName = (machines: ReadonlyArray<Machine>, name: string) =
 /**
  * How a new fleet depends on aett: by version when aett came from the
  * registry, else on the source checkout it runs from. npm links a `file:`
- * directory; pnpm, yarn and bun would install the checkout's own
- * dependencies from it, so they get `link:`.
+ * directory; pnpm would install the checkout's own `catalog:` dependencies
+ * from it, so it gets `link:`.
  */
 export const aettDependency = (
 	manager: PackageManager,

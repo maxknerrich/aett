@@ -57,11 +57,11 @@ describe("fleetSource", () => {
 });
 
 describe("packageManager", () => {
-	it("uses the package manager in npm_config_user_agent, else npm", () => {
+	it("uses npm or pnpm from npm_config_user_agent, else npm", () => {
 		expect(packageManager(Option.some("pnpm/10.18.0 npm/? node/v24.21.0 darwin arm64"))).toBe(
 			"pnpm",
 		);
-		expect(packageManager(Option.some("deno/2.5.0"))).toBe("npm");
+		expect(packageManager(Option.some("yarn/4.9.0 npm/? node/v24.21.0"))).toBe("npm");
 		expect(packageManager(Option.none())).toBe("npm");
 	});
 });
