@@ -1,0 +1,304 @@
+import {
+	Config,
+	Console,
+	Effect,
+	FileSystem,
+	Option,
+	Path,
+	Schema,
+	Stream,
+	type Terminal,
+} from "effect";
+import { Prompt } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import type { Machine } from "../domain/fleet.ts";
+import {
+	FleetName,
+	fleetSource,
+	newMachineName,
+	packageManager,
+	roles,
+} from "../domain/scaffold.ts";
+import { ageKeyPair, type Operator, SshPublicKey } from "../domain/state.ts";
+import { Engine } from "../engine/engine.ts";
+
+export class CreateError extends Schema.TaggedError<CreateError>()("CreateError", {
+	message: Schema.String,
+}) {}
+
+/** The running aett package, which a new fleet depends on. */
+export interface AettPackage {
+	readonly directory: string;
+	readonly version: string;
+}
+
+/** The answers `aett create` takes as flags instead of prompts. */
+export interface CreateOptions {
+	readonly name: Option.Option<string>;
+	readonly sshKey: Option.Option<string>;
+	/** Machines from --machine; when there are none, create asks. */
+	readonly machines: ReadonlyArray<Machine>;
+}
+
+const isSshPublicKey = Schema.is(SshPublicKey);
+
+const isFleetName = Schema.is(FleetName);
+
+/**
+ * Starts a fleet in a new directory under `cwd`: asks for its name, the
+ * operator's SSH key and its first machines, writes fleet.ts, package.json,
+ * .gitignore and state/operator.json, makes it a Git repository and installs
+ * aett with the package manager that started aett. A new age key encrypts the
+ * fleet's secrets; its private half is shown once at the end and never stored.
+ */
+export const create = Effect.fn("create")(function* (
+	cwd: string,
+	aett: AettPackage,
+	options: CreateOptions,
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+
+	const name = yield* Option.match(options.name, {
+		onSome: (given) =>
+			Schema.decodeUnknownEffect(FleetName)(given).pipe(
+				Effect.mapError(
+					() =>
+						new CreateError({
+							message: `"${given}" can't name a fleet. Use lowercase letters, digits, dots, dashes and underscores.`,
+						}),
+				),
+			),
+		onNone: () =>
+			Prompt.String({
+				message: "Fleet name (also its directory)",
+				validate: (value) =>
+					isFleetName(value)
+						? Effect.succeed(value)
+						: Effect.fail("Use lowercase letters, digits, dots, dashes and underscores"),
+			}),
+	});
+
+	const root = path.join(cwd, name);
+
+	if ((yield* fs.exists(root)) && (yield* fs.readDirectory(root)).length > 0) {
+		return yield* new CreateError({
+			message: `${root} already exists and is not empty. aett create starts a new fleet in a new directory.`,
+		});
+	}
+
+	const key = yield* Option.match(options.sshKey, {
+		onNone: () => agentKey,
+		onSome: (value) =>
+			Effect.gen(function* () {
+				const isLine = isSshPublicKey(value.trim());
+				const isFile = !isLine && (yield* fs.exists(value));
+				const line = isFile ? (yield* fs.readFileString(value)).trim() : value.trim();
+
+				if ((isLine || isFile) && isSshPublicKey(line) && (yield* keygenAccepts(line))) return line;
+
+				return yield* new CreateError({
+					message: isFile
+						? `${value} does not hold an OpenSSH public key. Pass the .pub file.`
+						: "--ssh-key takes an OpenSSH public key line or the path to a .pub file.",
+				});
+			}),
+	});
+
+	const machines = options.machines.length > 0 ? options.machines : yield* askMachines([]);
+	const age = yield* ageKey;
+
+	// A source checkout is linked; an installed package is depended on by version.
+	const dependency = aett.directory.split(path.sep).includes("node_modules")
+		? `^${aett.version}`
+		: `file:${aett.directory}`;
+
+	const manifest = { name, private: true, type: "module", dependencies: { aett: dependency } };
+
+	yield* fs.makeDirectory(path.join(root, "state"), { recursive: true });
+	yield* fs.writeFileString(path.join(root, "fleet.ts"), fleetSource(machines));
+	yield* fs.writeFileString(
+		path.join(root, "package.json"),
+		`${JSON.stringify(manifest, null, "\t")}\n`,
+	);
+	yield* fs.writeFileString(path.join(root, ".gitignore"), "node_modules/\n.aett/build/\n");
+	yield* fs.writeFileString(
+		path.join(root, "state", "operator.json"),
+		`${JSON.stringify({ sshKeys: [key], age: age.publicKey } satisfies Operator, null, "\t")}\n`,
+	);
+	yield* Console.log(`\nWrote the fleet to ${path.relative(cwd, root)}/.`);
+	yield* gitInit(root);
+	yield* installDependencies(root);
+
+	const next =
+		machines.length === 0
+			? "  Declare machines in fleet.ts, then boot one from the aett installer and run aett machine install <name>."
+			: `  Boot ${machines.length === 1 ? "the machine" : "a machine"} from the aett installer, then: aett machine install ${machines[0]?.name ?? "<name>"}`;
+
+	return yield* Console.log(
+		[
+			"",
+			"Your private age key decrypts the fleet's secrets. aett shows it only this once:",
+			"",
+			`  ${age.secretKey}`,
+			"",
+			"Store it in your password manager. aett reads it from SOPS_AGE_KEY.",
+			"",
+			"Next:",
+			`  cd ${path.relative(cwd, root)}`,
+			next,
+		].join("\n"),
+	);
+});
+
+// Asks for the fleet's first machines one by one until the operator stops, adding them to `machines`.
+const askMachines = (
+	machines: ReadonlyArray<Machine>,
+): Effect.Effect<ReadonlyArray<Machine>, Terminal.QuitError, Prompt.Environment> =>
+	Prompt.Confirm({
+		message: machines.length === 0 ? "Add a machine?" : "Add another machine?",
+		initial: machines.length === 0,
+	}).pipe(
+		Effect.flatMap((more) =>
+			more
+				? askMachine(machines).pipe(
+						Effect.flatMap((machine) => askMachines([...machines, machine])),
+					)
+				: Effect.succeed(machines),
+		),
+	);
+
+// Asks for one machine's name, role and disk encryption.
+const askMachine = Effect.fnUntraced(function* (machines: ReadonlyArray<Machine>) {
+	const name = yield* Prompt.String({
+		message: "Machine name (its hostname)",
+		validate: (value) => Effect.fromResult(newMachineName(machines, value)),
+	});
+
+	const role = yield* Prompt.Select({
+		message: `What is ${name}?`,
+		choices: roles.map(({ role: value, description }) => ({ title: value, value, description })),
+	});
+
+	const encrypted = yield* Prompt.Confirm({
+		message: "Encrypt its disk? You type a passphrase at its console on every boot.",
+	});
+
+	return encrypted ? ({ name, role, disk: { encrypted } } satisfies Machine) : { name, role };
+});
+
+// Makes the fleet a Git repository with the pinned git.
+const gitInit = Effect.fn("gitInit")(function* (root: string) {
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const path = yield* Path.Path;
+	const git = path.join(yield* (yield* Engine).tools, "git");
+
+	return yield* spawner
+		.exitCode(ChildProcess.make(git, ["init", "--quiet", root], { stdin: "ignore" }))
+		.pipe(
+			Effect.filterOrFail(
+				(exitCode) => exitCode === 0,
+				() => new CreateError({ message: `git init failed in ${root}.` }),
+			),
+			Effect.asVoid,
+		);
+});
+
+// Installs aett into the fleet with the package manager that started aett, its output on the terminal.
+const installDependencies = Effect.fn("installDependencies")(function* (root: string) {
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const userAgent = yield* Config.option(Config.String("npm_config_user_agent")).pipe(Effect.orDie);
+	const manager = packageManager(userAgent);
+
+	yield* Console.log(`Installing aett with ${manager}…`);
+
+	return yield* spawner
+		.exitCode(
+			ChildProcess.make(manager, ["install"], {
+				cwd: root,
+				stdin: "ignore",
+				stdout: "inherit",
+				stderr: "inherit",
+			}),
+		)
+		.pipe(
+			Effect.catchTag("PlatformError", () => Effect.succeed(-1)),
+			Effect.filterOrFail(
+				(exitCode) => exitCode === 0,
+				() =>
+					new CreateError({
+						message: `${manager} install failed in ${root}. The fleet is written; install its dependencies there by hand.`,
+					}),
+			),
+			Effect.asVoid,
+		);
+});
+
+/** Takes the operator's key from the SSH agent, asking which one when it holds several. */
+const agentKey = Effect.gen(function* () {
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const path = yield* Path.Path;
+	const tools = yield* (yield* Engine).tools;
+	const lines = yield* spawner.lines(ChildProcess.make(path.join(tools, "ssh-add"), ["-L"]));
+	const [first, ...rest] = lines.filter(isSshPublicKey);
+
+	if (first === undefined) {
+		return yield* new CreateError({
+			message: "The SSH agent holds no keys. Add one with ssh-add, or pass --ssh-key.",
+		});
+	}
+
+	if (rest.length === 0) {
+		return yield* Console.log(`Using the SSH key ${keyLabel(first)} from your agent.`).pipe(
+			Effect.as(first),
+		);
+	}
+
+	return yield* Prompt.Select({
+		message: "Which SSH key should aett use?",
+		choices: [first, ...rest].map((key) => ({ title: keyLabel(key), value: key })),
+	});
+});
+
+/** Makes the operator's age key pair with the pinned age-keygen. */
+const ageKey = Effect.gen(function* () {
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const path = yield* Path.Path;
+	const tools = yield* (yield* Engine).tools;
+
+	const output = yield* spawner.string(
+		ChildProcess.make(path.join(tools, "age-keygen"), [], {
+			stdin: "ignore",
+			stderr: "ignore",
+		}),
+	);
+
+	return yield* Effect.fromOption(
+		ageKeyPair(output),
+		() => new CreateError({ message: "age-keygen printed no key pair." }),
+	);
+});
+
+/** Asks the pinned ssh-keygen whether OpenSSH can parse the key; the pattern alone lets truncated blobs through. */
+const keygenAccepts = Effect.fnUntraced(function* (key: string) {
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const path = yield* Path.Path;
+	const tools = yield* (yield* Engine).tools;
+
+	const exitCode = yield* spawner.exitCode(
+		ChildProcess.make(path.join(tools, "ssh-keygen"), ["-l", "-f", "/dev/stdin"], {
+			stdin: Stream.make(new TextEncoder().encode(`${key}\n`)),
+			stdout: "ignore",
+			stderr: "ignore",
+		}),
+	);
+
+	return exitCode === 0;
+});
+
+/** Shows a key by its type and comment, or the end of its blob when it has no comment. */
+const keyLabel = (key: string) => {
+	const [type, blob = "", ...comment] = key.split(" ");
+
+	return comment.length > 0 ? `${comment.join(" ")} (${type})` : `…${blob.slice(-16)} (${type})`;
+};
