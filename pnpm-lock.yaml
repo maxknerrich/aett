@@ -207,6 +207,12 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.118
 
+  packages/create-aett:
+    dependencies:
+      aett:
+        specifier: workspace:*
+        version: link:../aett
+
 packages:
 
   '@babel/code-frame@7.29.7':

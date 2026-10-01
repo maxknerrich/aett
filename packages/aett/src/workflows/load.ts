@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Console, Effect, FileSystem, Option, Path, type PlatformError, Schema } from "effect";
 import { Declaration, decodeFleet, type Fleet } from "../domain/fleet.ts";
 import { MachineRecord, Operator, type State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
@@ -11,6 +11,44 @@ export class FleetError extends Schema.TaggedError<FleetError>()("FleetError", {
 }) {}
 
 const FleetModule = Schema.Struct({ default: Declaration });
+
+/** The nearest directory from `cwd` upwards that holds fleet.ts, the way git finds its repository. */
+export const findFleet = Effect.fn("findFleet")(function* (cwd: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+
+	const search = (
+		directory: string,
+	): Effect.Effect<Option.Option<string>, PlatformError.PlatformError> =>
+		fs.exists(path.join(directory, "fleet.ts")).pipe(
+			Effect.flatMap((found) => {
+				const parent = path.dirname(directory);
+
+				if (found) return Effect.succeed(Option.some(directory));
+
+				return parent === directory ? Effect.succeed(Option.none()) : search(parent);
+			}),
+		);
+
+	return yield* search(cwd);
+});
+
+/** The fleet a command works on: the nearest one from `cwd` upwards. Says which when it is not `cwd` itself. */
+export const fleetRoot = Effect.fn("fleetRoot")(function* (cwd: string) {
+	const root = yield* Effect.flatMap(findFleet(cwd), (found) =>
+		Effect.fromOption(
+			found,
+			() =>
+				new FleetError({
+					message: `There is no fleet.ts in ${cwd} or any directory above it. cd into a fleet, or start one with aett create.`,
+				}),
+		),
+	);
+
+	if (root !== cwd) yield* Console.log(`Using the fleet in ${root}`);
+
+	return root;
+});
 
 /** Imports `<root>/fleet.ts` and decodes its default export into a fleet. */
 export const loadFleet = Effect.fn("loadFleet")(function* (root: string) {

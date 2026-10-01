@@ -42,6 +42,8 @@ export interface CreateOptions {
 	/** Machines from --machine; when there are none, create asks unless `noMachines`. */
 	readonly machines: ReadonlyArray<Machine>;
 	readonly noMachines: boolean;
+	/** Installs aett with this instead of the package manager that started aett. */
+	readonly packageManager: Option.Option<PackageManager>;
 }
 
 const isSshPublicKey = Schema.is(SshPublicKey);
@@ -53,7 +55,7 @@ const isFleetName = Schema.is(FleetName);
  * operator's SSH key and its first machines, writes fleet.ts, package.json,
  * .gitignore and state/operator.json, makes it a Git repository and installs
  * aett with the package manager that started aett. A new age key encrypts the
- * fleet's secrets; its private half is shown once at the end and never stored.
+ * fleet's secrets; its private half is shown once and never stored.
  */
 export const create = Effect.fn("create")(function* (
 	cwd: string,
@@ -124,7 +126,7 @@ export const create = Effect.fn("create")(function* (
 
 	const age = yield* ageKey;
 	const userAgent = yield* Config.option(Config.String("npm_config_user_agent")).pipe(Effect.orDie);
-	const manager = packageManager(userAgent);
+	const manager = Option.getOrElse(options.packageManager, () => packageManager(userAgent));
 
 	// aett runs from a source checkout unless it was installed into node_modules.
 	const checkout = aett.directory.split(path.sep).includes("node_modules")
