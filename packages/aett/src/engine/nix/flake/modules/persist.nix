@@ -1,19 +1,21 @@
-# Bind-mounts directories from /persist so they survive the tmpfs root. Install creates them.
+# Bind-mounts directories from /persist so they survive the tmpfs root. Install creates them on metal; guest.nix on a VM's fresh volume.
 { config, lib, ... }:
 {
   options.aett.persist = lib.mkOption {
     type = lib.types.listOf lib.types.str;
-    default = [
-      "/var/lib"
-      "/var/log"
-      "/etc/NetworkManager/system-connections"
-    ];
   };
 
-  config.fileSystems = lib.genAttrs config.aett.persist (dir: {
-    device = "/persist${dir}";
-    fsType = "none";
-    options = [ "bind" ];
-    neededForBoot = true;
-  });
+  config = {
+    aett.persist = [
+      "/var/lib"
+      "/var/log"
+    ];
+
+    fileSystems = lib.genAttrs config.aett.persist (dir: {
+      device = "/persist${dir}";
+      fsType = "none";
+      options = [ "bind" ];
+      neededForBoot = true;
+    });
+  };
 }

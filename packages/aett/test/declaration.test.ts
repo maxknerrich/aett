@@ -1,4 +1,4 @@
-import { Result } from "effect";
+import { Option, Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
 import { computer, fleet, hypervisor, server } from "../src/index.ts";
@@ -31,6 +31,7 @@ describe("decodeFleet", () => {
 				kind: "nixos",
 				encrypted: true,
 				channel: "stable",
+				vm: Option.none(),
 				packages: [],
 				unsupported: [],
 			},
@@ -40,6 +41,7 @@ describe("decodeFleet", () => {
 				kind: "nixos",
 				encrypted: false,
 				channel: "unstable",
+				vm: Option.none(),
 				packages: ["fish", "gh", "git"],
 				unsupported: [],
 			},
@@ -49,8 +51,9 @@ describe("decodeFleet", () => {
 				kind: "vm",
 				encrypted: false,
 				channel: "stable",
+				vm: Option.some({ host: "kronos", cpu: 2, memory: 8192, disk: 20480 }),
 				packages: ["fish"],
-				unsupported: ["VMs"],
+				unsupported: [],
 			},
 			{
 				name: "fawkes",
@@ -58,6 +61,7 @@ describe("decodeFleet", () => {
 				kind: "macos",
 				encrypted: false,
 				channel: "stable",
+				vm: Option.none(),
 				packages: ["fish", "gh", "git"],
 				unsupported: ["Macs", "apps"],
 			},
@@ -137,12 +141,12 @@ describe("decodeFleet", () => {
 		});
 
 		const small = fleet({
-			machines: { host: hypervisor(), vm: server({ host: "host", system: { memory: "1 GiB" } }) },
+			machines: { host: hypervisor(), vm: server({ host: "host", system: { memory: "256 MiB" } }) },
 		});
 
 		expect(problems(bareMetal)).toContain("machines.box.system.memory: Unexpected key");
 		expect(problems(mac)).toContain("machines.mac.system.encrypted: Expected never");
-		expect(problems(small)).toContain("machines.vm.system.memory: Expected at least 2 GiB");
+		expect(problems(small)).toContain("machines.vm.system.memory: Expected at least 512 MiB");
 		expect(problems(mixed)).toContain("machines.box.system.memory: Unexpected key");
 		expect(problems(unknownKeys)).toContain("machines.box.system.typo: Unexpected key");
 		expect(problems(unknownKeys)).toContain("machines.nas.packages: Unexpected key");

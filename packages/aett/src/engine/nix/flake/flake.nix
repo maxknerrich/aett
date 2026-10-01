@@ -8,13 +8,21 @@
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    microvm = {
+      url = "github:microvm-nix/microvm.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+      # Only an overlay aett doesn't use reads it; following this flake keeps it out of the lock.
+      inputs.spectrum.follows = "";
+    };
   };
 
   outputs =
     {
+      self,
       nixpkgs,
       nixpkgs-unstable,
       disko,
+      microvm,
       ...
     }:
     let
@@ -28,24 +36,59 @@
         unstable = nixpkgs-unstable;
       };
 
+      # A VM, which its host builds and runs, or bare metal, which aett installs.
+      kind =
+        name: declared:
+        if declared ? vm then
+          [
+            microvm.nixosModules.microvm
+            ./modules/guest.nix
+            {
+              # The host's hardware report says what it runs; the VM runs the same.
+              nixpkgs.hostPlatform = (lib.importJSON ./state/${declared.vm.host}/facter.json).system;
+            }
+          ]
+        else
+          [
+            disko.nixosModules.disko
+            ./modules/metal.nix
+            ./modules/disk.nix
+            ./modules/install.nix
+            { hardware.facter.reportPath = ./state/${name}/facter.json; }
+          ];
+
+      # A machine that runs VMs builds each guest's system from its entry here.
+      guests =
+        declared:
+        lib.optionals (declared ? guests) [
+          microvm.nixosModules.host
+          ./modules/vm-host.nix
+          {
+            microvm.vms = lib.genAttrs declared.guests (guest: {
+              evaluatedConfig = self.nixosConfigurations.${guest};
+              # aett switches running guests itself and restarts them only when it must.
+              restartIfChanged = false;
+            });
+          }
+        ];
+
       machine =
         name: declared:
         channels.${declared.channel}.lib.nixosSystem {
           modules = [
-            disko.nixosModules.disko
             ./modules/machine.nix
-            ./modules/disk.nix
             ./modules/persist.nix
-            ./modules/install.nix
             {
               _file = "fleet.ts -> machine(${name})";
               aett = declared // {
                 inherit name;
                 inherit (fleet) operator;
               };
-              hardware.facter.reportPath = ./state/${name}/facter.json;
             }
-          ];
+          ]
+          ++ kind name declared
+          ++ guests declared
+          ++ lib.optional (declared.role == "hypervisor") ./modules/hypervisor.nix;
         };
 
       installer =

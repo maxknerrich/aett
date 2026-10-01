@@ -1,18 +1,27 @@
-import { Console, Effect, Path } from "effect";
+import { Console, Effect, Option, Path } from "effect";
 import type { Fleet } from "../domain/fleet.ts";
+import { allocate } from "../domain/network.ts";
 import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
-import { loadFleet, readState } from "./load.ts";
+import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
 
 /**
- * Loads the fleet and its state and has the engine write the build to
- * `<root>/.aett/build/`. Returns the build with the fleet and state it was
- * made from.
+ * Loads the fleet and its state, records the guest addresses state still
+ * lacks, and has the engine write the build to `<root>/.aett/build/`. Returns
+ * the build with the fleet and state it was made from.
  */
 export const emit = Effect.fn("emit")(function* (root: string) {
 	const engine = yield* Engine;
 	const fleet = yield* loadFleet(root);
-	const state = yield* readState(root, fleet);
+	const recorded = yield* readState(root, fleet);
+
+	const changes = yield* Effect.fromResult(allocate(fleet, recorded)).pipe(
+		Effect.mapError((message) => new FleetError({ message })),
+	);
+
+	yield* Effect.forEach(changes, ([name, record]) => updateRecord(root, name, record));
+
+	const state = changes.size === 0 ? recorded : yield* readState(root, fleet);
 	const build = yield* engine.emit(root, fleet, state);
 
 	return { build, fleet, state };
@@ -38,9 +47,14 @@ export const compile = Effect.fn("compile")(function* (root: string) {
 
 // Why the build leaves a machine out.
 const notBuilt = (fleet: Fleet, state: State, name: string) => {
-	const unsupported = fleet.machines.find((machine) => machine.name === name)?.unsupported ?? [];
+	const machine = fleet.machines.find((declared) => declared.name === name);
+	const unsupported = machine?.unsupported ?? [];
 
 	if (unsupported.length > 0) return `not supported yet: ${unsupported.join(", ")}`;
+
+	const host = Option.flatMap(Option.fromUndefinedOr(machine), ({ vm }) => vm);
+
+	if (Option.isSome(host)) return `runs on ${host.value.host}, which is not installed yet`;
 
 	return state.machines.get(name)?.facts === true ? "not installed yet" : "not discovered yet";
 };

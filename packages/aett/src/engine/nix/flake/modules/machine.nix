@@ -1,4 +1,4 @@
-# The base system every aett machine gets. `fleet.json` sets the `aett` options.
+# The base system every aett machine gets, on metal or as a VM. `fleet.json` sets the `aett` options.
 {
   config,
   lib,
@@ -35,24 +35,15 @@ in
 
   config = {
     networking.hostName = cfg.name;
-    networking.networkmanager.enable = true;
-    # NetworkManager owns the interfaces; facter would otherwise start dhcpcd on them too.
-    hardware.facter.detected.dhcp.enable = false;
 
-    # Announces <name>.local.
-    services.avahi = {
-      enable = true;
-      nssmdns4 = true;
-      # Only IPv4 addresses, which the controller reaches on the LAN; a published IPv6 one can be unroutable.
-      ipv6 = false;
-      publish = {
-        enable = true;
-        addresses = true;
-      };
-    };
+    # Default deny; modules open what they serve.
+    networking.nftables.enable = true;
+    networking.firewall.enable = true;
 
     services.openssh = {
       enable = true;
+      # aett makes the key and keeps it in the fleet's secrets. Install writes it to a metal machine's
+      # disk; a guest's host shares it into the guest read-only.
       hostKeys = [
         {
           path = "/persist/etc/ssh/ssh_host_ed25519_key";
@@ -73,20 +64,9 @@ in
       openssh.authorizedKeys.keys = cfg.operator.sshKeys;
     };
 
-    environment.etc.machine-id.source = "/persist/etc/machine-id";
-
-    services.logind.settings.Login = lib.mkIf (cfg.role != "computer") {
-      HandleLidSwitch = "ignore";
-      HandleLidSwitchExternalPower = "ignore";
-      HandleLidSwitchDocked = "ignore";
-    };
-
     environment.systemPackages = map (
       path: lib.getAttrFromPath (lib.splitString "." path) pkgs
     ) cfg.packages;
-
-    boot.loader.systemd-boot.enable = true;
-    boot.loader.efi.canTouchEfiVariables = true;
 
     nix.settings.experimental-features = [
       "nix-command"

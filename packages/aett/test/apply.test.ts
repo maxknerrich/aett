@@ -41,7 +41,7 @@ describe("applyTargets", () => {
 				targets: ["box", "web"],
 				skipped: [
 					{ name: "fresh", reason: "is not installed yet" },
-					{ name: "vm", reason: "uses what aett can't build yet: VMs" },
+					{ name: "vm", reason: "is a VM; applying box builds and starts it" },
 				],
 			}),
 		);
@@ -53,12 +53,12 @@ describe("applyTargets", () => {
 		);
 	});
 
-	it("rejects a named machine that is not installed or that aett can't build yet", () => {
+	it("rejects a named machine that is not installed, or a VM", () => {
 		expect(applyTargets(declared, state, Option.some("fresh"))).toEqual(
 			Result.fail("fresh is not installed yet. Install it with aett machine install fresh."),
 		);
 		expect(applyTargets(declared, state, Option.some("vm"))).toEqual(
-			Result.fail("vm uses what aett can't build yet: VMs."),
+			Result.fail("vm is a VM on box. Apply box, which builds and starts it."),
 		);
 	});
 

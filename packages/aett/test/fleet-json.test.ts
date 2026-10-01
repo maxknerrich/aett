@@ -82,4 +82,54 @@ describe("fleetJson", () => {
 			},
 		});
 	});
+
+	it("lists a VM with its interface once its host is listed, and names it on the host", () => {
+		const declared = loaded(
+			fleet({
+				machines: {
+					box: hypervisor(),
+					fresh: hypervisor(),
+					vm: server({ host: "box", system: { cpu: 4, memory: "8 GiB" } }),
+					waiting: server({ host: "fresh" }),
+				},
+			}),
+		);
+
+		const state: State = {
+			operator,
+			machines: new Map([
+				["box", { facts: true, disk, subnet: "10.100.1.0/24" }],
+				["fresh", { facts: false, subnet: "10.100.2.0/24" }],
+				["vm", { facts: false, host: "box", address: "10.100.1.2" }],
+				["waiting", { facts: false, host: "fresh", address: "10.100.2.2" }],
+			]),
+		};
+
+		expect(fleetJson(declared, state).machines).toEqual({
+			box: {
+				role: "hypervisor",
+				channel: "stable",
+				packages: [],
+				disk: { device: disk, encrypted: false },
+				guests: ["vm"],
+				network: { address: "10.100.1.1", prefixLength: 24 },
+			},
+			vm: {
+				role: "server",
+				channel: "stable",
+				packages: [],
+				vm: {
+					host: "box",
+					cpu: 4,
+					memory: 8192,
+					disk: 20480,
+					address: "10.100.1.2",
+					prefixLength: 24,
+					gateway: "10.100.1.1",
+					mac: "02:00:0a:64:01:02",
+					tap: "vm-2",
+				},
+			},
+		});
+	});
 });

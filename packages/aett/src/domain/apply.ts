@@ -46,6 +46,10 @@ const skipReason = (machine: Machine, state: State) => {
 		return Option.some(`uses what aett can't build yet: ${machine.unsupported.join(", ")}`);
 	}
 
+	if (Option.isSome(machine.vm)) {
+		return Option.some(`is a VM; applying ${machine.vm.value.host} builds and starts it`);
+	}
+
 	return state.machines.get(machine.name)?.installed === true
 		? Option.none()
 		: Option.some("is not installed yet");
@@ -82,6 +86,12 @@ const select = (
 	if (machine.unsupported.length > 0) {
 		return Result.fail(
 			`${machine.name} uses what aett can't build yet: ${machine.unsupported.join(", ")}.`,
+		);
+	}
+
+	if (Option.isSome(machine.vm)) {
+		return Result.fail(
+			`${machine.name} is a VM on ${machine.vm.value.host}. Apply ${machine.vm.value.host}, which builds and starts it.`,
 		);
 	}
 

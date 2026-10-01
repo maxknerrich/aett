@@ -2,9 +2,11 @@ import { Console, Effect, Option, Path, Schema } from "effect";
 import { Prompt } from "effect/cli";
 import { Ssh } from "../adapters/ssh.ts";
 import { applyTargets } from "../domain/apply.ts";
+import { guestsOf } from "../domain/fleet.ts";
 import { formatHost, type Host } from "../domain/host.ts";
 import { type Build, Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
+import { placeGuestKeys } from "./identity.ts";
 
 export class ApplyError extends Schema.TaggedError<ApplyError>()("ApplyError", {
 	message: Schema.String,
@@ -57,19 +59,28 @@ export const apply = Effect.fn("apply")(function* (
 				build,
 				machine,
 				Option.getOrElse(options.host, () => ({ name: `${machine}.local`, port: 22 })),
-				options.yes,
+				{
+					yes: options.yes,
+					guests: guestsOf(fleet, machine).filter((guest) => build.machines.includes(guest)),
+					recipients: state.operator.ageKeys,
+				},
 			),
 		{ discard: true },
 	);
 });
 
-// Builds the machine's system on it and, once the operator agrees, switches to it.
+// Builds the machine's system on it and, once the operator agrees, switches to it. A host's
+// guests get their host keys first, so the ones the switch starts find their identity.
 const applyTo = Effect.fn("applyTo")(function* (
 	root: string,
 	build: Build,
 	name: string,
 	host: Host,
-	yes: boolean,
+	options: {
+		readonly yes: boolean;
+		readonly guests: ReadonlyArray<string>;
+		readonly recipients: ReadonlyArray<string>;
+	},
 ) {
 	const engine = yield* Engine;
 	const ssh = yield* Ssh;
@@ -78,6 +89,9 @@ const applyTo = Effect.fn("applyTo")(function* (
 	yield* Console.log(`Connecting to ${name} at ${formatHost(host)}…`);
 
 	const connection = yield* ssh.machine(name, host, path.join(root, "state", "known_hosts"));
+
+	yield* placeGuestKeys(root, connection, options.guests, options.recipients);
+
 	const system = yield* engine.buildSystem(build, name, connection);
 
 	if (system === (yield* engine.currentSystem(connection))) {
@@ -92,7 +106,7 @@ const applyTo = Effect.fn("applyTo")(function* (
 			: `Changes on ${name}:\n${changes}`,
 	);
 
-	if (!yes && !(yield* Prompt.Confirm({ message: `Switch ${name} to the new system?` }))) {
+	if (!options.yes && !(yield* Prompt.Confirm({ message: `Switch ${name} to the new system?` }))) {
 		return yield* Console.log(`Left ${name} as it is.`);
 	}
 
