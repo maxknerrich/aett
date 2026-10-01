@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { Declaration, decodeFleet, type Fleet } from "../domain/fleet.ts";
 import { MachineRecord, Operator, type State } from "../domain/state.ts";
+import { Engine } from "../engine/engine.ts";
 
 /** A problem with the fleet repository: fleet.ts or the state next to it. */
 export class FleetError extends Schema.TaggedError<FleetError>()("FleetError", {
@@ -55,6 +56,7 @@ export const loadFleet = Effect.fn("loadFleet")(function* (root: string) {
 export const readState = Effect.fn("readState")(function* (root: string, fleet: Fleet) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
+	const engine = yield* Engine;
 
 	// Decodes a JSON state file, naming it relative to the fleet root on failure.
 	const readJson = <A>(file: string, schema: Schema.Decoder<A>) =>
@@ -82,7 +84,7 @@ export const readState = Effect.fn("readState")(function* (root: string, fleet: 
 		Effect.gen(function* () {
 			const directory = path.join(root, "state", name);
 			const recordFile = path.join(directory, "machine.json");
-			const facts = yield* fs.exists(path.join(directory, "facter.json"));
+			const facts = yield* engine.discovered(root, name);
 
 			const record = (yield* fs.exists(recordFile))
 				? yield* readJson(recordFile, MachineRecord)

@@ -183,6 +183,9 @@ export const nixEngine = (flake: string) =>
 				return internalDisks(decoded);
 			});
 
+			const discovered = (root: string, name: string) =>
+				fs.exists(path.join(root, "state", name, "facter.json"));
+
 			const emit = Effect.fn("NixEngine.emit")(function* (
 				root: string,
 				fleet: Fleet,
@@ -329,6 +332,7 @@ export const nixEngine = (flake: string) =>
 			return Engine.of({
 				tools,
 				discover,
+				discovered,
 				emit,
 				evaluate,
 				buildSystem,

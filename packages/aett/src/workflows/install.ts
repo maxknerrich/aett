@@ -30,7 +30,7 @@ export interface InstallOptions extends InstallerAccess {
 	readonly passphrase: Option.Option<Redacted.Redacted>;
 }
 
-/** Connects to the installer and saves its hardware report as `state/<name>/facter.json`. */
+/** Connects to the installer and saves its hardware report in `state/<name>/`. */
 export const discover = Effect.fn("discover")(function* (
 	root: string,
 	name: string,

@@ -36,6 +36,11 @@ export class Engine extends Context.Service<
 			name: string,
 			target: Connection,
 		) => Effect.Effect<ReadonlyArray<Disk>, EngineError | SshError | PlatformError.PlatformError>;
+		/** Whether discover has saved the machine's hardware report in `<root>/state/<name>/`. */
+		readonly discovered: (
+			root: string,
+			name: string,
+		) => Effect.Effect<boolean, PlatformError.PlatformError>;
 		/** Writes the build for `fleet` to `<root>/.aett/build/`. It covers the machines with recorded facts and an install disk. */
 		readonly emit: (
 			root: string,

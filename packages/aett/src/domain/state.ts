@@ -45,7 +45,7 @@ export const MachineRecord = Schema.Struct({
 
 export interface MachineRecord extends Schema.Schema.Type<typeof MachineRecord> {}
 
-/** What state holds for one declared machine: its record and whether its facter report exists. */
+/** What state holds for one declared machine: its record and whether its hardware report exists. */
 export interface MachineState extends MachineRecord {
 	readonly facts: boolean;
 }

@@ -36,9 +36,7 @@ const machine = Command.make("machine").pipe(
 	Command.withSubcommands([
 		Command.make("discover", { name: machineName, ...installerFlags }, ({ name, ...access }) =>
 			Effect.flatMap(fleetRoot, (root) => discover(root, name, access)),
-		).pipe(
-			Command.withDescription("Save the installer's hardware report as state/<name>/facter.json."),
-		),
+		).pipe(Command.withDescription("Save the installer's hardware report in state/<name>/.")),
 		Command.make(
 			"install",
 			{
