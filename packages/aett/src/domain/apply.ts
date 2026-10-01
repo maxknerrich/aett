@@ -8,7 +8,7 @@ export interface Skipped {
 	readonly reason: string;
 }
 
-/** The machines one apply covers, and the declared ones it leaves out. */
+/** The machines one apply covers, bare metal before VMs, and the declared ones it leaves out. */
 export interface Targets {
 	readonly targets: ReadonlyArray<string>;
 	readonly skipped: ReadonlyArray<Skipped>;
@@ -16,10 +16,11 @@ export interface Targets {
 
 /**
  * Picks the machines `aett apply` covers: the named one, or else every
- * machine aett can apply to. That leaves out machines not installed yet and
- * machines that use what aett can't build yet; naming one of them is an
- * error. A target whose declared disk encryption differs from how it was
- * installed is an error too, because its new system could not mount its disk.
+ * machine aett can apply to, hosts before their guests. That leaves out
+ * machines not installed yet, VMs whose host isn't, and machines that use
+ * what aett can't build yet; naming one of them is an error. A target whose
+ * declared disk encryption differs from how it was installed is an error too,
+ * because its new system could not mount its disk.
  */
 export const applyTargets = (fleet: Fleet, state: State, name: Option.Option<string>) =>
 	Result.flatMap(select(fleet, state, name), (selected) => {
@@ -40,19 +41,37 @@ export const applyTargets = (fleet: Fleet, state: State, name: Option.Option<str
 		);
 	});
 
-// Why apply leaves a machine out, if it does.
-const skipReason = (machine: Machine, state: State) => {
+// Why apply can't reach a machine, if it can't: as the reason a run skips it and the error naming it gives.
+const blocker = (fleet: Fleet, machine: Machine, state: State) => {
+	const installed = (name: string) => state.machines.get(name)?.installed === true;
+
 	if (machine.unsupported.length > 0) {
-		return Option.some(`uses what aett can't build yet: ${machine.unsupported.join(", ")}`);
+		const what = machine.unsupported.join(", ");
+
+		return Option.some({
+			reason: `uses what aett can't build yet: ${what}`,
+			error: `${machine.name} uses what aett can't build yet: ${what}.`,
+		});
 	}
 
 	if (Option.isSome(machine.vm)) {
-		return Option.some(`is a VM; applying ${machine.vm.value.host} builds and starts it`);
+		const { host } = machine.vm.value;
+		const hostMachine = fleet.machines.find((declared) => declared.name === host);
+
+		return installed(host) && hostMachine?.unsupported.length === 0
+			? Option.none()
+			: Option.some({
+					reason: `runs on ${host}, which aett can't apply yet`,
+					error: `${machine.name} runs on ${host}, which aett can't apply yet. Apply ${host} first.`,
+				});
 	}
 
-	return state.machines.get(machine.name)?.installed === true
+	return installed(machine.name)
 		? Option.none()
-		: Option.some("is not installed yet");
+		: Option.some({
+				reason: "is not installed yet",
+				error: `${machine.name} is not installed yet. Install it with aett machine install ${machine.name}.`,
+			});
 };
 
 // The named machine, which must be one apply can reach, or else every such machine.
@@ -64,15 +83,20 @@ const select = (
 	if (Option.isNone(name)) {
 		const checked = fleet.machines.map((machine) => ({
 			machine,
-			reason: skipReason(machine, state),
+			blocked: blocker(fleet, machine, state),
 		}));
 
+		const reachable = checked.flatMap(({ machine, blocked }) =>
+			Option.isNone(blocked) ? [machine] : [],
+		);
+
 		return Result.succeed({
-			targets: checked.flatMap(({ machine, reason }) =>
-				Option.isNone(reason) ? [machine.name] : [],
-			),
-			skipped: checked.flatMap(({ machine, reason }) =>
-				Option.isSome(reason) ? [{ name: machine.name, reason: reason.value }] : [],
+			targets: [
+				...reachable.filter(({ vm }) => Option.isNone(vm)),
+				...reachable.filter(({ vm }) => Option.isSome(vm)),
+			].map((machine) => machine.name),
+			skipped: checked.flatMap(({ machine, blocked }) =>
+				Option.isSome(blocked) ? [{ name: machine.name, reason: blocked.value.reason }] : [],
 			),
 		});
 	}
@@ -83,23 +107,8 @@ const select = (
 		return Result.fail(`fleet.ts declares no machine named "${name.value}".`);
 	}
 
-	if (machine.unsupported.length > 0) {
-		return Result.fail(
-			`${machine.name} uses what aett can't build yet: ${machine.unsupported.join(", ")}.`,
-		);
-	}
-
-	if (Option.isSome(machine.vm)) {
-		return Result.fail(
-			`${machine.name} is a VM on ${machine.vm.value.host}. Apply ${machine.vm.value.host}, which builds and starts it.`,
-		);
-	}
-
-	if (state.machines.get(machine.name)?.installed !== true) {
-		return Result.fail(
-			`${machine.name} is not installed yet. Install it with aett machine install ${machine.name}.`,
-		);
-	}
-
-	return Result.succeed({ targets: [machine.name], skipped: [] });
+	return Option.match(blocker(fleet, machine, state), {
+		onNone: () => Result.succeed({ targets: [machine.name], skipped: [] }),
+		onSome: ({ error }) => Result.fail(error),
+	});
 };

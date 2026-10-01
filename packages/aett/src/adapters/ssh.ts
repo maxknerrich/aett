@@ -41,6 +41,21 @@ export const shellQuote = (value: string) =>
 export const sshConfigPath = (value: string) =>
 	`"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%")}"`;
 
+// How aett logs in to a machine: only the agent's keys, and only aett's known hosts, keyed by the machine's name.
+const machineOptions = (name: string, knownHosts: string) => [
+	"BatchMode=yes",
+	"PasswordAuthentication=no",
+	"IdentityFile=none",
+	`UserKnownHostsFile=${sshConfigPath(knownHosts)}`,
+	"GlobalKnownHostsFile=/dev/null",
+	`HostKeyAlias=${name}`,
+	"StrictHostKeyChecking=accept-new",
+	"CheckHostIP=no",
+];
+
+// Quotes an argument of ProxyCommand: for the shell that runs it, with % kept literal for ssh.
+const proxyArgument = (value: string) => shellQuote(value).replaceAll("%", "%%");
+
 /** SSH through the pinned OpenSSH from aett's tools, independent of the operator's SSH config. */
 export class Ssh extends Context.Service<
 	Ssh,
@@ -68,6 +83,20 @@ export class Ssh extends Context.Service<
 			name: string,
 			host: Host,
 			knownHosts: string,
+		) => Effect.Effect<
+			Connection,
+			SshError | EngineError | PlatformError.PlatformError,
+			Scope.Scope
+		>;
+		/**
+		 * Logs in to a guest as `machine` does, at its `address` on its host's
+		 * bridge, through the open connection to its host.
+		 */
+		readonly guest: (
+			name: string,
+			address: string,
+			knownHosts: string,
+			via: Connection,
 		) => Effect.Effect<
 			Connection,
 			SshError | EngineError | PlatformError.PlatformError,
@@ -202,22 +231,36 @@ export class Ssh extends Context.Service<
 			) {
 				return yield* open(host, yield* temporaryDirectory, {
 					target: name,
-					// Only the agent's keys, and only aett's known hosts, keyed by the machine's name.
-					options: [
-						"BatchMode=yes",
-						"PasswordAuthentication=no",
-						"IdentityFile=none",
-						`UserKnownHostsFile=${sshConfigPath(knownHosts)}`,
-						"GlobalKnownHostsFile=/dev/null",
-						`HostKeyAlias=${name}`,
-						"StrictHostKeyChecking=accept-new",
-						"CheckHostIP=no",
-					],
+					options: machineOptions(name, knownHosts),
 					env: {},
 				});
 			});
 
-			return Ssh.of({ installer, machine });
+			const guest = Effect.fn("Ssh.guest")(function* (
+				name: string,
+				address: string,
+				knownHosts: string,
+				via: Connection,
+			) {
+				const ssh = path.join(yield* engine.tools, "ssh");
+
+				// The host's master connection carries the guest's: ssh -W through it to the guest's sshd.
+				// ssh expands %h and %p and runs the rest with a shell.
+				const proxy = [
+					...[ssh, ...via.sshOptions].map(proxyArgument),
+					"-W",
+					"%h:%p",
+					proxyArgument(via.destination),
+				].join(" ");
+
+				return yield* open({ name: address, port: 22 }, yield* temporaryDirectory, {
+					target: name,
+					options: [...machineOptions(name, knownHosts), `ProxyCommand=${proxy}`],
+					env: {},
+				});
+			});
+
+			return Ssh.of({ installer, machine, guest });
 		}),
 	);
 }

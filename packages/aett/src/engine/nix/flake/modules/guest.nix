@@ -11,6 +11,40 @@
 let
   cfg = config.aett.vm;
   inherit (config.aett) name;
+
+  # What the guest boots with that switching can't change. aett compares the running guest's copy
+  # with the new system's to choose between switching in place and restarting the guest.
+  boot = pkgs.writeText "aett-boot.json" (
+    builtins.toJSON {
+      inherit (config.microvm)
+        hypervisor
+        vcpu
+        mem
+        balloon
+        ;
+      interfaces = map (i: { inherit (i) type id mac; }) config.microvm.interfaces;
+      shares = map (share: {
+        inherit (share)
+          tag
+          source
+          mountPoint
+          readOnly
+          ;
+      }) config.microvm.shares;
+      volumes = map (volume: {
+        inherit (volume)
+          image
+          label
+          mountPoint
+          size
+          fsType
+          ;
+      }) config.microvm.volumes;
+      kernel = config.microvm.kernel;
+      initrd = config.microvm.initrdPath;
+      params = config.boot.kernelParams;
+    }
+  );
 in
 {
   options.aett.vm = {
@@ -102,6 +136,8 @@ in
         mkdir -p /sysroot/persist${dir}
       '') config.aett.persist;
     };
+
+    system.systemBuilderCommands = "ln -s ${boot} $out/aett-boot";
 
     networking.useDHCP = false;
     networking.nameservers = [

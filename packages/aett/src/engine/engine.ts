@@ -20,6 +20,9 @@ export interface Discovered {
 	readonly uefi: boolean;
 }
 
+/** A guest as its host sees it: not installed there yet, installed but not running, or running. */
+export type GuestState = "absent" | "stopped" | "running";
+
 /** A machine's SSH host key pair, which also derives its age key. */
 export interface HostKey {
 	readonly privateKey: string;
@@ -73,10 +76,37 @@ export class Engine extends Context.Service<
 		) => Effect.Effect<string, EngineError | SshError>;
 		/** The system `target` runs now. */
 		readonly currentSystem: (target: Connection) => Effect.Effect<string, SshError>;
-		/** What changes from the system `target` runs to `system`, as text for the operator; empty when no package changes. */
-		readonly changes: (target: Connection, system: string) => Effect.Effect<string, SshError>;
+		/** What changes from system `from` to system `to`, both in `target`'s store, as text for the operator; empty when no package changes. */
+		readonly changes: (
+			target: Connection,
+			from: string,
+			to: string,
+		) => Effect.Effect<string, SshError>;
 		/** Makes `system` what `target` runs and boots. */
 		readonly activate: (target: Connection, system: string) => Effect.Effect<void, SshError>;
+		/** Whether `host` has `guest` installed, and whether it runs. */
+		readonly guestState: (
+			host: Connection,
+			guest: string,
+		) => Effect.Effect<GuestState, EngineError | SshError>;
+		/** Builds `guest`'s system on `host`, streaming the log, and makes it what the guest boots next. Returns the system. */
+		readonly buildGuest: (
+			build: Build,
+			guest: string,
+			host: Connection,
+		) => Effect.Effect<string, EngineError | SshError>;
+		/** Whether the running `guest` must restart to run `system`: its kernel, initrd, CPUs, memory or devices changed. */
+		readonly needsRestart: (guest: Connection, system: string) => Effect.Effect<boolean, SshError>;
+		/** Switches the running `guest` to `system` in place. */
+		readonly switchGuest: (guest: Connection, system: string) => Effect.Effect<void, SshError>;
+		/** Starts, restarts or stops `guest` on `host`. */
+		readonly controlGuest: (
+			host: Connection,
+			guest: string,
+			action: "start" | "restart" | "stop",
+		) => Effect.Effect<void, SshError>;
+		/** Deletes everything `host` keeps for `guest`, which must not run: its state volume and its identity. */
+		readonly removeGuest: (host: Connection, guest: string) => Effect.Effect<void, SshError>;
 		/** Puts `guest`'s host key where `host` shares it into the guest, readable by root only. */
 		readonly placeGuestKey: (
 			host: Connection,

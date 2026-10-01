@@ -15,6 +15,7 @@ const declared = loaded(
 			fresh: server(),
 			web: server(),
 			vm: server({ host: "box" }),
+			waiting: server({ host: "fresh" }),
 		},
 	}),
 );
@@ -30,18 +31,19 @@ const state: State = {
 		["box", { facts: true, disk, installed: true }],
 		["fresh", { facts: true, disk }],
 		["web", { facts: true, disk, installed: true }],
-		["vm", { facts: false }],
+		["vm", { facts: false, host: "box", address: "10.100.1.2" }],
+		["waiting", { facts: false, host: "fresh", address: "10.100.2.2" }],
 	]),
 };
 
 describe("applyTargets", () => {
-	it("covers every installed machine and skips the rest, saying why", () => {
+	it("covers every installed machine and its VMs, hosts first, and skips the rest, saying why", () => {
 		expect(applyTargets(declared, state, Option.none())).toEqual(
 			Result.succeed({
-				targets: ["box", "web"],
+				targets: ["box", "web", "vm"],
 				skipped: [
 					{ name: "fresh", reason: "is not installed yet" },
-					{ name: "vm", reason: "is a VM; applying box builds and starts it" },
+					{ name: "waiting", reason: "runs on fresh, which aett can't apply yet" },
 				],
 			}),
 		);
@@ -53,12 +55,12 @@ describe("applyTargets", () => {
 		);
 	});
 
-	it("rejects a named machine that is not installed, or a VM", () => {
+	it("rejects a named machine that is not installed, or a VM whose host isn't", () => {
 		expect(applyTargets(declared, state, Option.some("fresh"))).toEqual(
 			Result.fail("fresh is not installed yet. Install it with aett machine install fresh."),
 		);
-		expect(applyTargets(declared, state, Option.some("vm"))).toEqual(
-			Result.fail("vm is a VM on box. Apply box, which builds and starts it."),
+		expect(applyTargets(declared, state, Option.some("waiting"))).toEqual(
+			Result.fail("waiting runs on fresh, which aett can't apply yet. Apply fresh first."),
 		);
 	});
 

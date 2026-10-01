@@ -34,6 +34,7 @@ fleetAett(directory).pipe(
 		[
 			"ApplyError",
 			"CreateError",
+			"DestroyError",
 			"EngineError",
 			"FleetError",
 			"InstallError",
