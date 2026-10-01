@@ -50,8 +50,8 @@ const NixosSystem = Schema.Struct({
 
 const VmSystem = Schema.Struct({
 	cpu: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
-	memory: Schema.optionalKey(atLeast("2 GiB")),
-	disk: Schema.optionalKey(atLeast("20 GiB")),
+	memory: Schema.optionalKey(atLeast("512 MiB")),
+	disk: Schema.optionalKey(atLeast("1 GiB")),
 	channel: Schema.optionalKey(Channel),
 });
 
@@ -117,6 +117,16 @@ const Top = Schema.Struct({
 
 export type Kind = "nixos" | "macos" | "vm";
 
+/** Where a VM runs and its size, with the defaults filled in. Sizes are whole MiB. */
+export interface VmSettings {
+	/** The hypervisor or bare-metal server that builds and runs it. */
+	readonly host: string;
+	readonly cpu: number;
+	readonly memory: number;
+	/** Its state volume's size. */
+	readonly disk: number;
+}
+
 /** A machine as aett works with it: what fleet.ts declares, with its stacks resolved. */
 export interface Machine {
 	readonly name: string;
@@ -125,6 +135,8 @@ export interface Machine {
 	readonly kind: Kind;
 	readonly encrypted: boolean;
 	readonly channel: Channel;
+	/** Set exactly for a VM. */
+	readonly vm: Option.Option<VmSettings>;
 	readonly packages: ReadonlyArray<string>;
 	/** What it declares that aett can't build yet; install and apply refuse it while there is any. */
 	readonly unsupported: ReadonlyArray<string>;
@@ -165,6 +177,9 @@ interface Decoded {
 		readonly encrypted?: boolean;
 		readonly channel?: Channel;
 		readonly desktop?: string;
+		readonly cpu?: number;
+		readonly memory?: string;
+		readonly disk?: string;
 	};
 }
 
@@ -331,7 +346,6 @@ const toMachine = (
 	const { system } = machine;
 
 	const unsupported = [
-		machine.kind === "vm" ? ["VMs"] : [],
 		machine.kind === "macos" ? ["Macs"] : [],
 		system.desktop === undefined ? [] : ["desktops"],
 		resolved.fast.length > 0 ? ["fast packages"] : [],
@@ -346,7 +360,22 @@ const toMachine = (
 		kind: machine.kind,
 		encrypted: system.encrypted === true,
 		channel: system.channel ?? "stable",
+		vm: Option.map(Option.fromUndefinedOr(machine.host), (host) => ({
+			host,
+			cpu: system.cpu ?? 2,
+			memory: mebibytes(system.memory ?? "2 GiB"),
+			disk: mebibytes(system.disk ?? "20 GiB"),
+		})),
 		packages: resolved.packages,
 		unsupported,
 	};
 };
+
+// A size in whole MiB, which is what the VM engine takes.
+const mebibytes = (size: string) => Math.floor(bytes(size) / 2 ** 20);
+
+/** The names of the VMs fleet.ts puts on `host`. */
+export const guestsOf = (fleet: Fleet, host: string) =>
+	fleet.machines.flatMap(({ name, vm }) =>
+		Option.exists(vm, (settings) => settings.host === host) ? [name] : [],
+	);

@@ -1,15 +1,14 @@
-import { Console, Effect, FileSystem, Option, Path, Redacted, Schema } from "effect";
+import { Console, Effect, Option, Path, Redacted, Schema } from "effect";
 import { Prompt } from "effect/cli";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Secrets } from "../adapters/secrets.ts";
 import { Ssh } from "../adapters/ssh.ts";
 import { type Disk, diskLabel, findDisk, isPassphrase, layoutPreview } from "../domain/disk.ts";
-import type { Fleet } from "../domain/fleet.ts";
-import { formatHost, type Host, trustHost } from "../domain/host.ts";
-import { type MachineRecord, SshPublicKey } from "../domain/state.ts";
+import { type Fleet, guestsOf } from "../domain/fleet.ts";
+import { formatHost, type Host } from "../domain/host.ts";
 import { Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
-import { loadFleet, readState } from "./load.ts";
+import { machineHostKey, trustHostKey } from "./identity.ts";
+import { loadFleet, readState, updateRecord } from "./load.ts";
 
 export class InstallError extends Schema.TaggedError<InstallError>()("InstallError", {
 	message: Schema.String,
@@ -103,17 +102,29 @@ export const install = Effect.fn("install")(function* (
 
 	// Later runs read the disk from state and never derive it again.
 	// An existing record stays as it is, so `installed` survives a failed reinstall.
-	if (recorded?.disk === undefined) yield* writeRecord(root, name, { disk: disk.byId });
+	if (recorded?.disk === undefined) yield* updateRecord(root, name, { disk: disk.byId });
 
 	const { build } = yield* emit(root);
 
-	yield* engine.install(build, name, connection, { hostKey, passphrase });
-	yield* writeRecord(root, name, {
+	// The machine's guests start on its first boot, so their host keys go on its disk too.
+	const guests = new Map(
+		yield* Effect.forEach(
+			guestsOf(fleet, name).filter((guest) => build.machines.includes(guest)),
+			(guest) =>
+				machineHostKey(root, guest, state.operator.ageKeys).pipe(
+					Effect.map((key) => [guest, key] as const),
+				),
+		),
+	);
+
+	yield* engine.install(build, name, connection, { hostKey, guests, passphrase });
+	yield* updateRecord(root, name, {
 		disk: disk.byId,
 		encrypted: machine.encrypted,
 		installed: true,
 	});
 	yield* trustHostKey(root, name, hostKey.publicKey);
+	yield* Effect.forEach(guests, ([guest, key]) => trustHostKey(root, guest, key.publicKey));
 	yield* Console.log(`Installed ${name}. It reboots now and comes back as ${name}.local.`);
 
 	// The reboot drops the connection, which may fail the command; that is expected.
@@ -212,90 +223,6 @@ const chooseDisk = Effect.fn("chooseDisk")(function* (
 		message: `Which disk should ${name} use? aett erases it.`,
 		choices: disks.map((disk) => ({ title: diskLabel(disk), value: disk })),
 	});
-});
-
-// Writes state/<name>/machine.json.
-const writeRecord = Effect.fn("writeRecord")(function* (
-	root: string,
-	name: string,
-	record: MachineRecord,
-) {
-	const fs = yield* FileSystem.FileSystem;
-	const path = yield* Path.Path;
-
-	yield* fs.writeFileString(
-		path.join(root, "state", name, "machine.json"),
-		`${JSON.stringify(record, null, "\t")}\n`,
-	);
-});
-
-const isSshPublicKey = Schema.is(SshPublicKey);
-
-/**
- * The machine's SSH host key pair. The private key is the secret
- * secrets/<name>/ssh_host_ed25519_key.json, made on the controller by the
- * pinned ssh-keygen once and reused by every reinstall, so aett's known_hosts
- * entry stays valid.
- */
-const machineHostKey = Effect.fn("machineHostKey")(function* (
-	root: string,
-	name: string,
-	recipients: ReadonlyArray<string>,
-) {
-	const fs = yield* FileSystem.FileSystem;
-	const path = yield* Path.Path;
-	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-	const secrets = yield* Secrets;
-	const keygen = path.join(yield* (yield* Engine).tools, "ssh-keygen");
-	const file = path.join("secrets", name, "ssh_host_ed25519_key.json");
-
-	// ssh-keygen reads and writes private keys only as files. This one lives until the scope closes.
-	const keyFile = path.join(yield* fs.makeTempDirectoryScoped({ prefix: "aett-" }), "key");
-
-	const generate = spawner
-		.exitCode(
-			ChildProcess.make(
-				keygen,
-				["-q", "-t", "ed25519", "-N", "", "-C", `root@${name}`, "-f", keyFile],
-				{ stdin: "ignore" },
-			),
-		)
-		.pipe(
-			Effect.filterOrFail(
-				(exitCode) => exitCode === 0,
-				() => new InstallError({ message: `ssh-keygen could not make a host key for ${name}.` }),
-			),
-			Effect.andThen(fs.readFileString(keyFile)),
-		);
-
-	const privateKey = yield* secrets.ensure(root, file, recipients, generate);
-
-	// The public key is derived rather than stored. ssh-keygen wants the private key in a file only its owner can read.
-	yield* fs.writeFileString(keyFile, privateKey, { mode: 0o600 });
-
-	const publicKey = (yield* spawner.string(
-		ChildProcess.make(keygen, ["-y", "-f", keyFile], { stdin: "ignore" }),
-	)).trim();
-
-	if (!isSshPublicKey(publicKey)) {
-		return yield* new InstallError({ message: `${file} holds no SSH private key.` });
-	}
-
-	return { privateKey, publicKey };
-}, Effect.scoped);
-
-// Records the machine's host key in aett's known_hosts, replacing whatever it held for the machine.
-const trustHostKey = Effect.fn("trustHostKey")(function* (
-	root: string,
-	name: string,
-	publicKey: string,
-) {
-	const fs = yield* FileSystem.FileSystem;
-	const path = yield* Path.Path;
-	const file = path.join(root, "state", "known_hosts");
-	const knownHosts = (yield* fs.exists(file)) ? yield* fs.readFileString(file) : "";
-
-	yield* fs.writeFileString(file, trustHost(knownHosts, name, publicKey));
 });
 
 /**

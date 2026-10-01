@@ -13,13 +13,13 @@ export interface NixosSystem {
 	readonly channel?: Channel;
 }
 
-/** Settings of a VM. */
+/** Settings of a VM. Its host builds its system and shares its Nix store with it. */
 export interface VmSystem {
 	/** Defaults to 2. */
 	readonly cpu?: number;
-	/** Defaults to "4 GiB"; at least "2 GiB", so the VM can build its own system. */
+	/** Defaults to "2 GiB"; at least "512 MiB". */
 	readonly memory?: Size;
-	/** Its disk's size. Defaults to "50 GiB"; at least "20 GiB". */
+	/** The size of the volume that holds /home, /var/lib and /var/log. Counts when the volume is made. Defaults to "20 GiB"; at least "1 GiB". */
 	readonly disk?: Size;
 	readonly channel?: Channel;
 }

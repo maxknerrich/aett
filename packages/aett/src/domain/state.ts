@@ -38,12 +38,18 @@ export const Operator = Schema.Struct({
 
 export interface Operator extends Schema.Schema.Type<typeof Operator> {}
 
-/** state/<name>/machine.json: aett's decisions about one machine, written by install. */
+/** state/<name>/machine.json: aett's decisions about one machine. */
 export const MachineRecord = Schema.Struct({
+	// The disk install erased, by its /dev/disk/by-id/ path.
 	disk: Schema.optionalKey(Schema.String),
 	// Whether the installed btrfs partition is inside LUKS; absent means it is not.
 	encrypted: Schema.optionalKey(Schema.Boolean),
 	installed: Schema.optionalKey(Schema.Boolean),
+	// A machine that runs VMs: its guests' subnet, 10.100.<n>.0/24.
+	subnet: Schema.optionalKey(Schema.String),
+	// A VM: the machine it was placed on and its address on that machine's subnet.
+	host: Schema.optionalKey(Schema.String),
+	address: Schema.optionalKey(Schema.String),
 });
 
 export interface MachineRecord extends Schema.Schema.Type<typeof MachineRecord> {}
@@ -53,7 +59,11 @@ export interface MachineState extends MachineRecord {
 	readonly facts: boolean;
 }
 
-/** State read from the fleet repository, with machines keyed by name. */
+/**
+ * State read from the fleet repository, with machines keyed by name: every
+ * declared machine, and every machine state still records after fleet.ts
+ * dropped it.
+ */
 export interface State {
 	readonly operator: Operator;
 	readonly machines: ReadonlyMap<string, MachineState>;

@@ -20,9 +20,19 @@ export interface Discovered {
 	readonly uefi: boolean;
 }
 
-/** What install puts on a machine besides its system: its SSH host key and, when encrypted, its disk passphrase. */
+/** A machine's SSH host key pair, which also derives its age key. */
+export interface HostKey {
+	readonly privateKey: string;
+	readonly publicKey: string;
+}
+
+/**
+ * What install puts on a machine besides its system: its SSH host key, its
+ * guests' host keys and, when encrypted, its disk passphrase.
+ */
 export interface InstallSecrets {
-	readonly hostKey: { readonly privateKey: string; readonly publicKey: string };
+	readonly hostKey: HostKey;
+	readonly guests: ReadonlyMap<string, HostKey>;
 	readonly passphrase: Option.Option<string>;
 }
 
@@ -67,6 +77,12 @@ export class Engine extends Context.Service<
 		readonly changes: (target: Connection, system: string) => Effect.Effect<string, SshError>;
 		/** Makes `system` what `target` runs and boots. */
 		readonly activate: (target: Connection, system: string) => Effect.Effect<void, SshError>;
+		/** Puts `guest`'s host key where `host` shares it into the guest, readable by root only. */
+		readonly placeGuestKey: (
+			host: Connection,
+			guest: string,
+			hostKey: HostKey,
+		) => Effect.Effect<void, SshError>;
 		/** From an installer: builds the machine there, erases and formats its disk, places `secrets` and installs the system. */
 		readonly install: (
 			build: Build,

@@ -90,7 +90,10 @@ export const loadFleet = Effect.fn("loadFleet")(function* (root: string) {
 	);
 });
 
-/** Reads the operator and, for each declared machine, its machine.json and whether its facts exist. */
+/**
+ * Reads the operator and, for each declared machine and each machine state
+ * still records, its machine.json and whether its facts exist.
+ */
 export const readState = Effect.fn("readState")(function* (root: string, fleet: Fleet) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
@@ -118,7 +121,30 @@ export const readState = Effect.fn("readState")(function* (root: string, fleet: 
 
 	const operator = yield* readJson(operatorFile, Operator);
 
-	const machines = yield* Effect.forEach(fleet.machines, ({ name }) =>
+	const stateDirectory = path.join(root, "state");
+
+	// Directories of machines fleet.ts may no longer declare, such as a removed guest not yet destroyed.
+	const recorded = yield* fs
+		.readDirectory(stateDirectory)
+		.pipe(
+			Effect.flatMap((entries) =>
+				Effect.filter(entries, (entry) =>
+					fs
+						.stat(path.join(stateDirectory, entry))
+						.pipe(
+							Effect.flatMap(({ type }) =>
+								type === "Directory"
+									? fs.exists(path.join(stateDirectory, entry, "machine.json"))
+									: Effect.succeed(false),
+							),
+						),
+				),
+			),
+		);
+
+	const names = [...new Set([...fleet.machines.map(({ name }) => name), ...recorded])];
+
+	const machines = yield* Effect.forEach(names, (name) =>
 		Effect.gen(function* () {
 			const directory = path.join(root, "state", name);
 			const recordFile = path.join(directory, "machine.json");
@@ -133,4 +159,30 @@ export const readState = Effect.fn("readState")(function* (root: string, fleet: 
 	);
 
 	return { operator, machines: new Map(machines) } satisfies State;
+});
+
+/** Adds `changes` to state/<name>/machine.json, keeping what it records already. */
+export const updateRecord = Effect.fn("updateRecord")(function* (
+	root: string,
+	name: string,
+	changes: typeof MachineRecord.Type,
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const directory = path.join(root, "state", name);
+	const file = path.join(directory, "machine.json");
+
+	const recorded = (yield* fs.exists(file))
+		? yield* fs.readFileString(file).pipe(
+				Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(MachineRecord))),
+				Effect.catchTag("SchemaError", (error) =>
+					Effect.fail(
+						new FleetError({ message: `state/${name}/machine.json is invalid: ${error.message}` }),
+					),
+				),
+			)
+		: {};
+
+	yield* fs.makeDirectory(directory, { recursive: true });
+	yield* fs.writeFileString(file, `${JSON.stringify({ ...recorded, ...changes }, null, "\t")}\n`);
 });

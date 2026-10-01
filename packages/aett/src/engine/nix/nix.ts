@@ -4,7 +4,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { type Connection, shellQuote } from "../../adapters/ssh.ts";
 import type { Fleet } from "../../domain/fleet.ts";
 import type { State } from "../../domain/state.ts";
-import { type Build, Engine, EngineError, type InstallSecrets } from "../engine.ts";
+import { type Build, Engine, EngineError, type HostKey, type InstallSecrets } from "../engine.ts";
 import { FacterReport, installFacts } from "./facter.ts";
 import { fleetJson } from "./fleet-json.ts";
 
@@ -74,6 +74,29 @@ const activate = Effect.fn("NixEngine.activate")(function* (target: Connection, 
 		].join(" "),
 	);
 });
+
+// Writes a host key pair into `directory` on the target, the private half readable by root only.
+// sshd ignores a private key that others can read.
+const writeHostKey = Effect.fn("NixEngine.writeHostKey")(function* (
+	target: Connection,
+	directory: string,
+	hostKey: HostKey,
+) {
+	const file = `${directory}/ssh_host_ed25519_key`;
+
+	yield* target.run(
+		`install -d -m 0700 -o root -g root ${shellQuote(directory)} && umask 077 && cat > ${shellQuote(file)}`,
+		hostKey.privateKey,
+	);
+	yield* target.run(`umask 022 && cat > ${shellQuote(`${file}.pub`)}`, `${hostKey.publicKey}\n`);
+});
+
+// Where a host keeps a guest's host key, which guest.nix shares into the guest at /run/identity.
+const guestKeyDirectory = (root: string, guest: string) =>
+	`${root}/persist/microvms/${guest}/identity`;
+
+const placeGuestKey = (host: Connection, guest: string, hostKey: HostKey) =>
+	writeHostKey(host, guestKeyDirectory("", guest), hostKey);
 
 // Runs `format` with the passphrase, if there is one, in passphraseFile on the target.
 // The file is removed afterwards, also when writing it or formatting fails.
@@ -214,8 +237,11 @@ export const nixEngine = (flake: string) =>
 
 				const machines = Object.keys(emitted.machines);
 
-				// Evaluation is pure, so the flake reads the facts from its own directory.
-				yield* Effect.forEach(machines, (name) =>
+				// Evaluation is pure, so the flake reads the facts from its own directory. VMs have none;
+				// their host's facts say what they run on.
+				const reported = machines.filter((name) => state.machines.get(name)?.facts === true);
+
+				yield* Effect.forEach(reported, (name) =>
 					fs
 						.makeDirectory(path.join(directory, "state", name), { recursive: true })
 						.pipe(
@@ -314,14 +340,10 @@ export const nixEngine = (flake: string) =>
 					),
 				);
 				yield* target.run(`${shellQuote(prepare)} /mnt`);
-				// Where the NixOS module points sshd. sshd ignores a private key that others can read.
-				yield* target.run(
-					"mkdir -p /mnt/persist/etc/ssh && umask 077 && cat > /mnt/persist/etc/ssh/ssh_host_ed25519_key",
-					secrets.hostKey.privateKey,
-				);
-				yield* target.run(
-					"umask 022 && cat > /mnt/persist/etc/ssh/ssh_host_ed25519_key.pub",
-					`${secrets.hostKey.publicKey}\n`,
+				// Where metal.nix points sshd.
+				yield* writeHostKey(target, "/mnt/persist/etc/ssh", secrets.hostKey);
+				yield* Effect.forEach(secrets.guests, ([guest, hostKey]) =>
+					writeHostKey(target, guestKeyDirectory("/mnt", guest), hostKey),
 				);
 				yield* Console.log("Installing…");
 				yield* target.run(
@@ -339,6 +361,7 @@ export const nixEngine = (flake: string) =>
 				currentSystem,
 				changes,
 				activate,
+				placeGuestKey,
 				install,
 			});
 		}),
