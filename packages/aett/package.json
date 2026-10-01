@@ -15,7 +15,12 @@
 			"development": "./src/index.ts",
 			"types": "./dist/index.d.ts",
 			"default": "./dist/index.js"
-		}
+		},
+		"./cli": {
+			"development": "./src/cli/main.ts",
+			"default": "./dist/cli/main.js"
+		},
+		"./package.json": "./package.json"
 	},
 	"scripts": {
 		"build": "vp pack"

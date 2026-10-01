@@ -45,7 +45,7 @@ export const fleetSource = (machines: ReadonlyArray<Machine>) => {
 		: `import { fleet, machine } from "aett"\n\nexport default fleet({\n\tmachines: [\n${declared.join("")}\t],\n})\n`;
 };
 
-const PackageManager = Schema.Literals(["npm", "pnpm"]);
+export const PackageManager = Schema.Literals(["npm", "pnpm"]);
 
 export type PackageManager = typeof PackageManager.Type;
 

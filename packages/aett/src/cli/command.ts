@@ -1,14 +1,17 @@
 import { Effect, Path, Redacted } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { installerHost, parseHost } from "../domain/host.ts";
-import { parseMachineFlag } from "../domain/scaffold.ts";
+import { PackageManager, parseMachineFlag } from "../domain/scaffold.ts";
 import { apply } from "../workflows/apply.ts";
 import { compile } from "../workflows/compile.ts";
 import { type AettPackage, create } from "../workflows/create.ts";
+import { fleetRoot } from "../workflows/load.ts";
 import { discover, install } from "../workflows/install.ts";
 
-// Every command works on the fleet in the current directory.
-const fleetRoot = Effect.map(Effect.service(Path.Path), (path) => path.resolve());
+const cwd = Effect.map(Effect.service(Path.Path), (path) => path.resolve());
+
+// Fleet commands work on the nearest fleet from the current directory upwards.
+const fleet = Effect.flatMap(cwd, fleetRoot);
 
 const machineName = Argument.String("name").pipe(
 	Argument.withDescription("The machine's name in fleet.ts."),
@@ -36,7 +39,7 @@ const machine = Command.make("machine").pipe(
 	Command.withDescription("Discover and install machines."),
 	Command.withSubcommands([
 		Command.make("discover", { name: machineName, ...installerFlags }, ({ name, ...access }) =>
-			Effect.flatMap(fleetRoot, (root) => discover(root, name, access)),
+			Effect.flatMap(fleet, (root) => discover(root, name, access)),
 		).pipe(Command.withDescription("Save the installer's hardware report in state/<name>/.")),
 		Command.make(
 			"install",
@@ -68,7 +71,7 @@ const machine = Command.make("machine").pipe(
 					Flag.optional,
 				),
 			},
-			({ name, ...options }) => Effect.flatMap(fleetRoot, (root) => install(root, name, options)),
+			({ name, ...options }) => Effect.flatMap(fleet, (root) => install(root, name, options)),
 		).pipe(
 			Command.withDescription(
 				"Discover the machine, erase its disk and install NixOS from the installer.",
@@ -112,14 +115,20 @@ export const command = (aett: AettPackage) =>
 						Flag.withDescription("Start with no machines instead of asking for them."),
 						Flag.withDefault(false),
 					),
+					packageManager: Flag.Literals("package-manager", PackageManager.literals).pipe(
+						Flag.withDescription(
+							"Install aett with npm or pnpm. Defaults to the package manager that started aett, else npm.",
+						),
+						Flag.optional,
+					),
 				},
-				(options) => Effect.flatMap(fleetRoot, (cwd) => create(cwd, aett, options)),
+				(options) => Effect.flatMap(cwd, (directory) => create(directory, aett, options)),
 			).pipe(
 				Command.withDescription(
 					"Start a fleet in a new directory: keys, first machines, Git and aett installed.",
 				),
 			),
-			Command.make("compile", {}, () => Effect.flatMap(fleetRoot, compile)).pipe(
+			Command.make("compile", {}, () => Effect.flatMap(fleet, compile)).pipe(
 				Command.withDescription(
 					"Write .aett/build/ from fleet.ts and state, and evaluate the machines it lists.",
 				),
@@ -141,7 +150,7 @@ export const command = (aett: AettPackage) =>
 						Flag.withDefault(false),
 					),
 				},
-				({ name, ...options }) => Effect.flatMap(fleetRoot, (root) => apply(root, name, options)),
+				({ name, ...options }) => Effect.flatMap(fleet, (root) => apply(root, name, options)),
 			).pipe(
 				Command.withDescription(
 					"Build the declared system on installed machines and switch to it.",
