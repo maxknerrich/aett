@@ -98,6 +98,15 @@ describe("decodeFleet", () => {
 			},
 		});
 
+		const mixed = fleet({
+			machines: {
+				// @ts-expect-error memory is for VMs, even next to bare-metal settings
+				box: server({ system: { memory: "8 GiB", encrypted: true } }),
+				// @ts-expect-error a VM's disk isn't encrypted
+				vm: server({ host: "box", system: { encrypted: true, channel: "stable" } }),
+			},
+		});
+
 		const small = fleet({
 			machines: { host: hypervisor(), vm: server({ host: "host", system: { memory: "1 GiB" } }) },
 		});
@@ -105,6 +114,7 @@ describe("decodeFleet", () => {
 		expect(problems(bareMetal)).toContain("machines.box.system.memory: Unexpected key");
 		expect(problems(mac)).toContain("machines.mac.system.encrypted: Expected never");
 		expect(problems(small)).toContain("machines.vm.system.memory: Expected at least 2 GiB");
+		expect(problems(mixed)).toContain("machines.box.system.memory: Unexpected key");
 	});
 
 	it("keeps stacks off hypervisors and fits what they bring to each machine", () => {
@@ -134,6 +144,14 @@ describe("decodeFleet", () => {
 			},
 		});
 
+		const onlyHypervisors = fleet({
+			machines: { box: hypervisor() },
+			stacks: {
+				// @ts-expect-error with only hypervisors, a stack has no machine to name
+				a: { machines: { box: { packages: ["git"] } } },
+			},
+		});
+
 		const unknown = fleet({
 			machines,
 			stacks: {
@@ -152,6 +170,9 @@ describe("decodeFleet", () => {
 			"stacks.a.machines.laptop.home: laptop is a computer, which always has a home",
 		);
 		expect(problems(unknown)).toBe('stacks.a.machines.nope: There is no machine named "nope"');
+		expect(problems(onlyHypervisors)).toBe(
+			"stacks.a.machines.box: box is a hypervisor; stacks never reach hypervisors",
+		);
 	});
 
 	it("rejects a machine name that isn't a hostname and keys fleet() doesn't know", () => {

@@ -24,17 +24,31 @@ export interface VmSystem {
 	readonly channel?: Channel;
 }
 
+/** Settings of a bare-metal NixOS computer. */
+export interface ComputerSystem extends NixosSystem {
+	/** Values arrive with graphical NixOS. */
+	readonly desktop?: string;
+}
+
+// `Settings` with every other kind's settings ruled out. TypeScript checks extra keys
+// against all members of a union, so without this `memory` would pass next to `encrypted`.
+type Only<Settings, Others> = Settings & {
+	readonly [Key in Exclude<keyof Others, keyof Settings>]?: never;
+};
+
+type AnySystem = ComputerSystem & VmSystem;
+
 interface BareMetal<System> {
 	readonly os?: "nixos";
 	readonly host?: never;
-	readonly system?: System;
+	readonly system?: Only<System, AnySystem>;
 }
 
 interface Vm {
 	/** The hypervisor or bare-metal server the VM runs on. */
 	readonly host: string;
 	readonly os?: never;
-	readonly system?: VmSystem;
+	readonly system?: Only<VmSystem, AnySystem>;
 }
 
 interface Mac {
@@ -47,7 +61,7 @@ export type HypervisorConfig = BareMetal<NixosSystem>;
 
 export type ServerConfig = BareMetal<NixosSystem> | Vm;
 
-export type ComputerConfig = BareMetal<NixosSystem & { readonly desktop?: string }> | Mac;
+export type ComputerConfig = BareMetal<ComputerSystem> | Mac;
 
 /** An appliance that only runs VMs, like Proxmox. Stacks never reach it. */
 export function hypervisor(): { readonly role: "hypervisor" };
@@ -125,7 +139,10 @@ export type Stack<Machines> = Content & {
 	readonly apps?: ReadonlyArray<string>;
 	/** A personal user, a home that survives reboots, dotfiles and home backup; reaches only servers. */
 	readonly home?: true;
-	readonly machines?: { readonly [Name in Reached<Machines>]?: ContentFor<Machines[Name]> };
+	// With nothing to reach, an empty mapped type would accept any name.
+	readonly machines?: [Reached<Machines>] extends [never]
+		? { readonly [name: string]: never }
+		: { readonly [Name in Reached<Machines>]?: ContentFor<Machines[Name]> };
 };
 
 /**
