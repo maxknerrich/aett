@@ -541,6 +541,7 @@ export const nixEngine = (flake: string) =>
 			return Engine.of({
 				tools,
 				defaultInputs,
+				systemPath,
 				updateInputs,
 				prefetch,
 				discover,

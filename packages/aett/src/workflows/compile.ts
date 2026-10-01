@@ -76,8 +76,8 @@ export const compile = Effect.fn("compile")(function* (root: string) {
 	);
 });
 
-// Why the build leaves a machine out.
-const notBuilt = (fleet: Fleet, state: State, name: string) => {
+/** Why the build leaves a machine out. */
+export const notBuilt = (fleet: Fleet, state: State, name: string) => {
 	const machine = fleet.machines.find((declared) => declared.name === name);
 	const unsupported = machine?.unsupported ?? [];
 
