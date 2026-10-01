@@ -10,7 +10,7 @@ import {
 } from "effect";
 import { Base64 } from "effect/encoding";
 import { type Connection, shellQuote } from "../adapters/ssh.ts";
-import { Entry, fillPlaceholders, type HomePlan, planSync } from "../domain/home.ts";
+import { Entry, fillPlaceholders, type HomePlan, manifestPath, planSync } from "../domain/home.ts";
 
 /** A problem syncing dotfile sets onto a machine. */
 export class HomeError extends Schema.TaggedError<HomeError>()("HomeError", {
@@ -94,18 +94,30 @@ export interface HomeSync {
 	readonly plan: HomePlan;
 }
 
-// Where the manifest lives in the home: each path the last sync placed, with its fingerprint.
-const manifestPath = ".local/state/aett/home.json";
-
 const Manifest = Schema.fromJsonString(
 	Schema.Struct({ files: Schema.Record(Schema.String, Schema.String) }),
 );
 
+// Defines inside(), run in the home: whether a path's directory resolves inside the home, also
+// through symlinks on the machine.
+const insideFunction = `root=$(pwd -P)
+inside() {
+	case $(realpath -m -- "$(dirname -- "$1")") in
+		"$root" | "$root"/*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+`;
+
 // Run as root: prints the user's home directory on the first line, then the manifest if there is one.
-const locateScript = (user: string) => `home=$(getent passwd ${shellQuote(user)} | cut -d: -f6)
+// A manifest whose directory leads out of the home stays unread; the fingerprints then report it.
+const locateScript = (user: string) => `set -eu
+home=$(getent passwd ${shellQuote(user)} | cut -d: -f6)
 if [ -z "$home" ]; then echo ${shellQuote(`There is no user ${user}.`)} >&2; exit 1; fi
 printf '%s\\n' "$home"
-if [ -f "$home/${manifestPath}" ]; then cat -- "$home/${manifestPath}"; fi
+cd -- "$home"
+${insideFunction}
+if inside ${shellQuote(manifestPath)} && [ -f ${shellQuote(manifestPath)} ]; then cat -- ${shellQuote(manifestPath)}; fi
 `;
 
 // Run as root: prints a line per path in the home, its fingerprint as domain/home.ts computes it,
@@ -113,12 +125,9 @@ if [ -f "$home/${manifestPath}" ]; then cat -- "$home/${manifestPath}"; fi
 // the home, through a symlink on the machine, is "outside" and left unread.
 const fingerprintScript = (home: string, paths: ReadonlyArray<string>) => `set -eu
 cd -- ${shellQuote(home)}
-root=$(pwd -P)
+${insideFunction}
 fingerprint() {
-	case $(realpath -m -- "$(dirname -- "$1")") in
-		"$root" | "$root"/*) ;;
-		*) echo outside; return ;;
-	esac
+	if ! inside "$1"; then echo outside; return; fi
 	if [ -L "$1" ]; then
 		printf 'link:%s\\n' "$(readlink -- "$1")"
 	elif [ -f "$1" ]; then
@@ -243,7 +252,11 @@ export const planHome = Effect.fn("planHome")(function* (
 					),
 				);
 
-	const paths = [...new Set([...desired.map(({ path }) => path), ...manifest.keys()])];
+	// The manifest's own path too, so a symlink can't lead its write out of the home.
+	const paths = [
+		...new Set([manifestPath, ...desired.map(({ path }) => path), ...manifest.keys()]),
+	];
+
 	const found = (yield* connection.run("sh -s", fingerprintScript(home, paths))).split("\n");
 
 	// One line per path and the empty string after the last newline.

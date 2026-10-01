@@ -12,6 +12,9 @@ export type Entry = Data.TaggedEnum<{
 
 export const Entry = Data.taggedEnum<Entry>();
 
+/** Where aett records in the home what the last sync placed. No set may put anything in its way. */
+export const manifestPath = ".local/state/aett/home.json";
+
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 // Lists set names as "a and b" or "a, b and c".
@@ -65,8 +68,9 @@ const linkProblems = (set: string, path: string, target: string, links: Readonly
  * order of the sets can't change it. Links inside the home stay links, also
  * when they lead into another set. Fails with every problem, one per line: a
  * set missing from home/, a path in more than one set, a path that is a file
- * or link in one set and a directory in another, and a link that is absolute,
- * leads out of the home or leads through another link.
+ * or link in one set and a directory in another, a path in the way of aett's
+ * manifest, and a link that is absolute, leads out of the home or leads
+ * through another link.
  */
 export const resolveHome = (
 	sets: ReadonlyMap<string, ReadonlyArray<Entry>>,
@@ -106,6 +110,14 @@ export const resolveHome = (
 			: [];
 	});
 
+	const reserved = placed.flatMap(({ set, entry: { path } }) =>
+		path === manifestPath ||
+		path.startsWith(`${manifestPath}/`) ||
+		manifestPath.startsWith(`${path}/`)
+			? [`home/${set}/${path} is in the way of aett's manifest, ${manifestPath}.`]
+			: [],
+	);
+
 	const links = new Set(
 		placed.flatMap(({ entry }) =>
 			Entry.$match(entry, { File: () => [], Link: ({ path }) => [path] }),
@@ -119,7 +131,7 @@ export const resolveHome = (
 		}),
 	);
 
-	const problems = [...missing, ...[...conflicts, ...nested].toSorted(), ...badLinks];
+	const problems = [...missing, ...[...conflicts, ...nested].toSorted(), ...reserved, ...badLinks];
 
 	return problems.length > 0
 		? Result.fail(problems.join("\n"))

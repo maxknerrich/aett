@@ -31,6 +31,8 @@ describe("resolveHome", () => {
 		["escape", [link(".evil", "../../etc/passwd"), link(".config/absolute", "/etc/passwd")]],
 		["flat", [file(".config", "a file")]],
 		["chain", [link("alias", "."), link("escape", "alias/../outside")]],
+		["state", [file(".local/state/aett/home.json", "{}")]],
+		["dotlocal", [link(".local", ".config")]],
 	]);
 
 	it("merges the chosen sets sorted by path, whatever their order, and keeps links", () => {
@@ -65,6 +67,19 @@ describe("resolveHome", () => {
 		expect(resolveHome(sets, ["chain"])).toEqual(
 			Result.fail(
 				"home/chain/escape links to alias/../outside, through the link alias. Links in a set can't lead through other links.",
+			),
+		);
+	});
+
+	it("rejects what stands in the way of aett's manifest", () => {
+		expect(resolveHome(sets, ["state"])).toEqual(
+			Result.fail(
+				"home/state/.local/state/aett/home.json is in the way of aett's manifest, .local/state/aett/home.json.",
+			),
+		);
+		expect(resolveHome(sets, ["dotlocal"])).toEqual(
+			Result.fail(
+				"home/dotlocal/.local is in the way of aett's manifest, .local/state/aett/home.json.",
 			),
 		);
 	});
