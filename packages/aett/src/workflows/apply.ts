@@ -244,7 +244,7 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 }, Effect.scoped);
 
 // Logs in to a running guest through its host. A guest its host just started needs a moment
-// before sshd answers, so aett waits up to a minute and a half.
+// before sshd answers, so aett keeps trying for a minute and a half.
 const connectGuest = Effect.fn("connectGuest")(function* (
 	name: string,
 	address: string,
@@ -258,7 +258,11 @@ const connectGuest = Effect.fn("connectGuest")(function* (
 		Effect.catchTag("SshError", () =>
 			Console.log(`Waiting for ${name} to answer over SSH…`).pipe(
 				Effect.andThen(
-					login.pipe(Effect.retry({ schedule: Schedule.spaced("2 seconds"), times: 45 })),
+					login.pipe(
+						Effect.retry(
+							Schedule.spaced("2 seconds").pipe(Schedule.upTo({ duration: "90 seconds" })),
+						),
+					),
 				),
 			),
 		),

@@ -44,6 +44,8 @@ export const sshConfigPath = (value: string) =>
 // How aett logs in to a machine: only the agent's keys, and only aett's known hosts, keyed by the machine's name.
 const machineOptions = (name: string, knownHosts: string) => [
 	"BatchMode=yes",
+	// A machine that doesn't answer fails fast, so aett can try another way to it.
+	"ConnectTimeout=10",
 	"PasswordAuthentication=no",
 	"IdentityFile=none",
 	`UserKnownHostsFile=${sshConfigPath(knownHosts)}`,

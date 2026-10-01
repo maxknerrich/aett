@@ -98,19 +98,27 @@ const needsRestart = (guest: Connection, system: string) =>
 // microvm.nix's per-guest directory on its host, where vm-host.nix sets its stateDir.
 const guestDirectory = (guest: string) => `/persist/microvms/${guest}`;
 
+// Where vm-host.nix links each guest's runners as GC roots.
+const gcRoots = "/nix/var/nix/gcroots/aett-guests";
+
 const guestUnit = (guest: string) => shellQuote(`microvm@${guest}.service`);
 
 const controlGuest = (host: Connection, guest: string, action: "start" | "restart" | "stop") =>
 	host.run(`systemctl ${action} ${guestUnit(guest)}`).pipe(Effect.asVoid);
 
 const removeGuest = (host: Connection, guest: string) =>
-	host.run(`rm -rf -- ${shellQuote(guestDirectory(guest))}`).pipe(Effect.asVoid);
+	host
+		.run(
+			`rm -rf -- ${shellQuote(guestDirectory(guest))} && rm -f -- ${shellQuote(`${gcRoots}/${guest}`)} ${shellQuote(`${gcRoots}/booted-${guest}`)}`,
+		)
+		.pipe(Effect.asVoid);
 
-// A guest is installed once its host links a runner as `current`; its unit says whether it runs.
+// A unit that is active or on its way up or down counts as running. Otherwise the guest is
+// installed once its host links a runner as `current`.
 const guestState = (host: Connection, guest: string) =>
 	host
 		.run(
-			`if [ ! -e ${shellQuote(`${guestDirectory(guest)}/current`)} ]; then echo absent; elif systemctl is-active --quiet ${guestUnit(guest)}; then echo running; else echo stopped; fi`,
+			`case "$(systemctl is-active ${guestUnit(guest)})" in inactive|failed) if [ -e ${shellQuote(`${guestDirectory(guest)}/current`)} ]; then echo stopped; else echo absent; fi ;; *) echo running ;; esac`,
 		)
 		.pipe(
 			Effect.flatMap((output) => Schema.decodeUnknownEffect(GuestStateOutput)(output.trim())),
@@ -363,8 +371,8 @@ export const nixEngine = (flake: string) =>
 				return system;
 			});
 
-			// The guest's runner becomes `current`, which its unit starts, as a GC root; the host's
-			// own switch links the same runner there when it lists the guest.
+			// The guest's runner becomes `current`, which its unit starts; vm-host.nix makes it and
+			// `booted` GC roots. The host's own switch links the same runner there when it lists the guest.
 			const buildGuest = Effect.fn("NixEngine.buildGuest")(function* (
 				build: Build,
 				guest: string,
@@ -383,7 +391,7 @@ export const nixEngine = (flake: string) =>
 				);
 
 				yield* host.run(
-					`nix-store --add-root ${shellQuote(`${guestDirectory(guest)}/current`)} --realise ${shellQuote(runner)} >/dev/null`,
+					`ln -sfn ${shellQuote(runner)} ${shellQuote(`${guestDirectory(guest)}/current`)}`,
 				);
 
 				return system;

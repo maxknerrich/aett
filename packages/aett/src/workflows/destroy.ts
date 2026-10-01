@@ -64,6 +64,13 @@ export const destroy = Effect.fn("destroy")(function* (
 		}
 	}
 
+	// The operator took a while to answer; the guest must still be stopped.
+	if ((yield* engine.guestState(connection, name)) === "running") {
+		return yield* new DestroyError({
+			message: `${name} started on ${host} meanwhile. Nothing was deleted.`,
+		});
+	}
+
 	yield* engine.removeGuest(connection, name);
 	yield* fs.remove(path.join(root, "secrets", name), { recursive: true, force: true });
 	yield* fs.remove(path.join(root, "state", name), { recursive: true, force: true });
