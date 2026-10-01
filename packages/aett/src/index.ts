@@ -1,4 +1,4 @@
-import type { Channel, Role } from "./domain/fleet.ts";
+import type { Channel } from "./domain/fleet.ts";
 import type { Services } from "./domain/stacks.ts";
 
 export type { Channel, Role } from "./domain/fleet.ts";
@@ -60,7 +60,7 @@ interface Mac {
 // Rejects keys a config doesn't know, at its top level and in its system. Inferring a
 // generic skips TypeScript's usual check for unknown keys in object literals.
 type Known<Config> = {
-	readonly [Key in Exclude<keyof Config, "os" | "host" | "system">]: never;
+	readonly [Key in Exclude<keyof Config, "role" | "os" | "host" | "system">]: never;
 } & (Config extends { readonly system: infer System }
 	? { readonly system: { readonly [Key in Exclude<keyof System, keyof AnySystem>]: never } }
 	: unknown);
@@ -98,10 +98,11 @@ export function computer(config: ComputerConfig = {}) {
 	return { ...config, role: "computer" as const };
 }
 
-interface Declared {
-	readonly role: Role;
-	readonly host?: string;
-}
+// A machine as a role function returns it: its role with that role's config.
+type Declared =
+	| (HypervisorConfig & { readonly role: "hypervisor" })
+	| (ServerConfig & { readonly role: "server" })
+	| (ComputerConfig & { readonly role: "computer" });
 
 // The machines a VM can run on: hypervisors and bare-metal servers.
 type Hosts<Machines> = {
@@ -165,6 +166,7 @@ export type Stack<Machines> = Content & {
  * ```
  */
 export const fleet = <const Machines extends { readonly [name: string]: Declared }>(declaration: {
-	readonly machines: Machines & CheckedHosts<Machines>;
+	readonly machines: Machines &
+		CheckedHosts<Machines> & { readonly [Name in keyof Machines]: Known<Machines[Name]> };
 	readonly stacks?: { readonly [name: string]: Stack<NoInfer<Machines>> };
 }) => declaration;

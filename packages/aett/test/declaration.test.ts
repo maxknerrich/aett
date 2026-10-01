@@ -116,6 +116,15 @@ describe("decodeFleet", () => {
 			},
 		});
 
+		const inline = fleet({
+			machines: {
+				// @ts-expect-error a machine written out by hand gets the same checks
+				box: { ...server(), system: { memory: "8 GiB" } },
+				// @ts-expect-error unknown keys too
+				nas: { ...server(), packages: ["git"] },
+			},
+		});
+
 		const small = fleet({
 			machines: { host: hypervisor(), vm: server({ host: "host", system: { memory: "1 GiB" } }) },
 		});
@@ -126,6 +135,8 @@ describe("decodeFleet", () => {
 		expect(problems(mixed)).toContain("machines.box.system.memory: Unexpected key");
 		expect(problems(unknownKeys)).toContain("machines.box.system.typo: Unexpected key");
 		expect(problems(unknownKeys)).toContain("machines.nas.packages: Unexpected key");
+		expect(problems(inline)).toContain("machines.box.system.memory: Unexpected key");
+		expect(problems(inline)).toContain("machines.nas.packages: Unexpected key");
 	});
 
 	it("keeps stacks off hypervisors and fits what they bring to each machine", () => {
