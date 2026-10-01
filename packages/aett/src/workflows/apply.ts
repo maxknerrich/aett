@@ -41,8 +41,8 @@ export const apply = Effect.fn("apply")(function* (
 		Effect.mapError((message) => new ApplyError({ message })),
 	);
 
-	yield* Effect.forEach(skipped, (machine) =>
-		Console.log(`${machine} is not installed yet, skipping it.`),
+	yield* Effect.forEach(skipped, ({ name: machine, reason }) =>
+		Console.log(`${machine} ${reason}, skipping it.`),
 	);
 
 	yield* Effect.forEach(targets, (machine) =>

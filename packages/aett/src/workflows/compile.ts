@@ -1,4 +1,6 @@
 import { Console, Effect, Path } from "effect";
+import type { Fleet } from "../domain/fleet.ts";
+import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { loadFleet, readState } from "./load.ts";
 
@@ -30,8 +32,15 @@ export const compile = Effect.fn("compile")(function* (root: string) {
 	yield* Effect.forEach(fleet.machines, ({ name }) =>
 		build.machines.includes(name)
 			? engine.evaluate(build, name).pipe(Effect.flatMap((drv) => Console.log(`${name}: ${drv}`)))
-			: Console.log(
-					`${name}: ${state.machines.get(name)?.facts === true ? "not installed yet" : "not discovered yet"}`,
-				),
+			: Console.log(`${name}: ${notBuilt(fleet, state, name)}`),
 	);
 });
+
+// Why the build leaves a machine out.
+const notBuilt = (fleet: Fleet, state: State, name: string) => {
+	const unsupported = fleet.machines.find((machine) => machine.name === name)?.unsupported ?? [];
+
+	if (unsupported.length > 0) return `not supported yet: ${unsupported.join(", ")}`;
+
+	return state.machines.get(name)?.facts === true ? "not installed yet" : "not discovered yet";
+};

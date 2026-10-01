@@ -1,7 +1,12 @@
+import { Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
-import { fleetJson } from "../src/engine/nix/fleet-json.ts";
+import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
 import type { Operator, State } from "../src/domain/state.ts";
-import { fleet, machine } from "../src/index.ts";
+import { fleetJson } from "../src/engine/nix/fleet-json.ts";
+import { computer, fleet, hypervisor, server } from "../src/index.ts";
+
+// The fleet aett works with for a declaration.
+const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
 
 const sshKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOperatorKey operator@mac";
 
@@ -13,15 +18,18 @@ const operator: Operator = {
 const disk = "/dev/disk/by-id/nvme-test";
 
 describe("fleetJson", () => {
-	it("lists only machines with facts and a disk recorded", () => {
-		const declared = fleet({
-			machines: [
-				machine("box", { role: "hypervisor" }),
-				machine("fresh", { role: "server" }),
-				machine("discovered", { role: "server" }),
-				machine("factless", { role: "computer" }),
-			],
-		});
+	it("lists only machines with facts and a disk recorded, and nothing aett can't build yet", () => {
+		const declared = loaded(
+			fleet({
+				machines: {
+					box: hypervisor(),
+					fresh: server(),
+					discovered: server(),
+					factless: computer(),
+					vm: server({ host: "box" }),
+				},
+			}),
+		);
 
 		const state: State = {
 			operator,
@@ -30,24 +38,23 @@ describe("fleetJson", () => {
 				["fresh", { facts: false }],
 				["discovered", { facts: true }],
 				["factless", { facts: false, disk }],
+				["vm", { facts: true, disk }],
 			]),
 		};
 
 		expect(Object.keys(fleetJson(declared, state).machines)).toEqual(["box"]);
 	});
 
-	it("defaults channel, packages and encryption and passes the operator's SSH keys through", () => {
-		const declared = fleet({
-			machines: [
-				machine("box", { role: "hypervisor" }),
-				machine("web", {
-					role: "server",
-					packages: ["htop"],
-					channel: "unstable",
-					disk: { encrypted: true },
-				}),
-			],
-		});
+	it("emits each machine's settings and the packages its stacks bring, with the operator's keys", () => {
+		const declared = loaded(
+			fleet({
+				machines: {
+					box: hypervisor(),
+					web: server({ system: { channel: "unstable", encrypted: true } }),
+				},
+				stacks: { tools: { packages: ["htop"] } },
+			}),
+		);
 
 		const state: State = {
 			operator,

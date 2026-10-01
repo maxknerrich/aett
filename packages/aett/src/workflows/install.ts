@@ -4,7 +4,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Secrets } from "../adapters/secrets.ts";
 import { Ssh } from "../adapters/ssh.ts";
 import { type Disk, diskLabel, findDisk, isPassphrase, layoutPreview } from "../domain/disk.ts";
-import { type Fleet, isEncrypted } from "../domain/fleet.ts";
+import type { Fleet } from "../domain/fleet.ts";
 import { formatHost, type Host, trustHost } from "../domain/host.ts";
 import { type MachineRecord, SshPublicKey } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
@@ -36,7 +36,7 @@ export const discover = Effect.fn("discover")(function* (
 	name: string,
 	access: InstallerAccess,
 ) {
-	yield* declared(yield* loadFleet(root), name);
+	yield* installable(yield* loadFleet(root), name);
 	yield* (yield* Engine).discover(root, name, yield* connect(access));
 }, Effect.scoped);
 
@@ -53,7 +53,7 @@ export const install = Effect.fn("install")(function* (
 ) {
 	const engine = yield* Engine;
 	const fleet = yield* loadFleet(root);
-	const machine = yield* declared(fleet, name);
+	const machine = yield* installable(fleet, name);
 	const state = yield* readState(root, fleet);
 	const recorded = state.machines.get(name);
 
@@ -63,16 +63,16 @@ export const install = Effect.fn("install")(function* (
 		});
 	}
 
-	if (Option.isSome(options.passphrase) && !isEncrypted(machine)) {
+	if (Option.isSome(options.passphrase) && !machine.encrypted) {
 		return yield* new InstallError({
-			message: `fleet.ts does not encrypt ${name}'s disk, so it has no passphrase. Declare disk: { encrypted: true } or leave out --passphrase-file.`,
+			message: `fleet.ts does not encrypt ${name}'s disk, so it has no passphrase. Declare system: { encrypted: true } or leave out --passphrase-file.`,
 		});
 	}
 
 	// Secrets come before anything is erased, so a reinstall that cannot decrypt them stops here.
 	const hostKey = yield* machineHostKey(root, name, state.operator.age);
 
-	const passphrase = isEncrypted(machine)
+	const passphrase = machine.encrypted
 		? Option.some(yield* diskPassphrase(root, name, state.operator.age, options.passphrase))
 		: Option.none();
 
@@ -101,7 +101,7 @@ export const install = Effect.fn("install")(function* (
 	yield* engine.install(build, name, connection, { hostKey, passphrase });
 	yield* writeRecord(root, name, {
 		disk: disk.byId,
-		encrypted: isEncrypted(machine),
+		encrypted: machine.encrypted,
 		installed: true,
 	});
 	yield* trustHostKey(root, name, hostKey.publicKey);
@@ -111,11 +111,19 @@ export const install = Effect.fn("install")(function* (
 	return yield* Effect.ignore(connection.run("systemctl reboot"));
 }, Effect.scoped);
 
-// The machine fleet.ts declares as `name`.
-const declared = (fleet: Fleet, name: string) =>
+// The machine fleet.ts declares as `name`, when it's one aett can install.
+const installable = (fleet: Fleet, name: string) =>
 	Effect.fromOption(
 		Option.fromUndefinedOr(fleet.machines.find((machine) => machine.name === name)),
 		() => new InstallError({ message: `fleet.ts declares no machine named "${name}".` }),
+	).pipe(
+		Effect.filterOrFail(
+			(machine) => machine.unsupported.length === 0,
+			(machine) =>
+				new InstallError({
+					message: `${name} uses what aett can't install yet: ${machine.unsupported.join(", ")}.`,
+				}),
+		),
 	);
 
 // Logs in to the installer, asking for its code unless --code gave it.

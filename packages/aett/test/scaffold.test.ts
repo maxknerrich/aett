@@ -2,56 +2,86 @@ import { Option, Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import {
 	aettDependency,
+	duplicateName,
 	fleetSource,
+	type NewMachine,
 	newMachineName,
 	packageManager,
 	parseMachineFlag,
 } from "../src/domain/scaffold.ts";
-import { machine } from "../src/index.ts";
+
+// A first machine as create collects it.
+const newMachine = (name: string, role: NewMachine["role"], extra: Partial<NewMachine> = {}) => ({
+	name,
+	role,
+	mac: false,
+	encrypted: false,
+	...extra,
+});
 
 describe("parseMachineFlag", () => {
-	it("reads name:role and name:role:encrypted", () => {
+	it("reads name:role, name:role:encrypted and name:computer:macos", () => {
 		expect(parseMachineFlag("box:hypervisor")).toEqual(
-			Option.some(machine("box", { role: "hypervisor" })),
+			Option.some(newMachine("box", "hypervisor")),
 		);
 		expect(parseMachineFlag("nas:server:encrypted")).toEqual(
-			Option.some(machine("nas", { role: "server", disk: { encrypted: true } })),
+			Option.some(newMachine("nas", "server", { encrypted: true })),
+		);
+		expect(parseMachineFlag("fawkes:computer:macos")).toEqual(
+			Option.some(newMachine("fawkes", "computer", { mac: true })),
 		);
 	});
 
-	it.each(["box", "box:router", "Box:server", "box:server:plain", "box:server:encrypted:x"])(
-		"rejects %s",
-		(value) => {
-			expect(parseMachineFlag(value)).toEqual(Option.none());
-		},
-	);
+	it.each([
+		"box",
+		"box:router",
+		"Box:server",
+		"box:server:plain",
+		"box:server:macos",
+		"box:server:encrypted:x",
+	])("rejects %s", (value) => {
+		expect(parseMachineFlag(value)).toEqual(Option.none());
+	});
 });
 
 describe("fleetSource", () => {
-	it("declares no machines without importing machine()", () => {
+	it("declares no machines with only fleet() imported", () => {
 		expect(fleetSource([])).toBe(
-			'import { fleet } from "aett"\n\nexport default fleet({\n\tmachines: [],\n})\n',
+			'import { fleet } from "aett"\n\nexport default fleet({\n\tmachines: {},\n})\n',
 		);
 	});
 
-	it("declares each machine with its role and encryption", () => {
+	it("declares each machine by its role, importing only the roles it uses", () => {
 		expect(
 			fleetSource([
-				machine("box", { role: "hypervisor" }),
-				machine("nas", { role: "server", disk: { encrypted: true } }),
+				newMachine("kronos", "hypervisor", { encrypted: true }),
+				newMachine("web-1", "server"),
+				newMachine("fawkes", "computer", { mac: true }),
 			]),
 		).toBe(
 			[
-				'import { fleet, machine } from "aett"',
+				'import { computer, fleet, hypervisor, server } from "aett"',
 				"",
 				"export default fleet({",
-				"\tmachines: [",
-				'\t\tmachine("box", { role: "hypervisor" }),',
-				'\t\tmachine("nas", { role: "server", disk: { encrypted: true } }),',
-				"\t],",
+				"\tmachines: {",
+				"\t\tkronos: hypervisor({ system: { encrypted: true } }),",
+				'\t\t"web-1": server(),',
+				'\t\tfawkes: computer({ os: "macos" }),',
+				"\t},",
 				"})",
 				"",
 			].join("\n"),
+		);
+	});
+});
+
+describe("duplicateName", () => {
+	it("finds a name used twice", () => {
+		expect(duplicateName([newMachine("box", "server"), newMachine("box", "computer")])).toEqual(
+			Option.some("box"),
+		);
+		expect(duplicateName([newMachine("box", "server"), newMachine("nas", "server")])).toEqual(
+			Option.none(),
 		);
 	});
 });
@@ -68,7 +98,7 @@ describe("packageManager", () => {
 
 describe("newMachineName", () => {
 	it("accepts a free hostname and rejects a taken or invalid one", () => {
-		const machines = [machine("box", { role: "hypervisor" })];
+		const machines = [newMachine("box", "hypervisor")];
 
 		expect(newMachineName(machines, "nas")).toEqual(Result.succeed("nas"));
 		expect(Result.isFailure(newMachineName(machines, "box"))).toBe(true);
