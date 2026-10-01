@@ -91,7 +91,7 @@ const writeHostKey = Effect.fn("NixEngine.writeHostKey")(function* (
 	yield* target.run(`umask 022 && cat > ${shellQuote(`${file}.pub`)}`, `${hostKey.publicKey}\n`);
 });
 
-// Where a host keeps a guest's host key, which guest.nix shares into the guest at /run/identity.
+// Where a host keeps a guest's host key, which guest.nix shares into the guest at /persist/etc/ssh.
 const guestKeyDirectory = (root: string, guest: string) =>
 	`${root}/persist/microvms/${guest}/identity`;
 

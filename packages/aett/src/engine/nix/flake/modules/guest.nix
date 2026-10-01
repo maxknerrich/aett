@@ -1,5 +1,6 @@
 # A VM that its host builds and runs with microvm.nix. It shares the host's store read-only, keeps its
-# state on a btrfs volume of its own and takes its SSH host key from a read-only share.
+# state on a btrfs volume of its own and takes its SSH host key from a read-only share, mounted where
+# metal machines keep theirs.
 {
   config,
   lib,
@@ -55,7 +56,7 @@ in
           # Where aett puts the guest's host key on the host; vm-host.nix keeps microvm's state there.
           tag = "identity";
           source = "/persist/microvms/${name}/identity";
-          mountPoint = "/run/identity";
+          mountPoint = "/persist/etc/ssh";
           proto = "virtiofs";
           readOnly = true;
         }
@@ -84,6 +85,8 @@ in
         "noatime"
       ];
     };
+    # Mounted in the initrd, so the key is there when activation decrypts secrets with it.
+    fileSystems."/persist/etc/ssh".neededForBoot = true;
 
     # A fresh volume is empty, so the bind sources persist.nix mounts are made before their mounts.
     boot.initrd.systemd.services.aett-persist = {
@@ -98,13 +101,6 @@ in
         mkdir -p /sysroot/persist${dir}
       '') config.aett.persist;
     };
-
-    services.openssh.hostKeys = [
-      {
-        path = "/run/identity/ssh_host_ed25519_key";
-        type = "ed25519";
-      }
-    ];
 
     networking.useDHCP = false;
     networking.nameservers = [

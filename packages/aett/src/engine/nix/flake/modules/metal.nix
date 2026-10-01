@@ -21,14 +21,6 @@
       };
     };
 
-    # Install writes the key here from the fleet's secrets.
-    services.openssh.hostKeys = [
-      {
-        path = "/persist/etc/ssh/ssh_host_ed25519_key";
-        type = "ed25519";
-      }
-    ];
-
     environment.etc.machine-id.source = "/persist/etc/machine-id";
 
     services.logind.settings.Login = lib.mkIf (config.aett.role != "computer") {
