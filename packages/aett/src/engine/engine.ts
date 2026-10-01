@@ -97,8 +97,13 @@ export class Engine extends Context.Service<
 		) => Effect.Effect<string, EngineError | SshError>;
 		/** Whether the running `guest` must restart to run `system`: its kernel, initrd, CPUs, memory or devices changed. */
 		readonly needsRestart: (guest: Connection, system: string) => Effect.Effect<boolean, SshError>;
-		/** Switches the running `guest` to `system` in place. */
-		readonly switchGuest: (guest: Connection, system: string) => Effect.Effect<void, SshError>;
+		/** Switches `guest`, running on `host`, to `system` in place, and keeps that system on its host. */
+		readonly switchGuest: (
+			host: Connection,
+			guest: Connection,
+			name: string,
+			system: string,
+		) => Effect.Effect<void, SshError>;
 		/** Starts, restarts or stops `guest` on `host`. */
 		readonly controlGuest: (
 			host: Connection,

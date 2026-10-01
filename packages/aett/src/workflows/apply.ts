@@ -238,7 +238,7 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 	}
 
 	yield* Console.log(`Switching ${name}…`);
-	yield* engine.switchGuest(guest, system);
+	yield* engine.switchGuest(connection, guest, name, system);
 
 	return yield* Console.log(`Switched ${name} to ${system}.`);
 }, Effect.scoped);

@@ -83,9 +83,17 @@ const activate = Effect.fn("NixEngine.activate")(function* (target: Connection, 
 });
 
 // A guest boots whatever its host's runner says, and its store is the host's, read-only, so a
-// switch only activates the new system; it records no profile.
-const switchGuest = (guest: Connection, system: string) =>
-	switchTo(guest, system).pipe(Effect.asVoid);
+// switch only activates the new system; it records no profile. Its host keeps the system it
+// switched to as a GC root, which the guest's next start or restart drops again.
+const switchGuest = Effect.fn("NixEngine.switchGuest")(function* (
+	host: Connection,
+	guest: Connection,
+	name: string,
+	system: string,
+) {
+	yield* switchTo(guest, system);
+	yield* host.run(`ln -sfn ${shellQuote(system)} ${shellQuote(switchedRoot(name))}`);
+});
 
 // guest.nix links what a guest boots with into its system as aett-boot. A switch can't change any of it.
 const needsRestart = (guest: Connection, system: string) =>
@@ -101,10 +109,20 @@ const guestDirectory = (guest: string) => `/persist/microvms/${guest}`;
 // Where vm-host.nix links each guest's runners as GC roots, a directory per guest.
 const gcRoots = "/nix/var/nix/gcroots/aett-guests";
 
+// The GC root of the system a running guest was switched to in place.
+const switchedRoot = (guest: string) => `${gcRoots}/${guest}/switched`;
+
 const guestUnit = (guest: string) => shellQuote(`microvm@${guest}.service`);
 
+// A guest that starts runs its runner's system, which its `current` and `booted` roots keep.
 const controlGuest = (host: Connection, guest: string, action: "start" | "restart" | "stop") =>
-	host.run(`systemctl ${action} ${guestUnit(guest)}`).pipe(Effect.asVoid);
+	host
+		.run(
+			action === "stop"
+				? `systemctl stop ${guestUnit(guest)}`
+				: `systemctl ${action} ${guestUnit(guest)} && rm -f -- ${shellQuote(switchedRoot(guest))}`,
+		)
+		.pipe(Effect.asVoid);
 
 const removeGuest = (host: Connection, guest: string) =>
 	host
