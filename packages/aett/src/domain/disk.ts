@@ -1,5 +1,5 @@
 import { Option } from "effect";
-import { isEncrypted, type Machine } from "./fleet.ts";
+import type { Machine } from "./fleet.ts";
 
 /** A disk aett can install to, as the engine's hardware discovery reports it. */
 export interface Disk {
@@ -24,7 +24,7 @@ export const layoutPreview = (machine: Machine, disk: Disk) =>
 	[
 		`${machine.name} · ${disk.model} · ${disk.byId}`,
 		"├─ 1  ESP   1 GB   vfat   /boot",
-		`└─ 2  root  rest   btrfs${isEncrypted(machine) ? "  inside LUKS" : ""}`,
+		`└─ 2  root  rest   btrfs${machine.encrypted ? "  inside LUKS" : ""}`,
 		"      ├─ @nix      /nix",
 		"      └─ @persist  /persist",
 		"/     tmpfs, capped at 1 GB, empty on every boot",

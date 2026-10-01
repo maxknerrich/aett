@@ -1,5 +1,5 @@
 import { Option, Result, Schema } from "effect";
-import { Machine, MachineName, type Role } from "./fleet.ts";
+import { MachineName, Role } from "./fleet.ts";
 
 /** A fleet's name: its directory and its package name, so lowercase and URL-safe. */
 export const FleetName = Schema.String.check(
@@ -8,42 +8,70 @@ export const FleetName = Schema.String.check(
 	}),
 );
 
-/** The roles `aett create` offers, with what each means today. */
+/** A first machine `aett create` writes into fleet.ts. */
+export interface NewMachine {
+	readonly name: string;
+	readonly role: Role;
+	/** A Mac; only a computer can be one. */
+	readonly mac: boolean;
+	/** Its disk inside LUKS; a Mac has no such setting. */
+	readonly encrypted: boolean;
+}
+
+/** The roles `aett create` offers, with what each means. */
 export const roles: ReadonlyArray<{ readonly role: Role; readonly description: string }> = [
-	{ role: "hypervisor", description: "Hosts VMs later; ignores the laptop lid" },
-	{ role: "server", description: "Runs services; ignores the laptop lid" },
-	{ role: "computer", description: "A machine you work on" },
+	{ role: "hypervisor", description: "Only runs VMs, like Proxmox" },
+	{ role: "server", description: "A headless machine you reach over SSH" },
+	{ role: "computer", description: "A machine you sit in front of, such as a Mac or a laptop" },
 ];
 
-const decodeMachine = Schema.decodeUnknownOption(Machine);
+const isMachineName = (name: string) =>
+	Option.isSome(Schema.decodeUnknownOption(MachineName)(name));
 
 /**
- * Reads `--machine name:role[:encrypted]`, the flag for create's machine
- * questions, into a machine declaration.
+ * Reads `--machine name:role`, `name:role:encrypted` or `name:computer:macos`,
+ * the flag for create's machine questions.
  */
-export const parseMachineFlag = (value: string): Option.Option<Machine> => {
-	const [name, role, encrypted, ...rest] = value.split(":");
+export const parseMachineFlag = (value: string): Option.Option<NewMachine> => {
+	const [name = "", declared = "", extra, ...rest] = value.split(":");
+	const role = Schema.decodeUnknownOption(Role)(declared);
 
-	if (rest.length > 0 || (encrypted !== undefined && encrypted !== "encrypted")) {
-		return Option.none();
-	}
+	if (rest.length > 0 || !isMachineName(name) || Option.isNone(role)) return Option.none();
 
-	return decodeMachine(
-		encrypted === undefined ? { name, role } : { name, role, disk: { encrypted: true } },
-	);
+	if (extra === undefined)
+		return Option.some({ name, role: role.value, mac: false, encrypted: false });
+
+	if (extra === "encrypted")
+		return Option.some({ name, role: role.value, mac: false, encrypted: true });
+
+	return extra === "macos" && role.value === "computer"
+		? Option.some({ name, role: role.value, mac: true, encrypted: false })
+		: Option.none();
+};
+
+// One machine's entry in fleet.ts: a key, quoted when the name has a hyphen, and its role's call.
+const entry = ({ name, role, mac, encrypted }: NewMachine) => {
+	const key = /^[a-z][a-z0-9]*$/.test(name) ? name : JSON.stringify(name);
+	const config = mac ? '{ os: "macos" }' : encrypted ? "{ system: { encrypted: true } }" : "";
+
+	return `\t\t${key}: ${role}(${config}),\n`;
 };
 
 /** Renders fleet.ts for the machines create was given. */
-export const fleetSource = (machines: ReadonlyArray<Machine>) => {
-	const declared = machines.map(
-		({ name, role, disk }) =>
-			`\t\tmachine(${JSON.stringify(name)}, { role: ${JSON.stringify(role)}${disk?.encrypted === true ? ", disk: { encrypted: true }" : ""} }),\n`,
-	);
+export const fleetSource = (machines: ReadonlyArray<NewMachine>) => {
+	const imports = [...new Set(["fleet", ...machines.map(({ role }) => role)])].toSorted();
 
 	return machines.length === 0
-		? 'import { fleet } from "aett"\n\nexport default fleet({\n\tmachines: [],\n})\n'
-		: `import { fleet, machine } from "aett"\n\nexport default fleet({\n\tmachines: [\n${declared.join("")}\t],\n})\n`;
+		? 'import { fleet } from "aett"\n\nexport default fleet({\n\tmachines: {},\n})\n'
+		: `import { ${imports.join(", ")} } from "aett"\n\nexport default fleet({\n\tmachines: {\n${machines.map(entry).join("")}\t},\n})\n`;
 };
+
+/** A name the list uses twice, which a fleet can't have. */
+export const duplicateName = (machines: ReadonlyArray<NewMachine>) =>
+	Option.fromUndefinedOr(
+		machines.find(({ name }, index) => machines.findIndex((other) => other.name === name) < index)
+			?.name,
+	);
 
 export const PackageManager = Schema.Literals(["npm", "pnpm"]);
 
@@ -61,12 +89,15 @@ export const packageManager = (userAgent: Option.Option<string>): PackageManager
 	);
 
 /** Whether `name` can join `machines`: a valid machine name not taken yet. */
-export const newMachineName = (machines: ReadonlyArray<Machine>, name: string) =>
-	Schema.is(MachineName)(name)
-		? machines.some((machine) => machine.name === name)
-			? Result.fail(`${name} is already in the fleet`)
-			: Result.succeed(name)
-		: Result.fail("Expected a lowercase hostname: a-z, 0-9 and inner hyphens");
+export const newMachineName = (machines: ReadonlyArray<NewMachine>, name: string) => {
+	if (!isMachineName(name)) {
+		return Result.fail("Expected a lowercase hostname: a-z, 0-9 and inner hyphens");
+	}
+
+	return machines.some((machine) => machine.name === name)
+		? Result.fail(`${name} is already in the fleet`)
+		: Result.succeed(name);
+};
 
 /**
  * How a new fleet depends on aett: by version when aett came from the

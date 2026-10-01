@@ -12,11 +12,12 @@ import {
 } from "effect";
 import { Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { decodeFleet, type Machine } from "../domain/fleet.ts";
 import {
 	aettDependency,
+	duplicateName,
 	FleetName,
 	fleetSource,
+	type NewMachine,
 	newMachineName,
 	type PackageManager,
 	packageManager,
@@ -40,7 +41,7 @@ export interface CreateOptions {
 	readonly name: Option.Option<string>;
 	readonly sshKey: Option.Option<string>;
 	/** Machines from --machine; when there are none, create asks unless `noMachines`. */
-	readonly machines: ReadonlyArray<Machine>;
+	readonly machines: ReadonlyArray<NewMachine>;
 	readonly noMachines: boolean;
 	/** Installs aett with this instead of the package manager that started aett. */
 	readonly packageManager: Option.Option<PackageManager>;
@@ -118,11 +119,13 @@ export const create = Effect.fn("create")(function* (
 	const machines =
 		options.machines.length > 0 || options.noMachines ? options.machines : yield* askMachines([]);
 
-	yield* Effect.fromResult(decodeFleet({ machines })).pipe(
-		Effect.mapError(
-			(problems) => new CreateError({ message: `These machines can't form a fleet:\n${problems}` }),
-		),
-	);
+	const duplicate = duplicateName(machines);
+
+	if (Option.isSome(duplicate)) {
+		return yield* new CreateError({
+			message: `--machine names ${duplicate.value} twice; a fleet's machine names are unique.`,
+		});
+	}
 
 	const age = yield* ageKey;
 	const userAgent = yield* Config.option(Config.String("npm_config_user_agent")).pipe(Effect.orDie);
@@ -186,8 +189,8 @@ export const create = Effect.fn("create")(function* (
 
 // Asks for the fleet's first machines one by one until the operator stops, adding them to `machines`.
 const askMachines = (
-	machines: ReadonlyArray<Machine>,
-): Effect.Effect<ReadonlyArray<Machine>, Terminal.QuitError, Prompt.Environment> =>
+	machines: ReadonlyArray<NewMachine>,
+): Effect.Effect<ReadonlyArray<NewMachine>, Terminal.QuitError, Prompt.Environment> =>
 	Prompt.Confirm({
 		message: machines.length === 0 ? "Add a machine?" : "Add another machine?",
 		initial: machines.length === 0,
@@ -201,8 +204,8 @@ const askMachines = (
 		),
 	);
 
-// Asks for one machine's name, role and disk encryption.
-const askMachine = Effect.fnUntraced(function* (machines: ReadonlyArray<Machine>) {
+// Asks for one machine's name and role, then whether it's a Mac or whether to encrypt its disk.
+const askMachine = Effect.fnUntraced(function* (machines: ReadonlyArray<NewMachine>) {
 	const name = yield* Prompt.String({
 		message: "Machine name (its hostname)",
 		validate: (value) => Effect.fromResult(newMachineName(machines, value)),
@@ -213,11 +216,15 @@ const askMachine = Effect.fnUntraced(function* (machines: ReadonlyArray<Machine>
 		choices: roles.map(({ role: value, description }) => ({ title: value, value, description })),
 	});
 
-	const encrypted = yield* Prompt.Confirm({
-		message: "Encrypt its disk? You type a passphrase at its console on every boot.",
-	});
+	const mac = role === "computer" && (yield* Prompt.Confirm({ message: `Is ${name} a Mac?` }));
 
-	return encrypted ? ({ name, role, disk: { encrypted } } satisfies Machine) : { name, role };
+	const encrypted =
+		!mac &&
+		(yield* Prompt.Confirm({
+			message: "Encrypt its disk? You type a passphrase at its console on every boot.",
+		}));
+
+	return { name, role, mac, encrypted } satisfies NewMachine;
 });
 
 // Makes the fleet a Git repository with the pinned git. Returns why it failed, if it did.
