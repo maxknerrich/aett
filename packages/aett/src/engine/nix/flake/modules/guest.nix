@@ -30,10 +30,11 @@ in
 
   config = {
     microvm = {
-      hypervisor = "qemu";
+      # A small device model on the host. A guest that needs a device it lacks, such as a GPU with
+      # QEMU-only quirks, can take QEMU on its own.
+      hypervisor = "cloud-hypervisor";
       vcpu = cfg.cpu;
-      # QEMU's microvm machine hangs with exactly 2 GiB: https://github.com/microvm-nix/microvm.nix/issues/171
-      mem = if cfg.memory == 2048 then 2047 else cfg.memory;
+      mem = cfg.memory;
       # Idle guests hand free pages back to the host.
       balloon = true;
       interfaces = [
