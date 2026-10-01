@@ -41,10 +41,10 @@ export const discover = Effect.fn("discover")(function* (
 }, Effect.scoped);
 
 /**
- * Discovers the machine, lets the operator confirm its disk, builds its system
- * on the installer, erases the disk (inside LUKS with the stored passphrase
- * when declared encrypted), installs with the machine's stored host key and
- * reboots into the new system.
+ * Discovers the machine, lets the operator confirm its disk, makes or reads
+ * its host key and disk passphrase, builds its system on the installer, erases
+ * the disk (inside LUKS when declared encrypted), installs and reboots into the
+ * new system.
  */
 export const install = Effect.fn("install")(function* (
 	root: string,
@@ -69,13 +69,6 @@ export const install = Effect.fn("install")(function* (
 		});
 	}
 
-	// Secrets come before anything is erased, so a reinstall that cannot decrypt them stops here.
-	const hostKey = yield* machineHostKey(root, name, state.operator.age);
-
-	const passphrase = machine.encrypted
-		? Option.some(yield* diskPassphrase(root, name, state.operator.age, options.passphrase))
-		: Option.none();
-
 	const connection = yield* connect(options);
 	const disks = yield* engine.discover(root, name, connection);
 	const disk = yield* chooseDisk(name, recorded?.disk, options.disk, disks);
@@ -91,6 +84,14 @@ export const install = Effect.fn("install")(function* (
 			});
 		}
 	}
+
+	// Secrets come after connecting, so a run that can't reach the installer leaves none
+	// behind, and before anything is erased, so a reinstall that can't decrypt them stops here.
+	const hostKey = yield* machineHostKey(root, name, state.operator.age);
+
+	const passphrase = machine.encrypted
+		? Option.some(yield* diskPassphrase(root, name, state.operator.age, options.passphrase))
+		: Option.none();
 
 	// Later runs read the disk from state and never derive it again.
 	// An existing record stays as it is, so `installed` survives a failed reinstall.
