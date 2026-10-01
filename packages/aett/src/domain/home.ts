@@ -210,14 +210,18 @@ export const fingerprint = (entry: Entry) =>
 
 /** What syncing a machine's home does. */
 export interface HomePlan {
-	/** Entries to place: new, changed in their set, or changed on the machine. */
+	/**
+	 * Entries to place: new, changed in their set, changed on the machine, or
+	 * under a path this sync removes, such as a link to a directory, through
+	 * which they may only seem to be in place.
+	 */
 	readonly write: ReadonlyArray<Entry>;
 	/** Paths aett placed that left their sets and are still on the machine. */
 	readonly remove: ReadonlyArray<string>;
 	/**
-	 * Paths of `write` and `remove` that are not what aett left on the machine:
-	 * edited there, or there before aett placed them. Syncing overwrites or
-	 * removes them.
+	 * Paths of `write` and `remove` that are not what aett left on the machine,
+	 * nor what it writes: edited there, or there before aett placed them.
+	 * Syncing overwrites or removes them.
 	 */
 	readonly changedLocally: ReadonlyArray<string>;
 	/** The manifest to record, each placed path's fingerprint, when it differs from the last one. */
@@ -241,14 +245,18 @@ export const planSync = (
 	const changedLocally = (path: string) => {
 		const found = current.get(path);
 
-		return found !== undefined && found !== manifest.get(path);
+		return found !== undefined && found !== manifest.get(path) && found !== next.get(path);
 	};
-
-	const write = desired.filter((entry) => current.get(entry.path) !== next.get(entry.path));
 
 	const remove = [...manifest.keys()]
 		.filter((path) => !next.has(path) && current.has(path))
 		.toSorted();
+
+	const write = desired.filter(
+		(entry) =>
+			current.get(entry.path) !== next.get(entry.path) ||
+			remove.some((gone) => entry.path.startsWith(`${gone}/`)),
+	);
 
 	const alreadyRecorded =
 		manifest.size === next.size &&

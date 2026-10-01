@@ -190,6 +190,18 @@ describe("planSync", () => {
 		});
 	});
 
+	it("writes a file that only reads the same through a link the sync removes", () => {
+		const alias = link("alias", "dir");
+		const moved = file("alias/config", "same");
+		const before = [alias, file("dir/config", "same")];
+
+		expect(planSync([moved], at(...before), at(...before, moved))).toMatchObject({
+			write: [moved],
+			remove: ["alias", "dir/config"],
+			changedLocally: [],
+		});
+	});
+
 	it("rewrites a link whose target or a file whose executable bit changed", () => {
 		const moved = link(".claude/CLAUDE.md", "../.agents/AGENTS.md");
 		const script = file(".local/bin/hello", "echo hi", true);
