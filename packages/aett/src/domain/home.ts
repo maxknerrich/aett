@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { posix } from "node:path";
 import { Data, Option, Result } from "effect";
 
 /**
@@ -18,27 +17,56 @@ const sha256 = (text: string) => createHash("sha256").update(text).digest("hex")
 // Lists set names as "a and b" or "a, b and c".
 const listFormat = new Intl.ListFormat("en-GB");
 
-// Why a set's link can't be kept, if it can't: it must be relative and lead to a path inside the home.
-const linkProblems = (set: string, path: string, target: string) => {
+// How a link's target goes wrong, followed segment by segment from the directory `at`, if it does:
+// by leaving the home, or by leading through another of the home's `links`, which could go anywhere.
+const follow = (
+	at: ReadonlyArray<string>,
+	rest: ReadonlyArray<string>,
+	links: ReadonlySet<string>,
+): Option.Option<string> => {
+	const [segment, ...next] = rest;
+
+	if (segment === undefined) return Option.none();
+
+	if (segment === "" || segment === ".") return follow(at, next, links);
+
+	if (segment === "..") {
+		return at.length === 0
+			? Option.some("which is outside the home.")
+			: follow(at.slice(0, -1), next, links);
+	}
+
+	const reached = [...at, segment].join("/");
+
+	return next.length > 0 && links.has(reached)
+		? Option.some(`through the link ${reached}. Links in a set can't lead through other links.`)
+		: follow([...at, segment], next, links);
+};
+
+// Why a set's link can't be kept, if it can't: it must be relative, stay inside the home and lead
+// through no other link of the home.
+const linkProblems = (set: string, path: string, target: string, links: ReadonlySet<string>) => {
 	const file = `home/${set}/${path}`;
 
-	if (posix.isAbsolute(target)) {
+	if (target.startsWith("/")) {
 		return [`${file} links to the absolute path ${target}. Links in a set are relative.`];
 	}
 
-	const resolved = posix.join(posix.dirname(path), target);
-
-	return resolved === ".." || resolved.startsWith("../")
-		? [`${file} links to ${target}, which is outside the home.`]
-		: [];
+	return Option.toArray(
+		Option.map(
+			follow(path.split("/").slice(0, -1), target.split("/"), links),
+			(problem) => `${file} links to ${target}, ${problem}`,
+		),
+	);
 };
 
 /**
  * Merges the dotfile sets a machine gets into its home, sorted by path so the
  * order of the sets can't change it. Links inside the home stay links, also
  * when they lead into another set. Fails with every problem, one per line: a
- * set missing from home/, a path in more than one set, and a link that is
- * absolute or leads out of the home.
+ * set missing from home/, a path in more than one set, a path that is a file
+ * or link in one set and a directory in another, and a link that is absolute,
+ * leads out of the home or leads through another link.
  */
 export const resolveHome = (
 	sets: ReadonlyMap<string, ReadonlyArray<Entry>>,
@@ -62,14 +90,36 @@ export const resolveHome = (
 		},
 	);
 
-	const links = placed.flatMap(({ set, entry }) =>
+	const nested = placed.flatMap(({ set, entry }) => {
+		const below = [
+			...new Set(
+				placed.flatMap((other) =>
+					other.entry.path.startsWith(`${entry.path}/`) ? [other.set] : [],
+				),
+			),
+		];
+
+		const kind = Entry.$match(entry, { File: () => "file", Link: () => "link" });
+
+		return below.length > 0
+			? [`${entry.path} is a ${kind} in ${set} but a directory in ${listFormat.format(below)}.`]
+			: [];
+	});
+
+	const links = new Set(
+		placed.flatMap(({ entry }) =>
+			Entry.$match(entry, { File: () => [], Link: ({ path }) => [path] }),
+		),
+	);
+
+	const badLinks = placed.flatMap(({ set, entry }) =>
 		Entry.$match(entry, {
 			File: () => [],
-			Link: ({ path, target }) => linkProblems(set, path, target),
+			Link: ({ path, target }) => linkProblems(set, path, target, links),
 		}),
 	);
 
-	const problems = [...missing, ...conflicts.toSorted(), ...links];
+	const problems = [...missing, ...[...conflicts, ...nested].toSorted(), ...badLinks];
 
 	return problems.length > 0
 		? Result.fail(problems.join("\n"))

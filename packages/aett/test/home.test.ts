@@ -29,6 +29,8 @@ describe("resolveHome", () => {
 		["dev", [file(".config/git/config", "dev")]],
 		["work", [file(".config/git/config", "work")]],
 		["escape", [link(".evil", "../../etc/passwd"), link(".config/absolute", "/etc/passwd")]],
+		["flat", [file(".config", "a file")]],
+		["chain", [link("alias", "."), link("escape", "alias/../outside")]],
 	]);
 
 	it("merges the chosen sets sorted by path, whatever their order, and keeps links", () => {
@@ -46,6 +48,25 @@ describe("resolveHome", () => {
 
 	it("keeps a link into another set", () => {
 		expect(Result.isSuccess(resolveHome(sets, ["claude", "shell"]))).toBe(true);
+	});
+
+	it("rejects a path that is a file in one set and a directory in another", () => {
+		expect(resolveHome(sets, ["flat", "dev", "work"])).toEqual(
+			Result.fail(
+				[
+					".config is a file in flat but a directory in dev and work.",
+					".config/git/config is in both dev and work.",
+				].join("\n"),
+			),
+		);
+	});
+
+	it("rejects a link that leads through another link, which could leave the home", () => {
+		expect(resolveHome(sets, ["chain"])).toEqual(
+			Result.fail(
+				"home/chain/escape links to alias/../outside, through the link alias. Links in a set can't lead through other links.",
+			),
+		);
 	});
 
 	it("names every problem at once", () => {

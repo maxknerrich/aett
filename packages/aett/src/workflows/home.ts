@@ -109,10 +109,16 @@ if [ -f "$home/${manifestPath}" ]; then cat -- "$home/${manifestPath}"; fi
 `;
 
 // Run as root: prints a line per path in the home, its fingerprint as domain/home.ts computes it,
-// "other" for anything but a file or a link, or "missing".
+// "other" for anything but a file or a link, or "missing". A path whose directory resolves outside
+// the home, through a symlink on the machine, is "outside" and left unread.
 const fingerprintScript = (home: string, paths: ReadonlyArray<string>) => `set -eu
 cd -- ${shellQuote(home)}
+root=$(pwd -P)
 fingerprint() {
+	case $(realpath -m -- "$(dirname -- "$1")") in
+		"$root" | "$root"/*) ;;
+		*) echo outside; return ;;
+	esac
 	if [ -L "$1" ]; then
 		printf 'link:%s\\n' "$(readlink -- "$1")"
 	elif [ -f "$1" ]; then
@@ -130,12 +136,13 @@ ${paths.map((path) => `fingerprint ${shellQuote(path)}\n`).join("")}`;
 const putFile = (path: string, mode: string, content: string) =>
 	`put_file ${shellQuote(path)} ${mode} ${shellQuote(Base64.encode(content))}\n`;
 
-// Run as the user in their home: removes first, so a file can give way to a directory, then writes
-// each file through a temporary one and each link, and records the manifest last. -T keeps mv and
-// ln from writing into a directory that stands where a file or link goes.
+// Run as the user in their home: removes first, with the directories that leaves empty, so a file
+// can give way to a directory and back. Then writes each file through a temporary one next to it and
+// each link, and records the manifest last. A directory still standing where a file or link goes
+// stops the sync, and -T keeps mv and ln from ever writing into one.
 const applyScript = (home: string, plan: HomePlan) => {
 	const steps = [
-		...plan.remove.map((path) => `rm -f -- ${shellQuote(path)}\n`),
+		...plan.remove.map((path) => `remove ${shellQuote(path)}\n`),
 		...plan.write.map((entry) =>
 			Entry.$match(entry, {
 				File: ({ path, content, executable }) => putFile(path, executable ? "755" : "644", content),
@@ -156,14 +163,30 @@ const applyScript = (home: string, plan: HomePlan) => {
 	return `set -eu
 umask 022
 cd -- ${shellQuote(home)}
-put_file() {
+tmp=
+trap 'if [ -n "$tmp" ]; then rm -f -- "$tmp"; fi' EXIT
+remove() {
+	rm -f -- "$1"
+	dir=$(dirname -- "$1")
+	while [ "$dir" != . ] && rmdir -- "$dir" 2>/dev/null; do dir=$(dirname -- "$dir"); done
+}
+make_room() {
+	if [ -d "$1" ] && [ ! -L "$1" ]; then
+		printf '%s is a directory, where aett puts a %s. Move it away and sync again.\\n' "$1" "$2" >&2
+		exit 1
+	fi
 	mkdir -p -- "$(dirname -- "$1")"
-	printf '%s' "$3" | base64 -d > "$1.aett-new"
-	chmod -- "$2" "$1.aett-new"
-	mv -fT -- "$1.aett-new" "$1"
+}
+put_file() {
+	make_room "$1" file
+	tmp=$(mktemp -- "$(dirname -- "$1")/.aett.XXXXXX")
+	printf '%s' "$3" | base64 -d > "$tmp"
+	chmod -- "$2" "$tmp"
+	mv -fT -- "$tmp" "$1"
+	tmp=
 }
 put_link() {
-	mkdir -p -- "$(dirname -- "$1")"
+	make_room "$1" link
 	ln -sfT -- "$2" "$1"
 }
 ${steps.join("")}`;
@@ -230,7 +253,19 @@ export const planHome = Effect.fn("planHome")(function* (
 		});
 	}
 
-	const current = new Map(Arr.zip(paths, found).filter(([, print]) => print !== "missing"));
+	const printed = Arr.zip(paths, found);
+	const outside = printed.flatMap(([path, print]) => (print === "outside" ? [`  ${path}`] : []));
+
+	if (outside.length > 0) {
+		return yield* new HomeError({
+			message: [
+				`A symlink on ${machine} leads these paths out of ${home}, so aett won't touch them:`,
+				...outside,
+			].join("\n"),
+		});
+	}
+
+	const current = new Map(printed.filter(([, print]) => print !== "missing"));
 
 	const sync = {
 		machine,
