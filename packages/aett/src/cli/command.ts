@@ -3,10 +3,11 @@ import { Argument, Command, Flag } from "effect/cli";
 import { installerHost, parseHost } from "../domain/host.ts";
 import { PackageManager, parseMachineFlag } from "../domain/scaffold.ts";
 import { apply } from "../workflows/apply.ts";
-import { compile, update } from "../workflows/compile.ts";
+import { compile } from "../workflows/compile.ts";
 import { type AettPackage, create } from "../workflows/create.ts";
 import { destroy } from "../workflows/destroy.ts";
 import { fleetRoot } from "../workflows/load.ts";
+import { update } from "../workflows/pins.ts";
 import { setSecret } from "../workflows/secrets.ts";
 import { discover, install } from "../workflows/install.ts";
 

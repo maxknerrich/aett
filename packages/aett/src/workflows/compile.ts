@@ -5,7 +5,7 @@ import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { ensureGuestKeys } from "./identity.ts";
 import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
-import { completePins, updatePins } from "./pins.ts";
+import { completePins } from "./pins.ts";
 import { shareSecrets } from "./secrets.ts";
 
 /**
@@ -89,10 +89,3 @@ const notBuilt = (fleet: Fleet, state: State, name: string) => {
 
 	return state.machines.get(name)?.facts === true ? "not installed yet" : "not discovered yet";
 };
-
-/** Moves the fleet's pins forward: the named ones, or all of them. */
-export const update = Effect.fn("update")(function* (root: string, names: ReadonlyArray<string>) {
-	const { build, fleet, pins } = yield* emit(root);
-
-	return yield* updatePins(root, fleet, build, pins, names);
-});

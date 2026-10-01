@@ -37,6 +37,33 @@ describe("mergeInputs", () => {
 		expect(lock.nodes.agents?.inputs).toEqual({ nixpkgs: "nixpkgs_2" });
 		expect(lock.nodes.nixpkgs_2).toEqual(github("nixpkgs", "theirs", 4));
 	});
+
+	it("gives every added node its own name when the renamed ones would collide", () => {
+		const pinned: InputsLock = {
+			root: "root",
+			version: 7,
+			nodes: { root: { inputs: { agents: "agents" } }, agents: github("agents", "mine", 1) },
+		};
+
+		const defaults: InputsLock = {
+			root: "root",
+			version: 7,
+			nodes: {
+				root: { inputs: { agents: "agents", tools: "tools" } },
+				agents: github("agents", "theirs", 2),
+				tools: { ...github("tools", "t1", 3), inputs: { agents: "agents", helper: "agents_2" } },
+				agents_2: github("helper", "h1", 4),
+			},
+		};
+
+		const { lock } = mergeInputs(pinned, defaults);
+		const tools = lock.nodes.tools?.inputs ?? {};
+
+		expect(new Set(Object.values(tools)).size).toBe(2);
+		expect(lock.nodes[String(tools.helper)]).toEqual(github("helper", "h1", 4));
+		expect(lock.nodes[String(tools.agents)]).toEqual(github("agents", "theirs", 2));
+		expect(lock.nodes.agents).toEqual(github("agents", "mine", 1));
+	});
 });
 
 describe("assetNames", () => {

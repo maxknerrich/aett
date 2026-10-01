@@ -76,9 +76,9 @@ export class Engine extends Context.Service<
 			secrets: ReadonlyArray<string>,
 			pins: Pins,
 		) => Effect.Effect<Build, PlatformError.PlatformError>;
-		/** Moves the named inputs of `build`, or all of them when none are named, to their latest revisions. Returns the new pins. */
+		/** Moves the named inputs, or all of them when none are named, from `inputs` to their latest revisions. Returns the new pins. */
 		readonly updateInputs: (
-			build: Build,
+			inputs: InputsLock,
 			names: ReadonlyArray<string>,
 		) => Effect.Effect<InputsLock, EngineError | PlatformError.PlatformError>;
 		/** Downloads a file on the controller and returns the hash a build pins it by. */

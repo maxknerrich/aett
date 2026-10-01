@@ -283,6 +283,28 @@ export const nixEngine = (flake: string) =>
 			const discovered = (root: string, name: string) =>
 				fs.exists(path.join(root, "state", name, "facter.json"));
 
+			// Copies aett's flake to `directory`, locked to `inputs` instead of the lock it ships.
+			const copyFlake = Effect.fn("NixEngine.copyFlake")(function* (
+				directory: string,
+				inputs: InputsLock,
+			) {
+				yield* fs.copy(flake, directory);
+
+				// Copies out of the Nix store are read-only, and the next emit has to delete them.
+				const entries = yield* fs.readDirectory(directory, { recursive: true });
+
+				yield* Effect.forEach(
+					[directory, ...entries.map((entry) => path.join(directory, entry))],
+					(entry) =>
+						fs.stat(entry).pipe(Effect.flatMap(({ mode }) => fs.chmod(entry, mode | 0o200))),
+				);
+
+				yield* fs.writeFileString(
+					path.join(directory, "flake.lock"),
+					`${JSON.stringify(inputs, null, 2)}\n`,
+				);
+			});
+
 			// Reads a flake.lock, failing with an EngineError that names it when it isn't one.
 			const readLock = (file: string) =>
 				fs.readFileString(file).pipe(
@@ -310,26 +332,11 @@ export const nixEngine = (flake: string) =>
 
 				yield* fs.remove(directory, { recursive: true, force: true });
 				yield* fs.makeDirectory(path.dirname(directory), { recursive: true });
-				yield* fs.copy(flake, directory);
-
-				// Copies out of the Nix store are read-only, and the next emit has to delete them.
-				const entries = yield* fs.readDirectory(directory, { recursive: true });
-
-				yield* Effect.forEach(
-					[directory, ...entries.map((entry) => path.join(directory, entry))],
-					(entry) =>
-						fs.stat(entry).pipe(Effect.flatMap(({ mode }) => fs.chmod(entry, mode | 0o200))),
-				);
+				yield* copyFlake(directory, pins.inputs);
 
 				yield* fs.writeFileString(
 					path.join(directory, "fleet.json"),
 					`${JSON.stringify(emitted, null, "\t")}\n`,
-				);
-
-				// The fleet's pins replace the lock aett ships.
-				yield* fs.writeFileString(
-					path.join(directory, "flake.lock"),
-					`${JSON.stringify(pins.inputs, null, 2)}\n`,
 				);
 
 				const machines = Object.keys(emitted.machines);
@@ -497,14 +504,21 @@ export const nixEngine = (flake: string) =>
 				);
 			});
 
+			// Locks a scratch copy of the flake, which lists no machines, so nothing but the inputs is read.
 			const updateInputs = Effect.fn("NixEngine.updateInputs")(function* (
-				build: Build,
+				inputs: InputsLock,
 				names: ReadonlyArray<string>,
 			) {
-				yield* nix(["flake", "update", ...names, "--flake", flakeAt(build.directory)]);
+				const directory = path.join(
+					yield* fs.makeTempDirectoryScoped({ prefix: "aett-" }),
+					"flake",
+				);
 
-				return yield* readLock(path.join(build.directory, "flake.lock"));
-			});
+				yield* copyFlake(directory, inputs);
+				yield* nix(["flake", "update", ...names, "--flake", flakeAt(directory)]);
+
+				return yield* readLock(path.join(directory, "flake.lock"));
+			}, Effect.scoped);
 
 			const prefetch = Effect.fn("NixEngine.prefetch")(function* (url: string) {
 				const output = yield* nix([

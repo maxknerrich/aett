@@ -11,7 +11,8 @@ import {
 	type ReleasePin,
 } from "../domain/pins.ts";
 import type { Release } from "../domain/stacks.ts";
-import { type Build, Engine } from "../engine/engine.ts";
+import { Engine } from "../engine/engine.ts";
+import { loadFleet } from "./load.ts";
 
 export class PinsError extends Schema.TaggedError<PinsError>()("PinsError", {
 	message: Schema.String,
@@ -154,19 +155,15 @@ export const completePins = Effect.fn("completePins")(function* (root: string, f
 });
 
 /**
- * Moves the named pins forward, or all of them when none are named, and
- * prints what changed: inputs by name to their latest revisions, release
- * sources by repository or binary to their latest versions. `build` is the
- * fleet's build, locked to `pins`.
+ * Moves the fleet's pins forward, the named ones or all of them, and prints
+ * what changed: inputs by name to their latest revisions, release sources by
+ * repository or binary to their latest versions. It touches nothing but the
+ * pins: no machine, identity or secret.
  */
-export const updatePins = Effect.fn("updatePins")(function* (
-	root: string,
-	fleet: Fleet,
-	build: Build,
-	pins: Pins,
-	names: ReadonlyArray<string>,
-) {
+export const update = Effect.fn("update")(function* (root: string, names: ReadonlyArray<string>) {
 	const engine = yield* Engine;
+	const fleet = yield* loadFleet(root);
+	const pins = yield* completePins(root, fleet);
 	const inputs = Object.keys(pins.inputs.nodes[pins.inputs.root]?.inputs ?? {});
 	const declared = declaredReleases(fleet);
 
@@ -193,7 +190,7 @@ export const updatePins = Effect.fn("updatePins")(function* (
 
 	const lock =
 		movedInputs.length > 0
-			? yield* engine.updateInputs(build, everything ? [] : movedInputs)
+			? yield* engine.updateInputs(pins.inputs, everything ? [] : movedInputs)
 			: pins.inputs;
 
 	const releases = yield* Effect.forEach(moved, (release) =>

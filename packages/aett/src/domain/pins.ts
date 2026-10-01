@@ -109,7 +109,9 @@ export const mergeInputs = (pinned: InputsLock, defaults: InputsLock) => {
 
 		const target = free(name, 2);
 
+		// Taken before following its inputs, so none of them can take its name.
 		renamed.set(name, target);
+		nodes.set(target, {});
 
 		const inputs = Object.fromEntries(
 			Object.entries(node?.inputs ?? {}).map(([input, ref]) => [
