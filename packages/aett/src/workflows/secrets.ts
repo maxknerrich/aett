@@ -94,8 +94,9 @@ const store = Effect.fn("store")(function* (
  * Brings the machine secrets up to date for a build: asks for a required one
  * that a machine the build covers reads and the fleet lacks, says which
  * optional ones are missing, and encrypts each one the fleet has to the
- * operators and the machines that read it now, decrypting it only when they
- * changed. Returns the names of the secrets that exist.
+ * operators and the machines that read it now, none left included,
+ * decrypting it only when they changed. Returns the names of the secrets that
+ * exist.
  */
 export const shareSecrets = Effect.fn("shareSecrets")(function* (
 	root: string,
@@ -123,7 +124,7 @@ export const shareSecrets = Effect.fn("shareSecrets")(function* (
 				),
 	);
 
-	const present = yield* Effect.filter(wanted, (secret) =>
+	const present = yield* Effect.filter(machineSecrets(fleet), (secret) =>
 		fs.exists(path.join(root, secretFile(secret))),
 	);
 

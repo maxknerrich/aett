@@ -151,7 +151,8 @@ in
 
     system.systemBuilderCommands = "ln -s ${boot} $out/aett-boot";
 
-    # mosh-server answers on the ports its host forwards, unless the client asks for others.
+    # mosh-server answers on the ports its host forwards, unless the client asks for others. mosh's
+    # client sends to the address SSH reached, the host's, which forwards them here.
     environment.systemPackages = lib.mkIf (cfg.forwards != null) [
       (lib.hiPrio (
         pkgs.writeShellScriptBin "mosh-server" ''
