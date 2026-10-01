@@ -216,7 +216,12 @@ export interface HomePlan {
 	 * which they may only seem to be in place.
 	 */
 	readonly write: ReadonlyArray<Entry>;
-	/** Paths aett placed that left their sets and are still on the machine. */
+	/**
+	 * Paths aett placed that left their sets and are still on the machine.
+	 * Those beneath a link of the set already in place, as after an
+	 * interrupted sync, are only forgotten: what reads there now is the link
+	 * target's.
+	 */
 	readonly remove: ReadonlyArray<string>;
 	/**
 	 * Paths of `write` and `remove` that are not what aett left on the machine,
@@ -248,8 +253,20 @@ export const planSync = (
 		return found !== undefined && found !== manifest.get(path) && found !== next.get(path);
 	};
 
+	const linksInPlace = desired.flatMap((entry) =>
+		Entry.$match(entry, {
+			File: () => [],
+			Link: ({ path }) => (current.get(path) === next.get(path) ? [path] : []),
+		}),
+	);
+
 	const remove = [...manifest.keys()]
-		.filter((path) => !next.has(path) && current.has(path))
+		.filter(
+			(path) =>
+				!next.has(path) &&
+				current.has(path) &&
+				!linksInPlace.some((link) => path.startsWith(`${link}/`)),
+		)
 		.toSorted();
 
 	const write = desired.filter(

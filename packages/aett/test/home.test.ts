@@ -202,6 +202,20 @@ describe("planSync", () => {
 		});
 	});
 
+	it("forgets what an interrupted sync left beneath a link it already placed", () => {
+		const shared = link("config", "shared");
+		const settings = file("config/settings", "same");
+
+		// The link replaced the directory, so config/settings now reads shared/settings.
+		expect(planSync([shared], at(settings), at(shared, settings))).toEqual({
+			write: [],
+			remove: [],
+			changedLocally: [],
+			manifest: Option.some(at(shared)),
+			changes: false,
+		});
+	});
+
 	it("rewrites a link whose target or a file whose executable bit changed", () => {
 		const moved = link(".claude/CLAUDE.md", "../.agents/AGENTS.md");
 		const script = file(".local/bin/hello", "echo hi", true);
