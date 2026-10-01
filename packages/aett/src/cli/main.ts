@@ -22,9 +22,9 @@ Command.run(command({ directory, version: metadata.version }), { version: metada
 	Effect.catchTag(
 		[
 			"ApplyError",
+			"CreateError",
 			"EngineError",
 			"FleetError",
-			"InitError",
 			"InstallError",
 			"PlatformError",
 			"SecretsError",

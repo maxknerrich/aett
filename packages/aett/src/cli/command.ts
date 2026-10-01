@@ -1,9 +1,10 @@
 import { Effect, Path, Redacted } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { installerHost, parseHost } from "../domain/host.ts";
+import { parseMachineFlag } from "../domain/scaffold.ts";
 import { apply } from "../workflows/apply.ts";
 import { compile } from "../workflows/compile.ts";
-import { type AettPackage, init } from "../workflows/init.ts";
+import { type AettPackage, create } from "../workflows/create.ts";
 import { discover, install } from "../workflows/install.ts";
 
 // Every command works on the fleet in the current directory.
@@ -82,17 +83,42 @@ export const command = (aett: AettPackage) =>
 		Command.withDescription("Manage macOS and NixOS fleets."),
 		Command.withSubcommands([
 			Command.make(
-				"init",
+				"create",
 				{
+					name: Argument.String("name").pipe(
+						Argument.withDescription(
+							"The fleet's name, which is also its new directory. aett asks when it is missing.",
+						),
+						Argument.optional,
+					),
 					sshKey: Flag.String("ssh-key").pipe(
 						Flag.withDescription(
 							"The operator's OpenSSH public key, as a key line or a .pub file. Defaults to a key from the SSH agent.",
 						),
 						Flag.optional,
 					),
+					machines: Flag.String("machine").pipe(
+						Flag.withDescription(
+							"A first machine as name:role, or name:role:encrypted for an encrypted disk. Repeat it for more; aett asks when there is none.",
+						),
+						Flag.filterMap(
+							parseMachineFlag,
+							() =>
+								"Expected name:role or name:role:encrypted, with role hypervisor, server or computer",
+						),
+						Flag.atLeast(0),
+					),
+					noMachines: Flag.Boolean("no-machines").pipe(
+						Flag.withDescription("Start with no machines instead of asking for them."),
+						Flag.withDefault(false),
+					),
 				},
-				({ sshKey }) => Effect.flatMap(fleetRoot, (root) => init(root, aett, sshKey)),
-			).pipe(Command.withDescription("Start a fleet in the current directory.")),
+				(options) => Effect.flatMap(fleetRoot, (cwd) => create(cwd, aett, options)),
+			).pipe(
+				Command.withDescription(
+					"Start a fleet in a new directory: keys, first machines, Git and aett installed.",
+				),
+			),
 			Command.make("compile", {}, () => Effect.flatMap(fleetRoot, compile)).pipe(
 				Command.withDescription(
 					"Write .aett/build/ from fleet.ts and state, and evaluate the machines it lists.",

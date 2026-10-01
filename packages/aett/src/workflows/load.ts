@@ -20,7 +20,7 @@ export const loadFleet = Effect.fn("loadFleet")(function* (root: string) {
 
 	if (!(yield* fs.exists(file))) {
 		return yield* new FleetError({
-			message: `There is no fleet.ts in ${root}. Run aett init to start a fleet here.`,
+			message: `There is no fleet.ts in ${root}. Run aett from a fleet directory, or start one with aett create.`,
 		});
 	}
 
@@ -28,7 +28,7 @@ export const loadFleet = Effect.fn("loadFleet")(function* (root: string) {
 		try: () => createRequire(file).resolve("aett"),
 		catch: () =>
 			new FleetError({
-				message: `fleet.ts imports aett, which is not installed in ${root}. Install the fleet's dependencies first, for example with pnpm install.`,
+				message: `fleet.ts imports aett, which is not installed in ${root}. Install the fleet's dependencies first, for example with npm install.`,
 			}),
 	});
 
@@ -74,7 +74,7 @@ export const readState = Effect.fn("readState")(function* (root: string, fleet: 
 	if (!(yield* fs.exists(operatorFile))) {
 		return yield* new FleetError({
 			message:
-				"state/operator.json is missing. It holds the operator's SSH and age keys and aett init writes it.",
+				"state/operator.json is missing. It holds the operator's SSH and age keys and aett create writes it.",
 		});
 	}
 

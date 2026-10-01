@@ -70,6 +70,7 @@
             pkgs.openssh
             pkgs.sops
             pkgs.age
+            pkgs.gitMinimal
           ];
         };
     in

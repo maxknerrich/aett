@@ -84,7 +84,7 @@ export class Secrets extends Context.Service<
 					ageKey,
 					() =>
 						new SecretsError({
-							message: `${file} is encrypted. Set SOPS_AGE_KEY to your private age key (AGE-SECRET-KEY-1…), which aett init showed.`,
+							message: `${file} is encrypted. Set SOPS_AGE_KEY to your private age key (AGE-SECRET-KEY-1…), which aett create showed.`,
 						}),
 				);
 
@@ -96,7 +96,7 @@ export class Secrets extends Context.Service<
 				// sops exits with 128 when none of its keys opens the file.
 				if (result.exitCode === 128) {
 					return yield* new SecretsError({
-						message: `SOPS_AGE_KEY cannot decrypt ${file}. It must hold your private age key, which aett init showed.`,
+						message: `SOPS_AGE_KEY cannot decrypt ${file}. It must hold your private age key, which aett create showed.`,
 					});
 				}
 
