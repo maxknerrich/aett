@@ -65,6 +65,11 @@ type Known<Config> = {
 	? { readonly system: { readonly [Key in Exclude<keyof System, keyof AnySystem>]: never } }
 	: unknown);
 
+// The function picks the role, so its config can't name one.
+interface NoRole {
+	readonly role?: never;
+}
+
 export type HypervisorConfig = BareMetal<NixosSystem>;
 
 export type ServerConfig = BareMetal<NixosSystem> | Vm;
@@ -74,7 +79,7 @@ export type ComputerConfig = BareMetal<ComputerSystem> | Mac;
 /** An appliance that only runs VMs, like Proxmox. Stacks never reach it. */
 export function hypervisor(): { readonly role: "hypervisor" };
 export function hypervisor<const Config extends HypervisorConfig>(
-	config: Config & Known<Config>,
+	config: Config & Known<Config> & NoRole,
 ): Config & { readonly role: "hypervisor" };
 export function hypervisor(config: HypervisorConfig = {}) {
 	return { ...config, role: "hypervisor" as const };
@@ -83,7 +88,7 @@ export function hypervisor(config: HypervisorConfig = {}) {
 /** A headless machine reached over SSH, on bare metal or as a VM with `host`. Its stacks make it what it is. */
 export function server(): { readonly role: "server" };
 export function server<const Config extends ServerConfig>(
-	config: Config & Known<Config>,
+	config: Config & Known<Config> & NoRole,
 ): Config & { readonly role: "server" };
 export function server(config: ServerConfig = {}) {
 	return { ...config, role: "server" as const };
@@ -92,7 +97,7 @@ export function server(config: ServerConfig = {}) {
 /** A machine someone sits in front of: bare-metal NixOS, or a Mac with `os: "macos"`. Always graphical. */
 export function computer(): { readonly role: "computer" };
 export function computer<const Config extends ComputerConfig>(
-	config: Config & Known<Config>,
+	config: Config & Known<Config> & NoRole,
 ): Config & { readonly role: "computer" };
 export function computer(config: ComputerConfig = {}) {
 	return { ...config, role: "computer" as const };

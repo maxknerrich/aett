@@ -116,6 +116,13 @@ describe("decodeFleet", () => {
 			},
 		});
 
+		const renamed = fleet({
+			machines: {
+				// @ts-expect-error the role function sets the role
+				box: server({ role: "computer", system: { encrypted: true } }),
+			},
+		});
+
 		const inline = fleet({
 			machines: {
 				// @ts-expect-error a machine written out by hand gets the same checks
@@ -135,6 +142,7 @@ describe("decodeFleet", () => {
 		expect(problems(mixed)).toContain("machines.box.system.memory: Unexpected key");
 		expect(problems(unknownKeys)).toContain("machines.box.system.typo: Unexpected key");
 		expect(problems(unknownKeys)).toContain("machines.nas.packages: Unexpected key");
+		expect(Result.getOrThrow(decodeFleet(renamed)).machines[0]?.role).toBe("server");
 		expect(problems(inline)).toContain("machines.box.system.memory: Unexpected key");
 		expect(problems(inline)).toContain("machines.nas.packages: Unexpected key");
 	});
