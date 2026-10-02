@@ -177,6 +177,20 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 		);
 	}
 
+	// The guest's LAN forwards are part of its host's system, which applying the guest leaves alone.
+	const homed = run.fleet.machines.some(
+		(machine) => machine.name === name && machine.home.length > 0,
+	);
+
+	if (
+		homed &&
+		(yield* engine.systemPath(run.build, host)) !== (yield* engine.currentSystem(connection))
+	) {
+		yield* Console.log(
+			`${host} doesn't run what fleet.ts builds for it yet. It forwards ${name}'s SSH and mosh from the LAN, so apply ${host} too.`,
+		);
+	}
+
 	const system = yield* engine.buildGuest(run.build, name, connection);
 
 	// Checked again after the build: a host switch that lists it for the first time starts it.

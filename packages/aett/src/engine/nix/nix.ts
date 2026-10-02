@@ -343,6 +343,14 @@ export const nixEngine = (flake: string) =>
 				]);
 			});
 
+			const systemPath = Effect.fn("NixEngine.systemPath")(function* (build: Build, name: string) {
+				return yield* nix([
+					"eval",
+					"--raw",
+					`${flakeAt(build.directory)}#nixosConfigurations.${name}.config.system.build.toplevel.outPath`,
+				]);
+			});
+
 			// Copies the build and its locked inputs into the target's store; returns the build's store path there.
 			// nix reaches the target through its master connection: the pinned ssh first on PATH and the
 			// connection's options in NIX_SSHOPTS, which nix splits like a shell. With more than one
@@ -467,6 +475,7 @@ export const nixEngine = (flake: string) =>
 				discovered,
 				emit,
 				evaluate,
+				systemPath,
 				buildSystem,
 				currentSystem,
 				changes,

@@ -11,7 +11,7 @@ import {
 	Stream,
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { formatHost, type Host } from "../domain/host.ts";
+import { formatHost, type Host, sshConfigPath } from "../domain/host.ts";
 import { Engine, type EngineError } from "../engine/engine.ts";
 
 export class SshError extends Schema.TaggedError<SshError>()("SshError", {
@@ -36,10 +36,6 @@ export interface Connection {
 /** Quotes an argument for a remote shell command. */
 export const shellQuote = (value: string) =>
 	/^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
-
-/** Quotes a path as an ssh_config value, which ssh splits on spaces, unescapes and expands % tokens in. */
-export const sshConfigPath = (value: string) =>
-	`"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%")}"`;
 
 // How aett logs in to a machine: only the agent's keys, and only aett's known hosts, keyed by the machine's name.
 const machineOptions = (name: string, knownHosts: string) => [

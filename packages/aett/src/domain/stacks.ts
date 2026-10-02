@@ -21,13 +21,20 @@ export const Services = Schema.Struct({
 
 export interface Services extends Schema.Schema.Type<typeof Services> {}
 
+/** A dotfile set's name: a directory under the fleet's home/. */
+export const SetName = Schema.String.check(
+	Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/, {
+		expected: 'a dotfile set, the name of a directory under home/ such as "shell"',
+	}),
+);
+
 /** What a stack puts on a machine. */
 export const StackContent = Schema.Struct({
 	packages: Schema.optionalKey(Schema.Array(PackagePath)),
 	fast: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
 	apps: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
 	services: Schema.optionalKey(Services),
-	home: Schema.optionalKey(Schema.Literal(true)),
+	home: Schema.optionalKey(Schema.Array(SetName)),
 });
 
 export interface StackContent extends Schema.Schema.Type<typeof StackContent> {}
@@ -49,7 +56,8 @@ export interface Resolved {
 	readonly services: ReadonlyArray<keyof Services>;
 	/** The services some stack turns off, which role defaults can't add either. */
 	readonly off: ReadonlyArray<keyof Services>;
-	readonly home: boolean;
+	/** The dotfile sets; any of them gives the machine a home. */
+	readonly home: ReadonlyArray<string>;
 }
 
 /** The machine a stack is resolved for: its name and which of the stack's top-level keys reach it. */
@@ -63,7 +71,7 @@ const serviceNames = Struct.keys(Services.fields);
 /**
  * Combines every stack for one machine. Within a stack, `machines.<name>`
  * extends the top level and wins for a service; top-level `apps` reach only
- * computers and top-level `home` only servers. Across stacks, lists add up and
+ * computers. Across stacks, lists add up and
  * a service any stack turns off stays off. The result doesn't depend on the
  * order of the stacks.
  */
@@ -97,7 +105,6 @@ export const resolveStacks = (stacks: ReadonlyArray<Stack>, target: Target): Res
 			return !said.includes(false) && said.some((setting) => setting !== undefined);
 		}),
 		off: serviceNames.filter((service) => settings(service).includes(false)),
-		home:
-			!target.computer && contents.some(({ top, own }) => top.home === true || own?.home === true),
+		home: union((content) => content.home),
 	};
 };

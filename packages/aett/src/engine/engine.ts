@@ -47,7 +47,7 @@ export interface InstallSecrets {
 export class Engine extends Context.Service<
 	Engine,
 	{
-		/** Directory of the pinned tools aett runs on the controller: ssh, ssh-add, ssh-keygen, sops, age, age-keygen, ssh-to-age and git. */
+		/** Directory of the pinned tools aett runs on the controller: ssh, ssh-add, ssh-keygen, sops, age, age-keygen, ssh-to-age, mkpasswd and git. */
 		readonly tools: Effect.Effect<string, EngineError>;
 		/** Runs the installer's hardware probe on `target`, saves its report in `<root>/state/<name>/` and returns what install needs from it. */
 		readonly discover: (
@@ -73,6 +73,8 @@ export class Engine extends Context.Service<
 		) => Effect.Effect<Build, PlatformError.PlatformError>;
 		/** Checks a machine's system on the controller, before any machine is contacted. Returns what it evaluated. */
 		readonly evaluate: (build: Build, name: string) => Effect.Effect<string, EngineError>;
+		/** The system a machine would run if built from `build`, computed on the controller without building it. */
+		readonly systemPath: (build: Build, name: string) => Effect.Effect<string, EngineError>;
 		/** Copies the build to `target` and builds the machine's system there, streaming the log. Returns the system. */
 		readonly buildSystem: (
 			build: Build,

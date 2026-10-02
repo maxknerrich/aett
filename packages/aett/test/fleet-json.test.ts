@@ -75,6 +75,7 @@ describe("fleetJson", () => {
 					channel: "stable",
 					packages: [],
 					tailscale: { tag: "tag:hypervisor", authKey: true },
+					user: null,
 					disk: { device: disk, encrypted: false },
 				},
 				web: {
@@ -82,6 +83,7 @@ describe("fleetJson", () => {
 					channel: "unstable",
 					packages: ["htop"],
 					tailscale: null,
+					user: null,
 					disk: { device: disk, encrypted: true },
 				},
 			},
@@ -116,15 +118,18 @@ describe("fleetJson", () => {
 				channel: "stable",
 				packages: [],
 				tailscale: { tag: "tag:hypervisor", authKey: false },
+				user: null,
 				disk: { device: disk, encrypted: false },
 				guests: ["vm"],
 				network: { address: "10.100.1.1", prefixLength: 24 },
+				forwards: [],
 			},
 			vm: {
 				role: "server",
 				channel: "stable",
 				packages: [],
 				tailscale: { tag: "tag:server", authKey: false },
+				user: null,
 				vm: {
 					host: "box",
 					cpu: 4,
@@ -135,6 +140,7 @@ describe("fleetJson", () => {
 					gateway: "10.100.1.1",
 					mac: "02:00:0a:64:01:02",
 					tap: "vm-2",
+					forwards: null,
 				},
 			},
 		});

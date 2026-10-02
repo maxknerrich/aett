@@ -1,5 +1,6 @@
 import { Option, Result } from "effect";
 import type { Fleet } from "./fleet.ts";
+import { sshConfigPath } from "./host.ts";
 import type { MachineRecord, State } from "./state.ts";
 
 // Guest networks: each machine that runs VMs gets one bridge with the subnet
@@ -31,10 +32,11 @@ const firstFree = (from: number, taken: ReadonlySet<number>) =>
 
 /**
  * What state still lacks for the fleet's VMs: a subnet for each machine that
- * runs one, and a host and an address on its subnet for each VM. Earlier
- * choices stay, and guests that state still records keep their addresses
- * until they are destroyed, declared or not. Returns the fields to add to
- * each machine's record.
+ * runs one, a host and an address on its subnet for each VM, and for a VM with
+ * a home the ports its host forwards to its SSH and mosh. Earlier choices
+ * stay, and guests that state still records keep their addresses until they
+ * are destroyed, declared or not. Returns the fields to add to each machine's
+ * record.
  */
 export const allocate = (
 	fleet: Fleet,
@@ -43,7 +45,9 @@ export const allocate = (
 	const records = [...state.machines];
 
 	const vms = fleet.machines
-		.flatMap(({ name, vm }) => Option.toArray(Option.map(vm, ({ host }) => ({ name, host }))))
+		.flatMap(({ name, vm, home }) =>
+			Option.toArray(Option.map(vm, ({ host }) => ({ name, host, home: home.length > 0 }))),
+		)
 		.toSorted((a, b) => a.name.localeCompare(b.name));
 
 	const moved = vms.find(({ name, host }) => {
@@ -96,20 +100,41 @@ export const allocate = (
 	}
 
 	for (const vm of vms) {
-		if (state.machines.get(vm.name)?.address !== undefined) continue;
+		const recorded = state.machines.get(vm.name);
+		let placed = { host: vm.host, address: recorded?.address ?? "" };
 
-		const subnet = subnets.get(vm.host) ?? 0;
-		const guest = firstFree(2, used.get(vm.host) ?? new Set());
+		if (recorded?.address === undefined) {
+			const guest = firstFree(2, used.get(vm.host) ?? new Set());
 
-		if (Option.isNone(guest))
-			return Result.fail(`${vm.host} has no free guest address left for ${vm.name}.`);
+			if (Option.isNone(guest))
+				return Result.fail(`${vm.host} has no free guest address left for ${vm.name}.`);
 
-		take(vm.host, guest.value);
-		changes.set(vm.name, { host: vm.host, address: `10.100.${subnet}.${guest.value}` });
+			take(vm.host, guest.value);
+			placed = { host: vm.host, address: `10.100.${subnets.get(vm.host) ?? 0}.${guest.value}` };
+			changes.set(vm.name, placed);
+		}
+
+		const parts = addressParts(placed.address);
+
+		if (vm.home && recorded?.forwards === undefined && Option.isSome(parts)) {
+			const forwards = forwardsFor(parts.value.guest);
+
+			changes.set(
+				vm.name,
+				recorded?.address === undefined ? { ...placed, forwards } : { forwards },
+			);
+		}
 	}
 
 	return Result.succeed(changes);
 };
+
+// The host ports that reach the guest numbered `guest` on its host's subnet: one for SSH and ten
+// for mosh. Unique per host, and clear of the host's own mosh ports, 60000 to 61000 inclusive.
+const forwardsFor = (guest: number) => ({
+	ssh: 2200 + guest,
+	mosh: [61010 + (guest - 2) * 10, 61010 + (guest - 2) * 10 + 9] as const,
+});
 
 /** How a guest sits on its host's bridge, derived from its recorded address. */
 export interface GuestInterface {
@@ -138,3 +163,38 @@ export const guestInterface = (address: string): Option.Option<GuestInterface> =
 /** The bridge address of the host whose recorded subnet is `subnet`, if it is one aett hands out. */
 export const bridgeAddress = (subnet: string | undefined) =>
 	Option.map(subnetIndex(subnet), (index) => ({ address: `10.100.${index}.1`, prefixLength: 24 }));
+
+/**
+ * state/ssh_config: a Host block per guest with a home, which reaches its SSH
+ * through the port its host forwards on the LAN and checks its key against
+ * aett's known hosts at `knownHosts`. The forwards are IPv4 only, so it keeps
+ * SSH off the host's IPv6 addresses. The operator includes it from
+ * ~/.ssh/config. Empty when no guest has a home.
+ */
+export const sshConfig = (fleet: Fleet, state: State, knownHosts: string) => {
+	const blocks = fleet.machines.flatMap(({ name, vm, home }) => {
+		const recorded = state.machines.get(name);
+
+		return Option.toArray(
+			Option.all({
+				user: fleet.user,
+				host: Option.map(vm, ({ host }) => host),
+				forwards: Option.filter(Option.fromUndefinedOr(recorded?.forwards), () => home.length > 0),
+			}),
+		).map(({ user, host, forwards }) =>
+			[
+				`Host ${name}`,
+				`\tHostName ${host}.local`,
+				`\tPort ${forwards.ssh}`,
+				"\tAddressFamily inet",
+				`\tUser ${user}`,
+				`\tHostKeyAlias ${name}`,
+				`\tUserKnownHostsFile ${sshConfigPath(knownHosts)}`,
+			].join("\n"),
+		);
+	});
+
+	return blocks.length === 0
+		? ""
+		: `# Written by aett: the fleet's VMs through their hosts' forwards. Include it from ~/.ssh/config.\n\n${blocks.join("\n\n")}\n`;
+};

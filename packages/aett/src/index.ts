@@ -134,12 +134,17 @@ interface Content {
 	readonly fast?: ReadonlyArray<string>;
 	/** Catalog services by name; false keeps one off. */
 	readonly services?: Services;
+	/**
+	 * Dotfile sets by name, each a directory under the fleet's home/. A machine
+	 * with at least one set has the fleet's user and those sets in its home.
+	 */
+	readonly home?: ReadonlyArray<string>;
 }
 
-// What a stack can put on one named machine: apps only on computers, a home only on servers.
+// What a stack can put on one named machine: apps only on computers.
 type ContentFor<Machine> = Machine extends { readonly role: "computer" }
-	? Content & { readonly apps?: ReadonlyArray<string>; readonly home?: never }
-	: Content & { readonly home?: true; readonly apps?: never };
+	? Content & { readonly apps?: ReadonlyArray<string> }
+	: Content & { readonly apps?: never };
 
 // The machines stacks reach: everything but hypervisors.
 type Reached<Machines> = {
@@ -151,8 +156,6 @@ type Reached<Machines> = {
 export type Stack<Machines> = Content & {
 	/** GUI applications; they reach only computers. */
 	readonly apps?: ReadonlyArray<string>;
-	/** A personal user, a home that survives reboots, dotfiles and home backup; reaches only servers. */
-	readonly home?: true;
 	// With nothing to reach, an empty mapped type would accept any name.
 	readonly machines?: [Reached<Machines>] extends [never]
 		? { readonly [name: string]: never }
@@ -160,17 +163,21 @@ export type Stack<Machines> = Content & {
 };
 
 /**
- * Declares the fleet; fleet.ts default-exports the result. `machines` says
- * what exists, keyed by hostname; `stacks` says what is on it.
+ * Declares the fleet; fleet.ts default-exports the result. `user` names the
+ * fleet's one person, `machines` says what exists, keyed by hostname, and
+ * `stacks` says what is on it.
  *
  * ```ts
  * export default fleet({
+ * 	user: "mkn",
  * 	machines: { kronos: hypervisor(), hades: server({ host: "kronos" }) },
- * 	stacks: { tools: { packages: ["git"] } },
+ * 	stacks: { tools: { packages: ["git"], home: ["shell"] } },
  * })
  * ```
  */
 export const fleet = <const Machines extends { readonly [name: string]: Declared }>(declaration: {
+	/** The login name of the fleet's user, which every machine with a home has. Required once one does. */
+	readonly user?: string;
 	readonly machines: Machines &
 		CheckedHosts<Machines> & { readonly [Name in keyof Machines]: Known<Machines[Name]> };
 	readonly stacks?: { readonly [name: string]: Stack<NoInfer<Machines>> };

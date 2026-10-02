@@ -85,6 +85,8 @@
             ./modules/machine.nix
             ./modules/persist.nix
             ./modules/tailscale.nix
+            ./modules/user.nix
+            ./modules/shell.nix
             {
               _file = "fleet.ts -> machine(${name})";
               aett = declared // {
@@ -121,6 +123,7 @@
             pkgs.sops
             pkgs.age
             pkgs.ssh-to-age
+            pkgs.mkpasswd
             pkgs.gitMinimal
           ];
         };

@@ -39,3 +39,7 @@ export const trustHost = (knownHosts: string, name: string, publicKey: string) =
 /** Removes a machine's entries from a known_hosts file's content. */
 export const forgetHost = (knownHosts: string, name: string) =>
 	[...otherLines(knownHosts, name), ""].join("\n");
+
+/** Quotes a path as an ssh_config value, which ssh splits on spaces, unescapes and expands % tokens in. */
+export const sshConfigPath = (value: string) =>
+	`"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%")}"`;

@@ -34,6 +34,7 @@ describe("decodeFleet", () => {
 				vm: Option.none(),
 				tailscale: true,
 				packages: [],
+				home: [],
 				unsupported: [],
 			},
 			{
@@ -45,6 +46,7 @@ describe("decodeFleet", () => {
 				vm: Option.none(),
 				tailscale: true,
 				packages: ["fish", "gh", "git"],
+				home: [],
 				unsupported: [],
 			},
 			{
@@ -56,6 +58,7 @@ describe("decodeFleet", () => {
 				vm: Option.some({ host: "kronos", cpu: 2, memory: 8192, disk: 20480 }),
 				tailscale: true,
 				packages: ["fish"],
+				home: [],
 				unsupported: [],
 			},
 			{
@@ -67,6 +70,7 @@ describe("decodeFleet", () => {
 				vm: Option.none(),
 				tailscale: true,
 				packages: ["fish", "gh", "git"],
+				home: [],
 				unsupported: ["Macs", "apps"],
 			},
 		]);
@@ -178,14 +182,6 @@ describe("decodeFleet", () => {
 			},
 		});
 
-		const homeOnComputer = fleet({
-			machines,
-			stacks: {
-				// @ts-expect-error a computer always has a home
-				a: { machines: { laptop: { home: true } } },
-			},
-		});
-
 		const onlyHypervisors = fleet({
 			machines: { box: hypervisor() },
 			stacks: {
@@ -208,12 +204,17 @@ describe("decodeFleet", () => {
 		expect(problems(appsOnServer)).toBe(
 			"stacks.a.machines.nas.apps: nas is a server; apps need a computer",
 		);
-		expect(problems(homeOnComputer)).toBe(
-			"stacks.a.machines.laptop.home: laptop is a computer, which always has a home",
-		);
 		expect(problems(unknown)).toBe('stacks.a.machines.nope: There is no machine named "nope"');
 		expect(problems(onlyHypervisors)).toBe(
 			"stacks.a.machines.box: box is a hypervisor; stacks never reach hypervisors",
+		);
+	});
+
+	it("requires the fleet's user once a stack gives a machine a home", () => {
+		expect(
+			problems(fleet({ machines: { nas: server() }, stacks: { a: { home: ["shell"] } } })),
+		).toBe(
+			'fleet(): user is required, because a stack gives nas a home. Name the fleet\'s user, such as user: "you".',
 		);
 	});
 

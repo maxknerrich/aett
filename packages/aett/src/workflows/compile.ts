@@ -1,6 +1,6 @@
-import { Console, Effect, Option, Path } from "effect";
+import { Console, Effect, FileSystem, Option, Path } from "effect";
 import type { Fleet } from "../domain/fleet.ts";
-import { allocate } from "../domain/network.ts";
+import { allocate, sshConfig } from "../domain/network.ts";
 import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { ensureGuestKeys } from "./identity.ts";
@@ -15,6 +15,7 @@ import { shareSecrets } from "./secrets.ts";
  */
 export const emit = Effect.fn("emit")(function* (root: string) {
 	const engine = yield* Engine;
+	const path = yield* Path.Path;
 	const fleet = yield* loadFleet(root);
 	const recorded = yield* readState(root, fleet);
 
@@ -26,12 +27,32 @@ export const emit = Effect.fn("emit")(function* (root: string) {
 
 	const state = changes.size === 0 ? recorded : yield* readState(root, fleet);
 
+	yield* writeSshConfig(root, sshConfig(fleet, state, path.join(root, "state", "known_hosts")));
+
 	yield* ensureGuestKeys(root, fleet, state.operator.ageKeys);
 
 	const secrets = yield* shareSecrets(root, fleet, state);
 	const build = yield* engine.emit(root, fleet, state, secrets);
 
 	return { build, fleet, state };
+});
+
+// Writes state/ssh_config when it changes, and removes it once no guest has a home.
+const writeSshConfig = Effect.fn("writeSshConfig")(function* (root: string, content: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const file = path.join(root, "state", "ssh_config");
+	const exists = yield* fs.exists(file);
+
+	if (content === "") return yield* exists ? fs.remove(file) : Effect.void;
+
+	if (exists && (yield* fs.readFileString(file)) === content) return yield* Effect.void;
+
+	yield* fs.writeFileString(file, content);
+
+	return yield* Console.log(
+		"Wrote state/ssh_config. Include it from ~/.ssh/config to reach the fleet's VMs from the LAN.",
+	);
 });
 
 /**

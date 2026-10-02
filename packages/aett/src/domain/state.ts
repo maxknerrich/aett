@@ -50,6 +50,10 @@ export const MachineRecord = Schema.Struct({
 	// A VM: the machine it was placed on and its address on that machine's subnet.
 	host: Schema.optionalKey(Schema.String),
 	address: Schema.optionalKey(Schema.String),
+	// A VM with a home: the ports on its host that reach its SSH and its mosh range.
+	forwards: Schema.optionalKey(
+		Schema.Struct({ ssh: Schema.Int, mosh: Schema.Tuple([Schema.Int, Schema.Int]) }),
+	),
 	// The machine's tailnet address, once Tailscale reported one.
 	tailnet: Schema.optionalKey(Schema.String),
 });

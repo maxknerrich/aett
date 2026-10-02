@@ -7,6 +7,19 @@ in
 {
   options.aett = {
     guests = lib.mkOption { type = lib.types.listOf lib.types.str; };
+    # Ports on the host that reach a guest with a home: its SSH, and its mosh range on the same ports.
+    forwards = lib.mkOption {
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            address = lib.mkOption { type = lib.types.str; };
+            ssh = lib.mkOption { type = lib.types.port; };
+            mosh.from = lib.mkOption { type = lib.types.port; };
+            mosh.to = lib.mkOption { type = lib.types.port; };
+          };
+        }
+      );
+    };
     network = {
       address = lib.mkOption { type = lib.types.str; };
       prefixLength = lib.mkOption { type = lib.types.int; };
@@ -67,5 +80,21 @@ in
     # Forwarding carries what guests start, which the NAT module allows. Nothing reaches a guest
     # through the host otherwise, not even from a LAN machine that routes 10.100.0.0/16 here.
     networking.firewall.filterForward = true;
+
+    # Connections from the LAN to the host's own addresses on a forwarded port go to the guest; the
+    # forward chain lets them through as DNAT. Over the tailnet a guest is reached as itself, under
+    # its own ACL.
+    networking.nftables.tables.aett-forwards = lib.mkIf (cfg.forwards != [ ]) {
+      family = "ip";
+      content = ''
+        chain prerouting {
+          type nat hook prerouting priority dstnat; policy accept;
+          ${lib.concatMapStrings (forward: ''
+            iifname != { "guests", "tailscale0" } fib daddr type local tcp dport ${toString forward.ssh} dnat to ${forward.address}:22
+            iifname != { "guests", "tailscale0" } fib daddr type local udp dport ${toString forward.mosh.from}-${toString forward.mosh.to} dnat to ${forward.address}
+          '') cfg.forwards}
+        }
+      '';
+    };
   };
 }

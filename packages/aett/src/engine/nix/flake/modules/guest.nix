@@ -60,6 +60,18 @@ in
     mac = lib.mkOption { type = lib.types.str; };
     # The host's tap device; vm-host.nix bridges every vm-* device.
     tap = lib.mkOption { type = lib.types.str; };
+    # A guest with a home: the ports its host forwards to its SSH and mosh, from the LAN.
+    forwards = lib.mkOption {
+      type = lib.types.nullOr (
+        lib.types.submodule {
+          options = {
+            ssh = lib.mkOption { type = lib.types.port; };
+            mosh.from = lib.mkOption { type = lib.types.port; };
+            mosh.to = lib.mkOption { type = lib.types.port; };
+          };
+        }
+      );
+    };
   };
 
   config = {
@@ -138,6 +150,25 @@ in
     };
 
     system.systemBuilderCommands = "ln -s ${boot} $out/aett-boot";
+
+    # mosh-server answers on the ports its host forwards, unless the client asks for others. mosh's
+    # client sends to the address SSH reached, the host's, which forwards them here.
+    environment.systemPackages = lib.mkIf (cfg.forwards != null) [
+      (lib.hiPrio (
+        pkgs.writeShellScriptBin "mosh-server" ''
+          if [ "''${1:-}" = new ]; then
+            shift
+            exec ${pkgs.mosh}/bin/mosh-server new -p ${toString cfg.forwards.mosh.from}:${toString cfg.forwards.mosh.to} "$@"
+          fi
+          exec ${pkgs.mosh}/bin/mosh-server "$@"
+        ''
+      ))
+    ];
+    networking.firewall.allowedUDPPortRanges = lib.mkIf (cfg.forwards != null) [
+      {
+        inherit (cfg.forwards.mosh) from to;
+      }
+    ];
 
     networking.useDHCP = false;
     networking.nameservers = [
