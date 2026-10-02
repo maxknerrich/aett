@@ -1,6 +1,7 @@
 import { Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
+import type { Pins } from "../src/domain/pins.ts";
 import type { Operator, State } from "../src/domain/state.ts";
 import { fleetJson } from "../src/engine/nix/fleet-json.ts";
 import { computer, fleet, hypervisor, server } from "../src/index.ts";
@@ -16,6 +17,8 @@ const operator: Operator = {
 };
 
 const disk = "/dev/disk/by-id/nvme-test";
+
+const pins: Pins = { inputs: { nodes: { root: {} }, root: "root", version: 7 }, releases: {} };
 
 describe("fleetJson", () => {
 	it("lists only machines with facts and a disk recorded, and nothing aett can't build yet", () => {
@@ -42,7 +45,7 @@ describe("fleetJson", () => {
 			]),
 		};
 
-		expect(Object.keys(fleetJson(declared, state, []).machines)).toEqual(["box"]);
+		expect(Object.keys(fleetJson(declared, state, [], pins).machines)).toEqual(["box"]);
 	});
 
 	it("emits each machine's settings, the packages its stacks bring and Tailscale, with the operator's keys", () => {
@@ -67,13 +70,16 @@ describe("fleetJson", () => {
 			]),
 		};
 
-		expect(fleetJson(declared, state, ["tailscale/auth-key"])).toEqual({
+		expect(fleetJson(declared, state, ["tailscale/auth-key"], pins)).toEqual({
 			operator: { sshKeys: [sshKey] },
 			machines: {
 				box: {
 					role: "hypervisor",
 					channel: "stable",
 					packages: [],
+					unstable: [],
+					fast: [],
+					releases: [],
 					tailscale: { tag: "tag:hypervisor", authKey: true },
 					user: null,
 					disk: { device: disk, encrypted: false },
@@ -82,6 +88,9 @@ describe("fleetJson", () => {
 					role: "server",
 					channel: "unstable",
 					packages: ["htop"],
+					unstable: [],
+					fast: [],
+					releases: [],
 					tailscale: null,
 					user: null,
 					disk: { device: disk, encrypted: true },
@@ -112,11 +121,14 @@ describe("fleetJson", () => {
 			]),
 		};
 
-		expect(fleetJson(declared, state, []).machines).toEqual({
+		expect(fleetJson(declared, state, [], pins).machines).toEqual({
 			box: {
 				role: "hypervisor",
 				channel: "stable",
 				packages: [],
+				unstable: [],
+				fast: [],
+				releases: [],
 				tailscale: { tag: "tag:hypervisor", authKey: false },
 				user: null,
 				disk: { device: disk, encrypted: false },
@@ -128,6 +140,9 @@ describe("fleetJson", () => {
 				role: "server",
 				channel: "stable",
 				packages: [],
+				unstable: [],
+				fast: [],
+				releases: [],
 				tailscale: { tag: "tag:server", authKey: false },
 				user: null,
 				vm: {

@@ -5,13 +5,15 @@ import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { ensureGuestKeys } from "./identity.ts";
 import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
+import { completePins } from "./pins.ts";
 import { shareSecrets } from "./secrets.ts";
 
 /**
  * Loads the fleet and its state, records the guest addresses and host keys
  * state still lacks, encrypts the secrets machines read to the machines that
- * read them, and has the engine write the build to `<root>/.aett/build/`.
- * Returns the build with the fleet and state it was made from.
+ * read them, completes the fleet's pins, and has the engine write the build
+ * to `<root>/.aett/build/`. Returns the build with the fleet, state and pins
+ * it was made from.
  */
 export const emit = Effect.fn("emit")(function* (root: string) {
 	const engine = yield* Engine;
@@ -32,9 +34,10 @@ export const emit = Effect.fn("emit")(function* (root: string) {
 	yield* ensureGuestKeys(root, fleet, state.operator.ageKeys);
 
 	const secrets = yield* shareSecrets(root, fleet, state);
-	const build = yield* engine.emit(root, fleet, state, secrets);
+	const pins = yield* completePins(root, fleet);
+	const build = yield* engine.emit(root, fleet, state, secrets, pins);
 
-	return { build, fleet, state };
+	return { build, fleet, state, pins };
 });
 
 // Writes state/ssh_config when it changes, and removes it once no guest has a home.

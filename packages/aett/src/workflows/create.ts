@@ -25,6 +25,7 @@ import {
 } from "../domain/scaffold.ts";
 import { ageKeyPair, type Operator, SshPublicKey } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
+import { writePins } from "./pins.ts";
 
 export class CreateError extends Schema.TaggedError<CreateError>()("CreateError", {
 	message: Schema.String,
@@ -54,7 +55,8 @@ const isFleetName = Schema.is(FleetName);
 /**
  * Starts a fleet in a new directory under `cwd`: asks for its name, the
  * operator's SSH key and its first machines, writes fleet.ts, package.json,
- * .gitignore and state/operator.json, makes it a Git repository and installs
+ * .gitignore, state/operator.json and state/pins.json with aett's tested
+ * pins, makes it a Git repository and installs
  * aett with the package manager that started aett. A new age key encrypts the
  * fleet's secrets; its private half is shown once and never stored.
  */
@@ -150,6 +152,8 @@ export const create = Effect.fn("create")(function* (
 		`${JSON.stringify(manifest, null, "\t")}\n`,
 	);
 	yield* fs.writeFileString(path.join(root, ".gitignore"), "node_modules/\n.aett/build/\n");
+	// Before operator.json, so nothing that can fail comes between it and showing the private key.
+	yield* writePins(root, { inputs: yield* (yield* Engine).defaultInputs, releases: {} });
 	yield* fs.writeFileString(
 		path.join(root, "state", "operator.json"),
 		`${JSON.stringify({ sshKeys: [key], ageKeys: [age.publicKey] } satisfies Operator, null, "\t")}\n`,

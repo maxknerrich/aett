@@ -126,12 +126,41 @@ type CheckedHosts<Machines> = {
 		: unknown;
 };
 
+/** A tool from a GitHub release, for a stack's `fast` list. */
+export interface Release {
+	/** The repository, "owner/name". */
+	readonly github: string;
+	/**
+	 * The asset's name. `{version}` is the release's tag without a leading "v";
+	 * `{target}` is the platform's Rust target, musl first, then glibc, such as
+	 * "x86_64-unknown-linux-musl".
+	 */
+	readonly asset: string;
+	/** The binary in the asset, or the asset itself when it is no archive. */
+	readonly bin: string;
+}
+
+/**
+ * Declares a tool from a GitHub release for a stack's `fast` list. aett pins
+ * its version and hash in state/pins.json; aett update moves it.
+ *
+ * ```ts
+ * release({ github: "voidzero-dev/vite-plus", asset: "vp-{target}.tar.gz", bin: "vp" })
+ * ```
+ */
+export const release = (source: Release): Release => source;
+
 /** What a stack puts on a machine. */
 interface Content {
-	/** Pinned packages from nixpkgs, by attribute path. */
+	/** Pinned packages from nixpkgs on the machine's channel, by attribute path. */
 	readonly packages?: ReadonlyArray<string>;
-	/** Tools that follow their own update channel, such as agent CLIs. */
-	readonly fast?: ReadonlyArray<string>;
+	/** Pinned packages from nixpkgs unstable, whatever the machine's channel, for a tool whose stable version is too old. */
+	readonly unstable?: ReadonlyArray<string>;
+	/**
+	 * Dev tools from the fastest source: a release() declared here, or else
+	 * the llm-agents.nix package of that name. Pinned like everything else.
+	 */
+	readonly fast?: ReadonlyArray<string | Release>;
 	/** Catalog services by name; false keeps one off. */
 	readonly services?: Services;
 	/**

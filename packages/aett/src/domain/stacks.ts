@@ -1,4 +1,4 @@
-import { Schema, Struct } from "effect";
+import { Predicate, Schema, Struct } from "effect";
 
 /** A nixpkgs attribute path such as "htop" or "python3Packages.rich". */
 export const PackagePath = Schema.String.check(
@@ -21,6 +21,21 @@ export const Services = Schema.Struct({
 
 export interface Services extends Schema.Schema.Type<typeof Services> {}
 
+/** A tool from a GitHub release: its repository, the asset with {version} and {target}, and the binary in it. */
+export const Release = Schema.Struct({
+	github: Schema.String.check(
+		Schema.isPattern(/^[\w.-]+\/[\w.-]+$/, {
+			expected: 'a GitHub repository such as "owner/name"',
+		}),
+	),
+	asset: Schema.NonEmptyString,
+	bin: Schema.String.check(
+		Schema.isPattern(/^[\w.+-]+$/, { expected: "the name of a binary, without a path" }),
+	),
+});
+
+export interface Release extends Schema.Schema.Type<typeof Release> {}
+
 /** A dotfile set's name: a directory under the fleet's home/. */
 export const SetName = Schema.String.check(
 	Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/, {
@@ -31,7 +46,8 @@ export const SetName = Schema.String.check(
 /** What a stack puts on a machine. */
 export const StackContent = Schema.Struct({
 	packages: Schema.optionalKey(Schema.Array(PackagePath)),
-	fast: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
+	unstable: Schema.optionalKey(Schema.Array(PackagePath)),
+	fast: Schema.optionalKey(Schema.Array(Schema.Union([Schema.NonEmptyString, Release]))),
 	apps: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
 	services: Schema.optionalKey(Services),
 	home: Schema.optionalKey(Schema.Array(SetName)),
@@ -50,7 +66,11 @@ export interface Stack extends Schema.Schema.Type<typeof Stack> {}
 /** What the stacks put on one machine, all of them combined. */
 export interface Resolved {
 	readonly packages: ReadonlyArray<string>;
+	readonly unstable: ReadonlyArray<string>;
+	/** Fast tools from llm-agents.nix: the names no release on the machine provides. */
 	readonly fast: ReadonlyArray<string>;
+	/** Fast tools from GitHub releases, one per repository, sorted by it. */
+	readonly releases: ReadonlyArray<Release>;
 	readonly apps: ReadonlyArray<string>;
 	/** The services some stack adds and none turns off. */
 	readonly services: ReadonlyArray<keyof Services>;
@@ -71,9 +91,9 @@ const serviceNames = Struct.keys(Services.fields);
 /**
  * Combines every stack for one machine. Within a stack, `machines.<name>`
  * extends the top level and wins for a service; top-level `apps` reach only
- * computers. Across stacks, lists add up and
- * a service any stack turns off stays off. The result doesn't depend on the
- * order of the stacks.
+ * computers. Across stacks, lists add up and a service any stack turns off
+ * stays off. A fast tool that a release provides comes from the release. The
+ * result doesn't depend on the order of the stacks.
  */
 export const resolveStacks = (stacks: ReadonlyArray<Stack>, target: Target): Resolved => {
 	const contents = stacks.map((stack) => ({ top: stack, own: stack.machines?.[target.name] }));
@@ -95,9 +115,26 @@ export const resolveStacks = (stacks: ReadonlyArray<Stack>, target: Target): Res
 	const settings = (service: keyof Services) =>
 		contents.map(({ top, own }) => own?.services?.[service] ?? top.services?.[service]);
 
+	const fast = contents.flatMap(({ top, own }) => (top.fast ?? []).concat(own?.fast ?? []));
+
+	// decodeFleet makes sure every stack declares a repository's release the same way.
+	const releases = [
+		...new Map(
+			fast.flatMap((tool) => (Predicate.isString(tool) ? [] : [[tool.github, tool] as const])),
+		).values(),
+	].toSorted((a, b) => a.github.localeCompare(b.github));
+
+	const released = new Set(releases.map(({ bin }) => bin));
+
 	return {
 		packages: union((content) => content.packages),
-		fast: union((content) => content.fast),
+		unstable: union((content) => content.unstable),
+		fast: [
+			...new Set(
+				fast.flatMap((tool) => (Predicate.isString(tool) && !released.has(tool) ? [tool] : [])),
+			),
+		].toSorted(),
+		releases,
 		apps: target.computer ? union((content) => content.apps) : [],
 		services: serviceNames.filter((service) => {
 			const said = settings(service);

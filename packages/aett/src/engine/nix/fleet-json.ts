@@ -2,14 +2,26 @@ import { Option } from "effect";
 import type { Fleet, Machine } from "../../domain/fleet.ts";
 import { buildable } from "../../domain/build.ts";
 import { bridgeAddress, guestInterface } from "../../domain/network.ts";
+import type { Pins } from "../../domain/pins.ts";
 import type { State } from "../../domain/state.ts";
 
-// What every listed machine has: its settings, Tailscale, and the fleet's user when it has a home.
-// `secrets` are the machine secrets the fleet has.
-const base = (fleet: Fleet, machine: Machine, secrets: ReadonlyArray<string>) => ({
+// What every listed machine has: its settings and tools, Tailscale, and the fleet's user when it has a
+// home. `secrets` are the machine secrets the fleet has; `pins` hold each release's version and assets.
+const base = (fleet: Fleet, machine: Machine, secrets: ReadonlyArray<string>, pins: Pins) => ({
 	role: machine.role,
 	channel: machine.channel,
 	packages: machine.packages,
+	unstable: machine.unstable,
+	fast: machine.fast,
+	releases: machine.releases.flatMap(({ github }) =>
+		Option.toArray(
+			Option.map(Option.fromUndefinedOr(pins.releases[github]), ({ bin, version, assets }) => ({
+				bin,
+				version,
+				assets,
+			})),
+		),
+	),
 	tailscale: machine.tailscale
 		? { tag: `tag:${machine.role}`, authKey: secrets.includes("tailscale/auth-key") }
 		: null,
@@ -27,7 +39,12 @@ const base = (fleet: Fleet, machine: Machine, secrets: ReadonlyArray<string>) =>
  * listed and whose address is recorded. A listed host names its guests, its
  * bridge address and the ports it forwards to guests with a home.
  */
-export const fleetJson = (fleet: Fleet, state: State, secrets: ReadonlyArray<string>) => {
+export const fleetJson = (
+	fleet: Fleet,
+	state: State,
+	secrets: ReadonlyArray<string>,
+	pins: Pins,
+) => {
 	const included = buildable(fleet, state);
 	const metal = fleet.machines.filter(({ name, vm }) => included.has(name) && Option.isNone(vm));
 
@@ -74,14 +91,15 @@ export const fleetJson = (fleet: Fleet, state: State, secrets: ReadonlyArray<str
 				return [
 					machine.name,
 					{
-						...base(fleet, machine, secrets),
+						...base(fleet, machine, secrets, pins),
 						disk: { device: recorded?.disk ?? "", encrypted: machine.encrypted },
 						...network,
 					},
 				] as const;
 			}),
 			...guests.map(
-				({ machine, vm }) => [machine.name, { ...base(fleet, machine, secrets), vm }] as const,
+				({ machine, vm }) =>
+					[machine.name, { ...base(fleet, machine, secrets, pins), vm }] as const,
 			),
 		]),
 	};

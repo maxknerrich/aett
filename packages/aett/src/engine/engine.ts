@@ -2,6 +2,7 @@ import { Context, type Effect, type Option, type PlatformError, Schema } from "e
 import type { Connection, SshError } from "../adapters/ssh.ts";
 import type { Disk } from "../domain/disk.ts";
 import type { Fleet } from "../domain/fleet.ts";
+import type { InputsLock, Pins } from "../domain/pins.ts";
 import type { State } from "../domain/state.ts";
 
 export class EngineError extends Schema.TaggedError<EngineError>()("EngineError", {
@@ -60,17 +61,28 @@ export class Engine extends Context.Service<
 			root: string,
 			name: string,
 		) => Effect.Effect<boolean, PlatformError.PlatformError>;
+		/** The pins of the engine's inputs that aett is tested with, which a fleet starts from. */
+		readonly defaultInputs: Effect.Effect<InputsLock, EngineError | PlatformError.PlatformError>;
 		/**
-		 * Writes the build for `fleet` to `<root>/.aett/build/`. It covers the
-		 * machines aett can build and carries `secrets`, the machine secrets
-		 * the fleet has, for the machines that read them.
+		 * Writes the build for `fleet` to `<root>/.aett/build/`, locked to the
+		 * fleet's `pins`. It covers the machines aett can build and carries
+		 * `secrets`, the machine secrets the fleet has, for the machines that
+		 * read them.
 		 */
 		readonly emit: (
 			root: string,
 			fleet: Fleet,
 			state: State,
 			secrets: ReadonlyArray<string>,
+			pins: Pins,
 		) => Effect.Effect<Build, PlatformError.PlatformError>;
+		/** Moves the named inputs, or all of them when none are named, from `inputs` to their latest revisions. Returns the new pins. */
+		readonly updateInputs: (
+			inputs: InputsLock,
+			names: ReadonlyArray<string>,
+		) => Effect.Effect<InputsLock, EngineError | PlatformError.PlatformError>;
+		/** Downloads a file on the controller and returns the hash a build pins it by. */
+		readonly prefetch: (url: string) => Effect.Effect<string, EngineError>;
 		/** Checks a machine's system on the controller, before any machine is contacted. Returns what it evaluated. */
 		readonly evaluate: (build: Build, name: string) => Effect.Effect<string, EngineError>;
 		/** The system a machine would run if built from `build`, computed on the controller without building it. */

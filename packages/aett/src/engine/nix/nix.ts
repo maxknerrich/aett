@@ -3,6 +3,7 @@ import { Config, Console, Effect, FileSystem, Layer, Option, Path, Schema, Strea
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { type Connection, shellQuote } from "../../adapters/ssh.ts";
 import type { Fleet } from "../../domain/fleet.ts";
+import { InputsLock, type Pins } from "../../domain/pins.ts";
 import type { State } from "../../domain/state.ts";
 import { type Build, Engine, EngineError, type HostKey, type InstallSecrets } from "../engine.ts";
 import { FacterReport, installFacts } from "./facter.ts";
@@ -13,6 +14,11 @@ const flakeAt = (directory: string) => `path:${pathToFileURL(directory).pathname
 
 // What `nix flake archive --json` prints; `path` is the flake's own store path.
 const ArchiveOutput = Schema.fromJsonString(Schema.Struct({ path: Schema.String }));
+
+// What `nix store prefetch-file --json` prints; `hash` is the file's SRI hash.
+const PrefetchOutput = Schema.fromJsonString(Schema.Struct({ hash: Schema.String }));
+
+const Lock = Schema.fromJsonString(InputsLock);
 
 // What `nix build --print-out-paths` prints for the system alone: its store path.
 const SystemOutput = Schema.Tuple([Schema.String]);
@@ -277,17 +283,11 @@ export const nixEngine = (flake: string) =>
 			const discovered = (root: string, name: string) =>
 				fs.exists(path.join(root, "state", name, "facter.json"));
 
-			const emit = Effect.fn("NixEngine.emit")(function* (
-				root: string,
-				fleet: Fleet,
-				state: State,
-				secrets: ReadonlyArray<string>,
+			// Copies aett's flake to `directory`, locked to `inputs` instead of the lock it ships.
+			const copyFlake = Effect.fn("NixEngine.copyFlake")(function* (
+				directory: string,
+				inputs: InputsLock,
 			) {
-				const emitted = fleetJson(fleet, state, secrets);
-				const directory = path.join(root, ".aett", "build");
-
-				yield* fs.remove(directory, { recursive: true, force: true });
-				yield* fs.makeDirectory(path.dirname(directory), { recursive: true });
 				yield* fs.copy(flake, directory);
 
 				// Copies out of the Nix store are read-only, and the next emit has to delete them.
@@ -298,6 +298,41 @@ export const nixEngine = (flake: string) =>
 					(entry) =>
 						fs.stat(entry).pipe(Effect.flatMap(({ mode }) => fs.chmod(entry, mode | 0o200))),
 				);
+
+				yield* fs.writeFileString(
+					path.join(directory, "flake.lock"),
+					`${JSON.stringify(inputs, null, 2)}\n`,
+				);
+			});
+
+			// Reads a flake.lock, failing with an EngineError that names it when it isn't one.
+			const readLock = (file: string) =>
+				fs.readFileString(file).pipe(
+					Effect.flatMap(Schema.decodeUnknownEffect(Lock)),
+					Effect.catchTag("SchemaError", (error) =>
+						Effect.fail(
+							new EngineError({
+								message: `${file} is not a flake lock aett can read: ${error.message}`,
+							}),
+						),
+					),
+				);
+
+			const defaultInputs = readLock(path.join(flake, "flake.lock"));
+
+			const emit = Effect.fn("NixEngine.emit")(function* (
+				root: string,
+				fleet: Fleet,
+				state: State,
+				secrets: ReadonlyArray<string>,
+				pins: Pins,
+			) {
+				const emitted = fleetJson(fleet, state, secrets, pins);
+				const directory = path.join(root, ".aett", "build");
+
+				yield* fs.remove(directory, { recursive: true, force: true });
+				yield* fs.makeDirectory(path.dirname(directory), { recursive: true });
+				yield* copyFlake(directory, pins.inputs);
 
 				yield* fs.writeFileString(
 					path.join(directory, "fleet.json"),
@@ -469,8 +504,45 @@ export const nixEngine = (flake: string) =>
 				);
 			});
 
+			// Locks a scratch copy of the flake, which lists no machines, so nothing but the inputs is read.
+			const updateInputs = Effect.fn("NixEngine.updateInputs")(function* (
+				inputs: InputsLock,
+				names: ReadonlyArray<string>,
+			) {
+				const directory = path.join(
+					yield* fs.makeTempDirectoryScoped({ prefix: "aett-" }),
+					"flake",
+				);
+
+				yield* copyFlake(directory, inputs);
+				yield* nix(["flake", "update", ...names, "--flake", flakeAt(directory)]);
+
+				return yield* readLock(path.join(directory, "flake.lock"));
+			}, Effect.scoped);
+
+			const prefetch = Effect.fn("NixEngine.prefetch")(function* (url: string) {
+				const output = yield* nix([
+					"store",
+					"prefetch-file",
+					"--json",
+					"--hash-type",
+					"sha256",
+					url,
+				]);
+
+				return yield* Schema.decodeUnknownEffect(PrefetchOutput)(output).pipe(
+					Effect.map(({ hash }) => hash),
+					Effect.catchTag("SchemaError", () =>
+						Effect.fail(new EngineError({ message: `nix printed no hash for ${url}.` })),
+					),
+				);
+			});
+
 			return Engine.of({
 				tools,
+				defaultInputs,
+				updateInputs,
+				prefetch,
 				discover,
 				discovered,
 				emit,
