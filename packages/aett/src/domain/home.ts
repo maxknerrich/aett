@@ -210,19 +210,19 @@ export const fingerprint = (entry: Entry) =>
 
 /** What syncing a machine's home does. */
 export interface HomePlan {
-	/**
-	 * Entries to place: new, changed in their set, changed on the machine, or
-	 * under a path this sync removes, such as a link to a directory, through
-	 * which they may only seem to be in place.
-	 */
+	/** Entries to place: new, changed in their set, or changed on the machine. */
 	readonly write: ReadonlyArray<Entry>;
 	/**
 	 * Paths aett placed that left their sets and are still on the machine.
-	 * Those beneath a link of the set already in place, as after an
-	 * interrupted sync, are only forgotten: what reads there now is the link
-	 * target's.
+	 * Those whose directory leads through a symlink, as after an interrupted
+	 * sync placed a link, are only forgotten: what reads there is elsewhere.
 	 */
 	readonly remove: ReadonlyArray<string>;
+	/**
+	 * Paths to write whose directory leads through a symlink this sync leaves
+	 * in place. Writing them would write elsewhere, so the sync can't go on.
+	 */
+	readonly throughLinks: ReadonlyArray<string>;
 	/**
 	 * Paths of `write` and `remove` that are not what aett left on the machine,
 	 * nor what it writes: edited there, or there before aett placed them.
@@ -238,7 +238,8 @@ export interface HomePlan {
 /**
  * Plans a sync from the entries the home should hold, the manifest of what
  * the last sync placed, and what the machine holds at each path of either,
- * all as fingerprints; a path missing on the machine is absent from `current`.
+ * all as fingerprints. A path missing on the machine is absent from `current`;
+ * one whose directory leads through a symlink there is "linked".
  */
 export const planSync = (
 	desired: ReadonlyArray<Entry>,
@@ -247,32 +248,28 @@ export const planSync = (
 ): HomePlan => {
 	const next = new Map(desired.map((entry) => [entry.path, fingerprint(entry)]));
 
+	const linked = (path: string) => current.get(path) === "linked";
+
 	const changedLocally = (path: string) => {
 		const found = current.get(path);
 
-		return found !== undefined && found !== manifest.get(path) && found !== next.get(path);
+		return (
+			found !== undefined &&
+			!linked(path) &&
+			found !== manifest.get(path) &&
+			found !== next.get(path)
+		);
 	};
 
-	const linksInPlace = desired.flatMap((entry) =>
-		Entry.$match(entry, {
-			File: () => [],
-			Link: ({ path }) => (current.get(path) === next.get(path) ? [path] : []),
-		}),
-	);
-
 	const remove = [...manifest.keys()]
-		.filter(
-			(path) =>
-				!next.has(path) &&
-				current.has(path) &&
-				!linksInPlace.some((link) => path.startsWith(`${link}/`)),
-		)
+		.filter((path) => !next.has(path) && current.has(path) && !linked(path))
 		.toSorted();
 
-	const write = desired.filter(
-		(entry) =>
-			current.get(entry.path) !== next.get(entry.path) ||
-			remove.some((gone) => entry.path.startsWith(`${gone}/`)),
+	const write = desired.filter((entry) => current.get(entry.path) !== next.get(entry.path));
+
+	// A link this sync removes gives way to a real directory before the writes beneath it.
+	const throughLinks = write.flatMap(({ path }) =>
+		linked(path) && !remove.some((gone) => path.startsWith(`${gone}/`)) ? [path] : [],
 	);
 
 	const alreadyRecorded =
@@ -282,6 +279,7 @@ export const planSync = (
 	return {
 		write,
 		remove,
+		throughLinks,
 		changedLocally: [...write.map(({ path }) => path), ...remove].filter(changedLocally).toSorted(),
 		manifest: alreadyRecorded ? Option.none() : Option.some(next),
 		changes: write.length > 0 || remove.length > 0,

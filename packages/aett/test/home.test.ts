@@ -136,6 +136,7 @@ describe("planSync", () => {
 		expect(planSync([config], at(config), at(config))).toEqual({
 			write: [],
 			remove: [],
+			throughLinks: [],
 			changedLocally: [],
 			manifest: Option.none(),
 			changes: false,
@@ -190,30 +191,45 @@ describe("planSync", () => {
 		});
 	});
 
-	it("writes a file that only reads the same through a link the sync removes", () => {
+	it("writes a file beneath a link the sync removes", () => {
 		const alias = link("alias", "dir");
 		const moved = file("alias/config", "same");
 		const before = [alias, file("dir/config", "same")];
 
-		expect(planSync([moved], at(...before), at(...before, moved))).toMatchObject({
+		expect(
+			planSync([moved], at(...before), new Map([...at(...before), [moved.path, "linked"]])),
+		).toMatchObject({
 			write: [moved],
 			remove: ["alias", "dir/config"],
+			throughLinks: [],
 			changedLocally: [],
 		});
 	});
 
-	it("forgets what an interrupted sync left beneath a link it already placed", () => {
-		const shared = link("config", "shared");
+	it("forgets what an interrupted sync left beneath a link, whichever its target", () => {
 		const settings = file("config/settings", "same");
 
-		// The link replaced the directory, so config/settings now reads shared/settings.
-		expect(planSync([shared], at(settings), at(shared, settings))).toEqual({
+		// An interrupted sync placed config -> shared, so config/settings reads shared/settings.
+		const machine = new Map([...at(link("config", "shared")), [settings.path, "linked"]]);
+
+		expect(planSync([link("config", "shared")], at(settings), machine)).toMatchObject({
 			write: [],
 			remove: [],
-			changedLocally: [],
-			manifest: Option.some(at(shared)),
 			changes: false,
 		});
+		expect(planSync([link("config", "other")], at(settings), machine)).toMatchObject({
+			write: [link("config", "other")],
+			remove: [],
+			manifest: Option.some(at(link("config", "other"))),
+		});
+	});
+
+	it("won't write through a link it leaves in place", () => {
+		const settings = file("config/settings", "new");
+
+		expect(
+			planSync([settings], at(), new Map([["config/settings", "linked"]])).throughLinks,
+		).toEqual([settings.path]);
 	});
 
 	it("rewrites a link whose target or a file whose executable bit changed", () => {

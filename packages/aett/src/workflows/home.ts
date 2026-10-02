@@ -125,12 +125,18 @@ fi
 
 // Run as root: prints a line per path in the home, its fingerprint as domain/home.ts computes it,
 // "other" for anything but a file or a link, or "missing". A path whose directory resolves outside
-// the home, through a symlink on the machine, is "outside" and left unread.
+// the home, through a symlink on the machine, is "outside" and left unread; one whose directory
+// resolves elsewhere in it is "linked".
 const fingerprintScript = (home: string, paths: ReadonlyArray<string>) => `set -eu
 cd -- ${shellQuote(home)}
 ${insideFunction}
+linked() {
+	dir=$(dirname -- "$1")
+	[ "$dir" != . ] && [ "$(realpath -m -- "$dir")" != "$root/$dir" ]
+}
 fingerprint() {
 	if ! inside "$1"; then echo outside; return; fi
+	if linked "$1"; then echo linked; return; fi
 	if [ -L "$1" ]; then
 		printf 'link:%s\\n' "$(readlink -- "$1")"
 	elif [ -f "$1" ]; then
@@ -295,6 +301,16 @@ export const planHome = Effect.fn("planHome")(function* (
 		home,
 		plan: planSync(desired, manifest, current),
 	} satisfies HomeSync;
+
+	if (sync.plan.throughLinks.length > 0) {
+		return yield* new HomeError({
+			message: [
+				`A symlink on ${machine} leads these paths elsewhere in ${home}, so aett won't write them:`,
+				...sync.plan.throughLinks.map((path) => `  ${path}`),
+				"Remove the link and sync again.",
+			].join("\n"),
+		});
+	}
 
 	yield* Console.log(summary(sync));
 
