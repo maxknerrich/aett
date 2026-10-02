@@ -9,8 +9,8 @@ export const PackagePath = Schema.String.check(
 
 /**
  * The service catalog: each service by name with its options, or false to keep
- * it off. Services arrive with their features; Tailscale is listed already so a
- * stack can turn off the default it will become.
+ * it off. Tailscale is a role default; a stack can turn it off on servers and
+ * computers.
  */
 export const Services = Schema.Struct({
 	// No options yet; a record of nothing rejects every key, where an empty struct would not.
@@ -45,7 +45,10 @@ export interface Resolved {
 	readonly packages: ReadonlyArray<string>;
 	readonly fast: ReadonlyArray<string>;
 	readonly apps: ReadonlyArray<string>;
+	/** The services some stack adds and none turns off. */
 	readonly services: ReadonlyArray<keyof Services>;
+	/** The services some stack turns off, which role defaults can't add either. */
+	readonly off: ReadonlyArray<keyof Services>;
 	readonly home: boolean;
 }
 
@@ -93,6 +96,7 @@ export const resolveStacks = (stacks: ReadonlyArray<Stack>, target: Target): Res
 
 			return !said.includes(false) && said.some((setting) => setting !== undefined);
 		}),
+		off: serviceNames.filter((service) => settings(service).includes(false)),
 		home:
 			!target.computer && contents.some(({ top, own }) => top.home === true || own?.home === true),
 	};

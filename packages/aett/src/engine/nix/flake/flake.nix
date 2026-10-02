@@ -8,6 +8,10 @@
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     microvm = {
       url = "github:microvm-nix/microvm.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -22,6 +26,7 @@
       nixpkgs,
       nixpkgs-unstable,
       disko,
+      sops-nix,
       microvm,
       ...
     }:
@@ -76,8 +81,10 @@
         name: declared:
         channels.${declared.channel}.lib.nixosSystem {
           modules = [
+            sops-nix.nixosModules.sops
             ./modules/machine.nix
             ./modules/persist.nix
+            ./modules/tailscale.nix
             {
               _file = "fleet.ts -> machine(${name})";
               aett = declared // {
@@ -113,6 +120,7 @@
             pkgs.openssh
             pkgs.sops
             pkgs.age
+            pkgs.ssh-to-age
             pkgs.gitMinimal
           ];
         };

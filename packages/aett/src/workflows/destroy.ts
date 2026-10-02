@@ -1,9 +1,9 @@
-import { Console, Effect, FileSystem, Path, Schema } from "effect";
+import { Console, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { Prompt } from "effect/cli";
-import { Ssh } from "../adapters/ssh.ts";
 import { forgetHost } from "../domain/host.ts";
 import { Engine } from "../engine/engine.ts";
 import { loadFleet, readState } from "./load.ts";
+import { connectMachine } from "./reach.ts";
 
 export class DestroyError extends Schema.TaggedError<DestroyError>()("DestroyError", {
 	message: Schema.String,
@@ -23,7 +23,6 @@ export const destroy = Effect.fn("destroy")(function* (
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const engine = yield* Engine;
-	const ssh = yield* Ssh;
 	const fleet = yield* loadFleet(root);
 
 	if (fleet.machines.some((machine) => machine.name === name)) {
@@ -32,7 +31,8 @@ export const destroy = Effect.fn("destroy")(function* (
 		});
 	}
 
-	const host = (yield* readState(root, fleet)).machines.get(name)?.host;
+	const state = yield* readState(root, fleet);
+	const host = state.machines.get(name)?.host;
 
 	if (host === undefined) {
 		return yield* new DestroyError({
@@ -41,10 +41,7 @@ export const destroy = Effect.fn("destroy")(function* (
 	}
 
 	const knownHostsFile = path.join(root, "state", "known_hosts");
-
-	yield* Console.log(`Connecting to ${host}…`);
-
-	const connection = yield* ssh.machine(host, { name: `${host}.local`, port: 22 }, knownHostsFile);
+	const connection = yield* connectMachine(root, state, host, Option.none());
 
 	if ((yield* engine.guestState(connection, name)) === "running") {
 		return yield* new DestroyError({

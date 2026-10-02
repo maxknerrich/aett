@@ -3,12 +3,15 @@ import type { Fleet } from "../domain/fleet.ts";
 import { allocate } from "../domain/network.ts";
 import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
+import { ensureGuestKeys } from "./identity.ts";
 import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
+import { shareSecrets } from "./secrets.ts";
 
 /**
- * Loads the fleet and its state, records the guest addresses state still
- * lacks, and has the engine write the build to `<root>/.aett/build/`. Returns
- * the build with the fleet and state it was made from.
+ * Loads the fleet and its state, records the guest addresses and host keys
+ * state still lacks, encrypts the secrets machines read to the machines that
+ * read them, and has the engine write the build to `<root>/.aett/build/`.
+ * Returns the build with the fleet and state it was made from.
  */
 export const emit = Effect.fn("emit")(function* (root: string) {
 	const engine = yield* Engine;
@@ -22,7 +25,11 @@ export const emit = Effect.fn("emit")(function* (root: string) {
 	yield* Effect.forEach(changes, ([name, record]) => updateRecord(root, name, record));
 
 	const state = changes.size === 0 ? recorded : yield* readState(root, fleet);
-	const build = yield* engine.emit(root, fleet, state);
+
+	yield* ensureGuestKeys(root, fleet, state.operator.ageKeys);
+
+	const secrets = yield* shareSecrets(root, fleet, state);
+	const build = yield* engine.emit(root, fleet, state, secrets);
 
 	return { build, fleet, state };
 });
