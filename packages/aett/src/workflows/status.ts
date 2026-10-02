@@ -110,8 +110,8 @@ export const status = Effect.fn("status")(function* (root: string) {
 
 			// What apply would change in this machine's system before building it: a release without a
 			// fitting pin, its own or a guest's, since a host's system holds its guests', a guest apply
-			// has yet to give an address, and a secret they read that apply asks for or re-encrypts.
-			// Comparing would then say nothing.
+			// has yet to give an address, and a secret they read that apply asks for or re-encrypts,
+			// or that aett can't check. Comparing would then say nothing.
 			const included = fleet.machines.filter(
 				({ name: other, vm }) => other === name || Option.exists(vm, ({ host: on }) => on === name),
 			);
@@ -143,7 +143,7 @@ export const status = Effect.fn("status")(function* (root: string) {
 			// A declaration that doesn't evaluate still leaves what the machine said.
 			const comparison =
 				pending.length > 0
-					? `${pending.join(", ")}; apply does that`
+					? `not compared: ${pending.join("; ")}`
 					: yield* engine.systemPath(build, name).pipe(
 							Effect.map((expected) =>
 								running === expected ? "runs fleet.ts" : "differs from fleet.ts",

@@ -157,7 +157,8 @@ export const existingSecrets = Effect.fn("existingSecrets")(function* (root: str
 /**
  * The machine secrets apply would change before it builds, each with why: a
  * required one the fleet lacks, or one whose machines changed since it was
- * encrypted. It reads them without changing any.
+ * encrypted. One aett can't check says why too. It reads them without
+ * changing any.
  */
 export const pendingSecrets = Effect.fn("pendingSecrets")(function* (
 	root: string,
@@ -182,7 +183,11 @@ export const pendingSecrets = Effect.fn("pendingSecrets")(function* (
 			return had.size === wanted.size && [...wanted].every((recipient) => had.has(recipient))
 				? []
 				: [{ secret, reason: "isn't encrypted to the machines that read it yet" }];
-		}),
+		}).pipe(
+			Effect.catch((error) =>
+				Effect.succeed([{ secret, reason: `can't be checked (${error.message})` }]),
+			),
+		),
 	);
 
 	return pending.flat();
