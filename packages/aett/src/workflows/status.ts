@@ -6,6 +6,7 @@ import type { State } from "../domain/state.ts";
 import { pinFits } from "../domain/pins.ts";
 import { Engine, type EngineError } from "../engine/engine.ts";
 import { emitAsIs, notBuilt } from "./compile.ts";
+import { pendingSecrets } from "./secrets.ts";
 
 // One way to a machine: how the line names it, and the login it takes.
 interface Way {
@@ -43,6 +44,7 @@ export const status = Effect.fn("status")(function* (root: string) {
 	const path = yield* Path.Path;
 	const knownHosts = path.join(root, "state", "known_hosts");
 	const { build, fleet, state, pins } = yield* emitAsIs(root);
+	const unshared = yield* pendingSecrets(root, fleet, state);
 	const width = Math.max(...fleet.machines.map(({ name }) => name.length));
 
 	// A bare-metal machine's ways in: <name>.local first, the tailnet second.
@@ -106,9 +108,10 @@ export const status = Effect.fn("status")(function* (root: string) {
 			const running = yield* engine.currentSystem(connection);
 			const tailnet = (yield* connection.run("tailscale ip -4 2>/dev/null || true")).trim();
 
-			// What apply would add to this machine's system that the build leaves out: a release without
-			// a fitting pin, its own or a guest's, since a host's system holds its guests', and a guest
-			// apply has yet to give an address. Comparing would then say nothing.
+			// What apply would change in this machine's system before building it: a release without a
+			// fitting pin, its own or a guest's, since a host's system holds its guests', a guest apply
+			// has yet to give an address, and a secret they read that apply asks for or re-encrypts.
+			// Comparing would then say nothing.
 			const included = fleet.machines.filter(
 				({ name: other, vm }) => other === name || Option.exists(vm, ({ host: on }) => on === name),
 			);
@@ -129,9 +132,12 @@ export const status = Effect.fn("status")(function* (root: string) {
 					state.machines.get(other)?.address === undefined,
 			);
 
+			const secrets = unshared.filter(({ secret }) => included.some(secret.readBy));
+
 			const pending = [
 				...unpinned.map(({ bin }) => `${bin} isn't pinned yet`),
 				...unplaced.map(({ name: vm }) => `${vm} has no address yet`),
+				...secrets.map(({ secret, reason }) => `${secret.name} ${reason}`),
 			];
 
 			// A declaration that doesn't evaluate still leaves what the machine said.

@@ -49,6 +49,11 @@ export class Secrets extends Context.Service<
 			recipients: ReadonlyArray<string>,
 			plaintext: string,
 		) => Effect.Effect<void, SecretsError | EngineError | PlatformError.PlatformError>;
+		/** The age public keys the secret `file` is encrypted to, read without decrypting it. */
+		readonly recipients: (
+			root: string,
+			file: string,
+		) => Effect.Effect<ReadonlySet<string>, SecretsError | PlatformError.PlatformError>;
 		/**
 		 * Encrypts the secret `file` to exactly `recipients`, decrypting it
 		 * first when they differ from the ones it has. Returns whether it changed.
@@ -225,11 +230,7 @@ export class Secrets extends Context.Service<
 				plaintext: string,
 			) => Effect.asVoid(encrypt(root, file, recipients, plaintext));
 
-			const share = Effect.fn("Secrets.share")(function* (
-				root: string,
-				file: string,
-				recipients: ReadonlyArray<string>,
-			) {
+			const recipients = Effect.fn("Secrets.recipients")(function* (root: string, file: string) {
 				const current = yield* fs.readFileString(path.join(root, file)).pipe(
 					Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(SopsRecipients))),
 					Effect.catchTag("SchemaError", () =>
@@ -237,18 +238,26 @@ export class Secrets extends Context.Service<
 					),
 				);
 
-				const had = new Set((current.sops.age ?? []).map(({ recipient }) => recipient));
+				return new Set((current.sops.age ?? []).map(({ recipient }) => recipient));
+			});
 
-				if (had.size === recipients.length && recipients.every((recipient) => had.has(recipient))) {
+			const share = Effect.fn("Secrets.share")(function* (
+				root: string,
+				file: string,
+				wanted: ReadonlyArray<string>,
+			) {
+				const had = yield* recipients(root, file);
+
+				if (had.size === wanted.length && wanted.every((recipient) => had.has(recipient))) {
 					return false;
 				}
 
-				yield* write(root, file, recipients, yield* decrypt(root, file));
+				yield* write(root, file, wanted, yield* decrypt(root, file));
 
 				return true;
 			});
 
-			return Secrets.of({ ensure, write, share });
+			return Secrets.of({ ensure, write, recipients, share });
 		}),
 	);
 }

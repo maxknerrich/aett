@@ -154,6 +154,40 @@ export const existingSecrets = Effect.fn("existingSecrets")(function* (root: str
 	return present.map(({ name }) => name);
 });
 
+/**
+ * The machine secrets apply would change before it builds, each with why: a
+ * required one the fleet lacks, or one whose machines changed since it was
+ * encrypted. It reads them without changing any.
+ */
+export const pendingSecrets = Effect.fn("pendingSecrets")(function* (
+	root: string,
+	fleet: Fleet,
+	state: State,
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const secrets = yield* Secrets;
+
+	const pending = yield* Effect.forEach(machineSecrets(fleet), (secret) =>
+		Effect.gen(function* () {
+			const file = secretFile(secret);
+
+			if (!(yield* fs.exists(path.join(root, file)))) {
+				return secret.required ? [{ secret, reason: "isn't set yet" }] : [];
+			}
+
+			const had = yield* secrets.recipients(root, file);
+			const wanted = new Set(yield* recipientsOf(root, fleet, state, secret));
+
+			return had.size === wanted.size && [...wanted].every((recipient) => had.has(recipient))
+				? []
+				: [{ secret, reason: "isn't encrypted to the machines that read it yet" }];
+		}),
+	);
+
+	return pending.flat();
+});
+
 /** Asks for a machine secret and stores it, encrypted to the operators and the machines that read it. */
 export const setSecret = Effect.fn("setSecret")(function* (root: string, name: string) {
 	const fleet = yield* loadFleet(root);

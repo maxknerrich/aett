@@ -1,6 +1,7 @@
 import { Console, Effect, FileSystem, Option, Path } from "effect";
 import type { Fleet } from "../domain/fleet.ts";
 import { allocate, sshConfig } from "../domain/network.ts";
+import { mergeInputs, type Pins } from "../domain/pins.ts";
 import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { ensureGuestKeys } from "./identity.ts";
@@ -60,8 +61,9 @@ const writeSshConfig = Effect.fn("writeSshConfig")(function* (root: string, cont
 
 /**
  * Writes the build from fleet.ts and what the fleet records as it is: no
- * address, key, secret or pin is made, asked for or changed. Machines that
- * need one of them are left out or built without it.
+ * address, key, secret or pin is made, asked for or changed, and inputs
+ * the pins lack take aett's tested revisions. Machines that need one of them
+ * are left out or built without it.
  */
 export const emitAsIs = Effect.fn("emitAsIs")(function* (root: string) {
 	const engine = yield* Engine;
@@ -69,10 +71,16 @@ export const emitAsIs = Effect.fn("emitAsIs")(function* (root: string) {
 	const state = yield* readState(root, fleet);
 	const secrets = yield* existingSecrets(root, fleet);
 	const recorded = yield* readPins(root);
+	const defaults = yield* engine.defaultInputs;
 
-	const pins = Option.isSome(recorded)
-		? recorded.value
-		: { inputs: yield* engine.defaultInputs, releases: {} };
+	// Inputs a newer aett added are pinned at its tested revisions, as apply would.
+	const pins = Option.match(recorded, {
+		onNone: (): Pins => ({ inputs: defaults, releases: {} }),
+		onSome: ({ inputs, releases }): Pins => ({
+			inputs: mergeInputs(inputs, defaults).lock,
+			releases,
+		}),
+	});
 
 	const build = yield* engine.emit(root, fleet, state, secrets, pins);
 
