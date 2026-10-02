@@ -1,8 +1,8 @@
-import { Console, Effect, FileSystem, Option, Path, Redacted, Stream } from "effect";
+import { Console, Effect, FileSystem, Option, Path, Redacted, Schema, Stream } from "effect";
 import { Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Secrets, SecretsError } from "../adapters/secrets.ts";
-import type { Fleet } from "../domain/fleet.ts";
+import { type Fleet, UserName } from "../domain/fleet.ts";
 import { type MachineSecret, machineSecrets } from "../domain/secrets.ts";
 import { buildable } from "../domain/build.ts";
 import type { State } from "../domain/state.ts";
@@ -149,8 +149,16 @@ export const setSecret = Effect.fn("setSecret")(function* (root: string, name: s
 	const secret = known.find((candidate) => candidate.name === name);
 
 	if (secret === undefined) {
+		// A user's password exists once fleet.ts names the user.
+		const user = name.slice("users/".length);
+
+		const hint =
+			name.startsWith("users/") && Option.isNone(fleet.user) && Schema.is(UserName)(user)
+				? ` ${name} is the password of the fleet's user, and fleet.ts names none: declare it with fleet({ user: "${user}", … }).`
+				: "";
+
 		return yield* new SecretsError({
-			message: `aett knows no secret named ${name}. It knows ${known.map((candidate) => candidate.name).join(", ")}.`,
+			message: `aett knows no secret named ${name}. It knows ${known.map((candidate) => candidate.name).join(", ")}.${hint}`,
 		});
 	}
 
