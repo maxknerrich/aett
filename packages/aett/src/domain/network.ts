@@ -167,7 +167,8 @@ export const bridgeAddress = (subnet: string | undefined) =>
 /**
  * state/ssh_config: a Host block per guest with a home, which reaches its SSH
  * through the port its host forwards on the LAN and checks its key against
- * aett's known hosts at `knownHosts`. The operator includes it from
+ * aett's known hosts at `knownHosts`. The forwards are IPv4 only, so it keeps
+ * SSH off the host's IPv6 addresses. The operator includes it from
  * ~/.ssh/config. Empty when no guest has a home.
  */
 export const sshConfig = (fleet: Fleet, state: State, knownHosts: string) => {
@@ -185,6 +186,7 @@ export const sshConfig = (fleet: Fleet, state: State, knownHosts: string) => {
 				`Host ${name}`,
 				`\tHostName ${host}.local`,
 				`\tPort ${forwards.ssh}`,
+				"\tAddressFamily inet",
 				`\tUser ${user}`,
 				`\tHostKeyAlias ${name}`,
 				`\tUserKnownHostsFile ${sshConfigPath(knownHosts)}`,
