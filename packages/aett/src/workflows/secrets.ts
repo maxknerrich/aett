@@ -149,8 +149,14 @@ export const setSecret = Effect.fn("setSecret")(function* (root: string, name: s
 	const secret = known.find((candidate) => candidate.name === name);
 
 	if (secret === undefined) {
+		// A user's password exists once fleet.ts names the user.
+		const hint =
+			name.startsWith("users/") && Option.isNone(fleet.user)
+				? ` ${name} is the password of the fleet's user, and fleet.ts names none: declare it with fleet({ user: "${name.slice("users/".length)}", … }).`
+				: "";
+
 		return yield* new SecretsError({
-			message: `aett knows no secret named ${name}. It knows ${known.map((candidate) => candidate.name).join(", ")}.`,
+			message: `aett knows no secret named ${name}. It knows ${known.map((candidate) => candidate.name).join(", ")}.${hint}`,
 		});
 	}
 
