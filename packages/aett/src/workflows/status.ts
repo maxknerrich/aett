@@ -35,8 +35,8 @@ const tailnetHost = (state: State, name: string) =>
  * Prints a line per declared machine, from asking each one: how aett reached
  * it, its tailnet address, whether it runs the system fleet.ts would build,
  * and for a machine that runs VMs, whether each guest runs. A machine the
- * build leaves out says why. It builds from what the fleet records and
- * changes none of it.
+ * build leaves out says why. It builds from what the fleet records, trusts
+ * only the host keys aett recorded, and changes nothing.
  */
 export const status = Effect.fn("status")(function* (root: string) {
 	const engine = yield* Engine;
@@ -51,12 +51,12 @@ export const status = Effect.fn("status")(function* (root: string) {
 	const metal = (name: string): ReadonlyArray<Way> => [
 		{
 			label: `${name}.local`,
-			connect: ssh.machine(name, { name: `${name}.local`, port: 22 }, knownHosts),
+			connect: ssh.machine(name, { name: `${name}.local`, port: 22 }, knownHosts, "refuse"),
 		},
 		...Option.toArray(
 			Option.map(tailnetHost(state, name), (host) => ({
 				label: "the tailnet",
-				connect: ssh.machine(name, host, knownHosts),
+				connect: ssh.machine(name, host, knownHosts, "refuse"),
 			})),
 		),
 	];
@@ -66,7 +66,7 @@ export const status = Effect.fn("status")(function* (root: string) {
 		...Option.toArray(
 			Option.map(tailnetHost(state, name), (tailnet) => ({
 				label: "the tailnet",
-				connect: ssh.machine(name, tailnet, knownHosts),
+				connect: ssh.machine(name, tailnet, knownHosts, "refuse"),
 			})),
 		),
 		{
@@ -74,7 +74,13 @@ export const status = Effect.fn("status")(function* (root: string) {
 			connect: reach(metal(host)).pipe(
 				Effect.flatMap(Effect.fromOption),
 				Effect.flatMap(({ connection }) =>
-					ssh.guest(name, state.machines.get(name)?.address ?? "", knownHosts, connection),
+					ssh.guest(
+						name,
+						state.machines.get(name)?.address ?? "",
+						knownHosts,
+						connection,
+						"refuse",
+					),
 				),
 			),
 		},
@@ -109,9 +115,9 @@ export const status = Effect.fn("status")(function* (root: string) {
 			const tailnet = (yield* connection.run("tailscale ip -4 2>/dev/null || true")).trim();
 
 			// What apply would change in this machine's system before building it: a release without a
-			// fitting pin, its own or a guest's, since a host's system holds its guests', a guest apply
-			// has yet to give an address, and a secret they read that apply asks for or re-encrypts,
-			// or that aett can't check. Comparing would then say nothing.
+			// fitting pin, its own or a guest's, since a host's system holds its guests', and a secret
+			// they read that apply asks for or re-encrypts, or that aett can't check. Comparing would
+			// then say nothing.
 			const included = fleet.machines.filter(
 				({ name: other, vm }) => other === name || Option.exists(vm, ({ host: on }) => on === name),
 			);
@@ -125,18 +131,10 @@ export const status = Effect.fn("status")(function* (root: string) {
 					}),
 				);
 
-			const unplaced = included.filter(
-				({ name: other, vm, unsupported }) =>
-					Option.isSome(vm) &&
-					unsupported.length === 0 &&
-					state.machines.get(other)?.address === undefined,
-			);
-
 			const secrets = unshared.filter(({ secret }) => included.some(secret.readBy));
 
 			const pending = [
 				...unpinned.map(({ bin }) => `${bin} isn't pinned yet`),
-				...unplaced.map(({ name: vm }) => `${vm} has no address yet`),
 				...secrets.map(({ secret, reason }) => `${secret.name} ${reason}`),
 			];
 

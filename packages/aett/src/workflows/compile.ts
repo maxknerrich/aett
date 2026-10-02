@@ -2,7 +2,7 @@ import { Console, Effect, FileSystem, Option, Path } from "effect";
 import type { Fleet } from "../domain/fleet.ts";
 import { allocate, sshConfig } from "../domain/network.ts";
 import { mergeInputs, type Pins } from "../domain/pins.ts";
-import type { State } from "../domain/state.ts";
+import type { MachineRecord, State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { ensureGuestKeys } from "./identity.ts";
 import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
@@ -60,21 +60,37 @@ const writeSshConfig = Effect.fn("writeSshConfig")(function* (root: string, cont
 });
 
 /**
- * Writes the build from fleet.ts and what the fleet records as it is: no
- * address, key, secret or pin is made, asked for or changed, and inputs
- * the pins lack take aett's tested revisions. Machines that need one of them
- * are left out or built without it.
+ * Writes the build from fleet.ts and what the fleet records, recording
+ * nothing: the addresses and forwards apply would hand out are taken in
+ * memory, as are aett's tested revisions for inputs the pins lack, and no
+ * key, secret or pin is made, asked for or changed. Machines that need one of
+ * them are left out or built without it.
  */
 export const emitAsIs = Effect.fn("emitAsIs")(function* (root: string) {
 	const engine = yield* Engine;
 	const fleet = yield* loadFleet(root);
-	const state = yield* readState(root, fleet);
+	const recorded = yield* readState(root, fleet);
+
+	const allocated = yield* Effect.fromResult(allocate(fleet, recorded)).pipe(
+		Effect.mapError((message) => new FleetError({ message })),
+	);
+
+	const state: State = {
+		operator: recorded.operator,
+		machines: new Map([
+			...recorded.machines,
+			...[...allocated].map(
+				([name, change]: readonly [string, typeof MachineRecord.Type]) =>
+					[name, { facts: false, ...recorded.machines.get(name), ...change }] as const,
+			),
+		]),
+	};
+
 	const secrets = yield* existingSecrets(root, fleet);
-	const recorded = yield* readPins(root);
 	const defaults = yield* engine.defaultInputs;
 
 	// Inputs a newer aett added are pinned at its tested revisions, as apply would.
-	const pins = Option.match(recorded, {
+	const pins = Option.match(yield* readPins(root), {
 		onNone: (): Pins => ({ inputs: defaults, releases: {} }),
 		onSome: ({ inputs, releases }): Pins => ({
 			inputs: mergeInputs(inputs, defaults).lock,
