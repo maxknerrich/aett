@@ -7,7 +7,7 @@ import { type MachineSecret, machineSecrets } from "../domain/secrets.ts";
 import { buildable } from "../domain/build.ts";
 import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
-import { machineAgeKeys } from "./identity.ts";
+import { knownHostKeys, machineAgeKeys } from "./identity.ts";
 import { loadFleet, readState } from "./load.ts";
 
 // Where a machine secret lives in the fleet.
@@ -157,8 +157,8 @@ export const existingSecrets = Effect.fn("existingSecrets")(function* (root: str
 /**
  * The machine secrets apply would change before it builds, each with why: a
  * required one the fleet lacks, or one whose machines changed since it was
- * encrypted. One aett can't check says why too. It reads them without
- * changing any.
+ * encrypted, such as a guest that gets its host key from apply. One aett
+ * can't check says why too. It reads them without changing any.
  */
 export const pendingSecrets = Effect.fn("pendingSecrets")(function* (
 	root: string,
@@ -179,10 +179,20 @@ export const pendingSecrets = Effect.fn("pendingSecrets")(function* (
 
 			const had = yield* secrets.recipients(root, file);
 			const wanted = new Set(yield* recipientsOf(root, fleet, state, secret));
+			const known = yield* knownHostKeys(root);
 
-			return had.size === wanted.size && [...wanted].every((recipient) => had.has(recipient))
-				? []
-				: [{ secret, reason: "isn't encrypted to the machines that read it yet" }];
+			// A guest gets its host key from apply, which then encrypts the secrets it reads to it.
+			const keyless = fleet.machines.some(
+				(machine) =>
+					Option.isSome(machine.vm) && !known.has(machine.name) && secret.readBy(machine),
+			);
+
+			const shared =
+				!keyless &&
+				had.size === wanted.size &&
+				[...wanted].every((recipient) => had.has(recipient));
+
+			return shared ? [] : [{ secret, reason: "isn't encrypted to the machines that read it yet" }];
 		}).pipe(
 			Effect.catch((error) =>
 				Effect.succeed([{ secret, reason: `can't be checked (${error.message})` }]),
