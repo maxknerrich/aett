@@ -47,6 +47,22 @@ export const status = Effect.fn("status")(function* (root: string) {
 	const unshared = yield* pendingSecrets(root, fleet, state);
 	const width = Math.max(...fleet.machines.map(({ name }) => name.length));
 
+	// The system the build makes for each machine it covers, from one evaluation when a line first
+	// asks. When the build doesn't evaluate as a whole, each machine is evaluated alone, so one whose
+	// declaration fails leaves the others' comparisons.
+	const expected = yield* Effect.cached(
+		engine.systemPaths(build, build.machines).pipe(
+			Effect.catchTag("EngineError", () =>
+				Effect.forEach(build.machines, (name) =>
+					engine.systemPaths(build, [name]).pipe(
+						Effect.map((paths) => [...paths]),
+						Effect.orElseSucceed(() => []),
+					),
+				).pipe(Effect.map((each) => new Map(each.flat()))),
+			),
+		),
+	);
+
 	// A bare-metal machine's ways in: <name>.local first, the tailnet second.
 	const metal = (name: string): ReadonlyArray<Way> => [
 		{
@@ -142,14 +158,10 @@ export const status = Effect.fn("status")(function* (root: string) {
 			const comparison =
 				pending.length > 0
 					? `not compared: ${pending.join("; ")}`
-					: yield* engine.systemPath(build, name).pipe(
-							Effect.map((expected) =>
-								running === expected ? "runs fleet.ts" : "differs from fleet.ts",
-							),
-							Effect.catchTag("EngineError", () =>
-								Effect.succeed("fleet.ts doesn't evaluate for it"),
-							),
-						);
+					: Option.match(Option.fromUndefinedOr((yield* expected).get(name)), {
+							onNone: () => "fleet.ts doesn't evaluate for it",
+							onSome: (system) => (running === system ? "runs fleet.ts" : "differs from fleet.ts"),
+						});
 
 			const guests = yield* Effect.forEach(guestsOn(name), (on) =>
 				Effect.map(engine.guestState(connection, on), (unit) => `${on} ${unit}`),
@@ -167,7 +179,12 @@ export const status = Effect.fn("status")(function* (root: string) {
 			Effect.catch((error) => Effect.succeed(`failed: ${error.message}`)),
 		);
 
-	yield* Effect.forEach(fleet.machines, ({ name }) =>
-		describe(name).pipe(Effect.flatMap((text) => Console.log(`${name.padEnd(width)}  ${text}`))),
+	// Every machine is asked at once; the lines keep fleet.ts's order.
+	const lines = yield* Effect.forEach(
+		fleet.machines,
+		({ name }) => Effect.map(describe(name), (text) => `${name.padEnd(width)}  ${text}`),
+		{ concurrency: "unbounded" },
 	);
+
+	yield* Console.log(lines.join("\n"));
 });

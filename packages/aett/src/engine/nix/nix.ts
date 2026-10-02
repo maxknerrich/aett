@@ -20,6 +20,9 @@ const PrefetchOutput = Schema.fromJsonString(Schema.Struct({ hash: Schema.String
 
 const Lock = Schema.fromJsonString(InputsLock);
 
+// What evaluating several machines' systems prints: each one's store path by name.
+const SystemPaths = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
+
 // What `nix build --print-out-paths` prints for the system alone: its store path.
 const SystemOutput = Schema.Tuple([Schema.String]);
 
@@ -378,12 +381,27 @@ export const nixEngine = (flake: string) =>
 				]);
 			});
 
-			const systemPath = Effect.fn("NixEngine.systemPath")(function* (build: Build, name: string) {
-				return yield* nix([
+			const systemPaths = Effect.fn("NixEngine.systemPaths")(function* (
+				build: Build,
+				names: ReadonlyArray<string>,
+			) {
+				// Machine names are hostnames, so their JSON strings are Nix strings too.
+				const output = yield* nix([
 					"eval",
-					"--raw",
-					`${flakeAt(build.directory)}#nixosConfigurations.${name}.config.system.build.toplevel.outPath`,
+					"--json",
+					`${flakeAt(build.directory)}#nixosConfigurations`,
+					"--apply",
+					`configurations: builtins.listToAttrs (map (name: { inherit name; value = configurations.\${name}.config.system.build.toplevel.outPath; }) [ ${names.map((name) => JSON.stringify(name)).join(" ")} ])`,
 				]);
+
+				return yield* Schema.decodeUnknownEffect(SystemPaths)(output).pipe(
+					Effect.map((paths) => new Map(Object.entries(paths))),
+					Effect.catchTag("SchemaError", (error) =>
+						Effect.fail(
+							new EngineError({ message: `nix eval printed unexpected output: ${error.message}` }),
+						),
+					),
+				);
 			});
 
 			// Copies the build and its locked inputs into the target's store; returns the build's store path there.
@@ -541,7 +559,7 @@ export const nixEngine = (flake: string) =>
 			return Engine.of({
 				tools,
 				defaultInputs,
-				systemPath,
+				systemPaths,
 				updateInputs,
 				prefetch,
 				discover,
