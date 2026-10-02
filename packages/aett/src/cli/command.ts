@@ -5,6 +5,7 @@ import { PackageManager, parseMachineFlag } from "../domain/scaffold.ts";
 import { apply } from "../workflows/apply.ts";
 import { compile } from "../workflows/compile.ts";
 import { type AettPackage, create } from "../workflows/create.ts";
+import { destroy } from "../workflows/destroy.ts";
 import { fleetRoot } from "../workflows/load.ts";
 import { discover, install } from "../workflows/install.ts";
 
@@ -36,7 +37,7 @@ const installerFlags = {
 };
 
 const machine = Command.make("machine").pipe(
-	Command.withDescription("Discover and install machines."),
+	Command.withDescription("Discover, install and destroy machines."),
 	Command.withSubcommands([
 		Command.make("discover", { name: machineName, ...installerFlags }, ({ name, ...access }) =>
 			Effect.flatMap(fleet, (root) => discover(root, name, access)),
@@ -75,6 +76,23 @@ const machine = Command.make("machine").pipe(
 		).pipe(
 			Command.withDescription(
 				"Discover the machine, erase its disk and install NixOS from the installer.",
+			),
+		),
+		Command.make(
+			"destroy",
+			{
+				name: Argument.String("name").pipe(
+					Argument.withDescription("The VM's name, which fleet.ts no longer declares."),
+				),
+				yes: Flag.Boolean("yes").pipe(
+					Flag.withDescription("Delete without asking for the VM's name."),
+					Flag.withDefault(false),
+				),
+			},
+			({ name, yes }) => Effect.flatMap(fleet, (root) => destroy(root, name, { yes })),
+		).pipe(
+			Command.withDescription(
+				"Delete a VM that fleet.ts no longer declares: its volume on its host, its secrets and its state.",
 			),
 		),
 	]),
@@ -142,9 +160,9 @@ export const command = (aett: AettPackage) =>
 						),
 						Argument.optional,
 					),
-					host: hostFlag("The named machine as host[:port]. Defaults to <name>.local.").pipe(
-						Flag.optional,
-					),
+					host: hostFlag(
+						"The named bare-metal machine as host[:port]. Defaults to <name>.local.",
+					).pipe(Flag.optional),
 					yes: Flag.Boolean("yes").pipe(
 						Flag.withDescription("Switch without asking."),
 						Flag.withDefault(false),
@@ -153,7 +171,7 @@ export const command = (aett: AettPackage) =>
 				({ name, ...options }) => Effect.flatMap(fleet, (root) => apply(root, name, options)),
 			).pipe(
 				Command.withDescription(
-					"Build the declared system on installed machines and switch to it.",
+					"Build the declared system on installed machines and their VMs and switch to it.",
 				),
 			),
 			machine,

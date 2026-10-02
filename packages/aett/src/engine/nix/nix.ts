@@ -23,20 +23,24 @@ const InstallOutputs = Schema.Tuple([Schema.String, Schema.String, Schema.String
 // disk.nix's passwordFile, from which disko reads an encrypted disk's passphrase while it formats.
 const passphraseFile = "/tmp/aett-luks-passphrase";
 
-// Builds outputs of the machine's configuration on the target, streaming the log, and decodes their store paths.
+// What it prints for a guest: its system and its runner.
+const GuestOutputs = Schema.Tuple([Schema.String, Schema.String]);
+
+const GuestStateOutput = Schema.Literals(["absent", "stopped", "running"]);
+
+// Builds attributes of the machine's configuration, such as system.build.toplevel, on the target,
+// streaming the log, and decodes their store paths.
 const buildOn = <A>(
 	target: Connection,
 	source: string,
 	name: string,
-	outputs: ReadonlyArray<string>,
+	attributes: ReadonlyArray<string>,
 	paths: Schema.Decoder<A>,
 ) =>
 	target
 		.stream(
-			`nix build --no-link --print-out-paths ${outputs
-				.map((output) =>
-					shellQuote(`${source}#nixosConfigurations.${name}.config.system.build.${output}`),
-				)
+			`nix build --no-link --print-out-paths ${attributes
+				.map((attribute) => shellQuote(`${source}#nixosConfigurations.${name}.config.${attribute}`))
 				.join(" ")}`,
 		)
 		.pipe(
@@ -56,16 +60,15 @@ const buildOn = <A>(
 const currentSystem = (target: Connection) =>
 	target.run("readlink -f /run/current-system").pipe(Effect.map((system) => system.trim()));
 
-const changes = (target: Connection, system: string) =>
+const changes = (target: Connection, from: string, to: string) =>
 	target
-		.run(`nix store diff-closures /run/current-system ${shellQuote(system)}`)
+		.run(`nix store diff-closures ${shellQuote(from)} ${shellQuote(to)}`)
 		.pipe(Effect.map((text) => text.trim()));
 
 // nixos-rebuild's invocation: a transient unit finishes the switch even if the connection drops.
 // Its output goes to stderr, which streams to the terminal.
-const activate = Effect.fn("NixEngine.activate")(function* (target: Connection, system: string) {
-	yield* target.run(`nix-env -p /nix/var/nix/profiles/system --set ${shellQuote(system)}`);
-	yield* target.stream(
+const switchTo = (target: Connection, system: string) =>
+	target.stream(
 		[
 			"systemd-run -E LOCALE_ARCHIVE -E NIXOS_INSTALL_BOOTLOADER --collect --no-ask-password",
 			"--pipe --quiet --service-type=exec --unit=aett-switch-to-configuration --wait",
@@ -73,7 +76,72 @@ const activate = Effect.fn("NixEngine.activate")(function* (target: Connection, 
 			"switch >&2",
 		].join(" "),
 	);
+
+const activate = Effect.fn("NixEngine.activate")(function* (target: Connection, system: string) {
+	yield* target.run(`nix-env -p /nix/var/nix/profiles/system --set ${shellQuote(system)}`);
+	yield* switchTo(target, system);
 });
+
+// A guest boots whatever its host's runner says, and its store is the host's, read-only, so a
+// switch only activates the new system; it records no profile. Its host keeps the system it
+// switched to as a GC root, which the guest's next start or restart drops again.
+const switchGuest = Effect.fn("NixEngine.switchGuest")(function* (
+	host: Connection,
+	guest: Connection,
+	name: string,
+	system: string,
+) {
+	yield* switchTo(guest, system);
+	yield* host.run(`ln -sfn ${shellQuote(system)} ${shellQuote(switchedRoot(name))}`);
+});
+
+// guest.nix links what a guest boots with into its system as aett-boot. A switch can't change any of it.
+const needsRestart = (guest: Connection, system: string) =>
+	guest
+		.run(
+			`booted=$(readlink -e /run/booted-system/aett-boot || true); [ -n "$booted" ] && [ "$booted" = "$(readlink -e ${shellQuote(`${system}/aett-boot`)})" ] && echo same || echo changed`,
+		)
+		.pipe(Effect.map((output) => output.trim() !== "same"));
+
+// microvm.nix's per-guest directory on its host, where vm-host.nix sets its stateDir.
+const guestDirectory = (guest: string) => `/persist/microvms/${guest}`;
+
+// Where vm-host.nix links each guest's runners as GC roots, a directory per guest.
+const gcRoots = "/nix/var/nix/gcroots/aett-guests";
+
+// The GC root of the system a running guest was switched to in place.
+const switchedRoot = (guest: string) => `${gcRoots}/${guest}/switched`;
+
+const guestUnit = (guest: string) => shellQuote(`microvm@${guest}.service`);
+
+// A guest that starts runs its runner's system, which its `current` and `booted` roots keep.
+const controlGuest = (host: Connection, guest: string, action: "start" | "restart" | "stop") =>
+	host
+		.run(
+			action === "stop"
+				? `systemctl stop ${guestUnit(guest)}`
+				: `systemctl ${action} ${guestUnit(guest)} && rm -f -- ${shellQuote(switchedRoot(guest))}`,
+		)
+		.pipe(Effect.asVoid);
+
+const removeGuest = (host: Connection, guest: string) =>
+	host
+		.run(`rm -rf -- ${shellQuote(guestDirectory(guest))} ${shellQuote(`${gcRoots}/${guest}`)}`)
+		.pipe(Effect.asVoid);
+
+// A unit that is active or on its way up or down counts as running. Otherwise the guest is
+// installed once its host links a runner as `current`.
+const guestState = (host: Connection, guest: string) =>
+	host
+		.run(
+			`case "$(systemctl is-active ${guestUnit(guest)})" in inactive|failed) if [ -e ${shellQuote(`${guestDirectory(guest)}/current`)} ]; then echo stopped; else echo absent; fi ;; *) echo running ;; esac`,
+		)
+		.pipe(
+			Effect.flatMap((output) => Schema.decodeUnknownEffect(GuestStateOutput)(output.trim())),
+			Effect.catchTag("SchemaError", () =>
+				Effect.fail(new EngineError({ message: `Could not tell whether ${guest} runs.` })),
+			),
+		);
 
 // Writes a host key pair into `directory` on the target, the private half readable by root only.
 // sshd ignores a private key that others can read.
@@ -93,7 +161,7 @@ const writeHostKey = Effect.fn("NixEngine.writeHostKey")(function* (
 
 // Where a host keeps a guest's host key, which guest.nix shares into the guest at /persist/etc/ssh.
 const guestKeyDirectory = (root: string, guest: string) =>
-	`${root}/persist/microvms/${guest}/identity`;
+	`${root}${guestDirectory(guest)}/identity`;
 
 const placeGuestKey = (host: Connection, guest: string, hostKey: HostKey) =>
 	writeHostKey(host, guestKeyDirectory("", guest), hostKey);
@@ -308,7 +376,39 @@ export const nixEngine = (flake: string) =>
 
 				yield* Console.log("Building the system…");
 
-				const [system] = yield* buildOn(target, source, name, ["toplevel"], SystemOutput);
+				const [system] = yield* buildOn(
+					target,
+					source,
+					name,
+					["system.build.toplevel"],
+					SystemOutput,
+				);
+
+				return system;
+			});
+
+			// The guest's runner becomes `current`, which its unit starts; vm-host.nix makes it and
+			// `booted` GC roots. The host's own switch links the same runner there when it lists the guest.
+			const buildGuest = Effect.fn("NixEngine.buildGuest")(function* (
+				build: Build,
+				guest: string,
+				host: Connection,
+			) {
+				const source = yield* ship(build, host);
+
+				yield* Console.log(`Building ${guest} on its host…`);
+
+				const [system, runner] = yield* buildOn(
+					host,
+					source,
+					guest,
+					["system.build.toplevel", "microvm.declaredRunner"],
+					GuestOutputs,
+				);
+
+				yield* host.run(
+					`ln -sfn ${shellQuote(runner)} ${shellQuote(`${guestDirectory(guest)}/current`)}`,
+				);
 
 				return system;
 			});
@@ -327,7 +427,7 @@ export const nixEngine = (flake: string) =>
 					target,
 					source,
 					name,
-					["toplevel", "destroyFormatMount", "aettInstall"],
+					["system.build.toplevel", "system.build.destroyFormatMount", "system.build.aettInstall"],
 					InstallOutputs,
 				);
 
@@ -361,6 +461,12 @@ export const nixEngine = (flake: string) =>
 				currentSystem,
 				changes,
 				activate,
+				guestState,
+				buildGuest,
+				needsRestart,
+				switchGuest,
+				controlGuest,
+				removeGuest,
 				placeGuestKey,
 				install,
 			});

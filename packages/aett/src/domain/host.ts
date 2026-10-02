@@ -22,16 +22,20 @@ export const parseHost = (input: string): Option.Option<Host> => {
 /** Shows a host as the operator would type it, leaving out the default port. */
 export const formatHost = ({ name, port }: Host) => (port === 22 ? name : `${name}:${port}`);
 
+// A known_hosts file's lines without the empty ones and those that name the machine.
+const otherLines = (knownHosts: string, name: string) =>
+	knownHosts
+		.split("\n")
+		.filter((line) => line !== "" && !(line.split(/\s/, 1)[0] ?? "").split(",").includes(name));
+
 /**
  * Replaces a machine's entries in a known_hosts file's content with
  * `<name> <publicKey>`. aett records machine keys under the machine's name
  * (HostKeyAlias), whatever its address.
  */
 export const trustHost = (knownHosts: string, name: string, publicKey: string) =>
-	[
-		...knownHosts
-			.split("\n")
-			.filter((line) => line !== "" && !(line.split(/\s/, 1)[0] ?? "").split(",").includes(name)),
-		`${name} ${publicKey}`,
-		"",
-	].join("\n");
+	[...otherLines(knownHosts, name), `${name} ${publicKey}`, ""].join("\n");
+
+/** Removes a machine's entries from a known_hosts file's content. */
+export const forgetHost = (knownHosts: string, name: string) =>
+	[...otherLines(knownHosts, name), ""].join("\n");
