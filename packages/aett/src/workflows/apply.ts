@@ -3,10 +3,12 @@ import { Prompt } from "effect/cli";
 import type { Connection } from "../adapters/ssh.ts";
 import { applyTargets } from "../domain/apply.ts";
 import { type Fleet, guestsOf } from "../domain/fleet.ts";
+import { type Entry, resolveHome } from "../domain/home.ts";
 import type { Host } from "../domain/host.ts";
 import type { State } from "../domain/state.ts";
 import { type Build, Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
+import { applyHome, HomeError, planHome, readSets } from "./home.ts";
 import { placeGuestKeys } from "./identity.ts";
 import { connectGuest, connectMachine, recordTailnet } from "./reach.ts";
 
@@ -20,12 +22,13 @@ export interface ApplyOptions {
 	readonly yes: boolean;
 }
 
-// What one run of apply works from.
+// What one run of apply works from, with each target's home: its dotfile sets merged.
 interface Run {
 	readonly root: string;
 	readonly build: Build;
 	readonly fleet: Fleet;
 	readonly state: State;
+	readonly homes: ReadonlyMap<string, ReadonlyArray<Entry>>;
 	readonly yes: boolean;
 }
 
@@ -75,7 +78,24 @@ export const apply = Effect.fn("apply")(function* (
 		Console.log(`Evaluating ${machine}…`).pipe(Effect.andThen(engine.evaluate(build, machine))),
 	);
 
-	const run: Run = { root, build, fleet, state, yes: options.yes };
+	const sets = yield* readSets(root);
+
+	const homes = new Map(
+		yield* Effect.forEach(
+			fleet.machines.filter(
+				({ name: machine, home }) => targets.includes(machine) && home.length > 0,
+			),
+			({ name: machine, home }) =>
+				Effect.fromResult(resolveHome(sets, home)).pipe(
+					Effect.mapError(
+						(problems) => new HomeError({ message: `${machine}'s home:\n${problems}` }),
+					),
+					Effect.map((entries) => [machine, entries] as const),
+				),
+		),
+	);
+
+	const run: Run = { root, build, fleet, state, homes, yes: options.yes };
 
 	return yield* Effect.forEach(
 		targets,
@@ -110,7 +130,7 @@ const applyMachine = Effect.fn("applyMachine")(function* (
 
 	if (system === current) {
 		yield* Console.log(`${name} is up to date.`);
-		yield* recordTailnet(run.root, run.state, name, connection);
+		yield* settle(run, name, connection);
 
 		return yield* stopDroppedGuests(run, name, connection);
 	}
@@ -130,10 +150,36 @@ const applyMachine = Effect.fn("applyMachine")(function* (
 	yield* Console.log(`Switching ${name}…`);
 	yield* engine.activate(connection, system);
 	yield* Console.log(`Switched ${name} to ${system}.`);
-	yield* recordTailnet(run.root, run.state, name, connection);
+	yield* settle(run, name, connection);
 
 	return yield* stopDroppedGuests(run, name, connection);
 }, Effect.scoped);
+
+// What follows once a machine runs its declared system: its home synced and its tailnet address recorded.
+const settle = Effect.fn("settle")(function* (run: Run, name: string, connection: Connection) {
+	yield* syncHome(run, name, connection);
+	yield* recordTailnet(run.root, run.state, name, connection);
+});
+
+// Syncs the machine's dotfile sets into the user's home, asking first when files change.
+const syncHome = Effect.fn("syncHome")(function* (run: Run, name: string, connection: Connection) {
+	const entries = run.homes.get(name);
+	const user = Option.getOrUndefined(run.fleet.user);
+
+	if (entries === undefined || user === undefined) return yield* Effect.void;
+
+	const sync = yield* planHome(connection, name, user, entries);
+
+	if (
+		sync.plan.changes &&
+		!run.yes &&
+		!(yield* Prompt.Confirm({ message: `Sync ${user}'s home on ${name}?` }))
+	) {
+		return yield* Console.log(`Left ${user}'s home on ${name} as it is.`);
+	}
+
+	return yield* applyHome(connection, sync);
+});
 
 // Stops the guests state places on `host` that fleet.ts no longer declares. Their data stays
 // until aett machine destroy deletes it.
@@ -193,12 +239,18 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 
 	const system = yield* engine.buildGuest(run.build, name, connection);
 
+	// A guest that starts or restarts here is synced once it answers.
+	const settleGuest = connectGuest(run.root, run.state, name, connection).pipe(
+		Effect.flatMap((guest) => settle(run, name, guest)),
+	);
+
 	// Checked again after the build: a host switch that lists it for the first time starts it.
 	if ((yield* engine.guestState(connection, name)) !== "running") {
 		yield* Console.log(`Starting ${name}…`);
 		yield* engine.controlGuest(connection, name, "start");
+		yield* Console.log(`Started ${name} with ${system}.`);
 
-		return yield* Console.log(`Started ${name} with ${system}.`);
+		return yield* settleGuest;
 	}
 
 	const guest = yield* connectGuest(run.root, run.state, name, connection);
@@ -207,7 +259,7 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 	if (current === system) {
 		yield* Console.log(`${name} is up to date.`);
 
-		return yield* recordTailnet(run.root, run.state, name, guest);
+		return yield* settle(run, name, guest);
 	}
 
 	if (yield* engine.needsRestart(guest, system)) {
@@ -221,8 +273,9 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 
 		yield* Console.log(`Restarting ${name}…`);
 		yield* engine.controlGuest(connection, name, "restart");
+		yield* Console.log(`Restarted ${name} with ${system}.`);
 
-		return yield* Console.log(`Restarted ${name} with ${system}.`);
+		return yield* settleGuest;
 	}
 
 	const changes = yield* engine.changes(connection, current, system);
@@ -241,5 +294,5 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 	yield* engine.switchGuest(connection, guest, name, system);
 	yield* Console.log(`Switched ${name} to ${system}.`);
 
-	return yield* recordTailnet(run.root, run.state, name, guest);
+	return yield* settle(run, name, guest);
 }, Effect.scoped);
