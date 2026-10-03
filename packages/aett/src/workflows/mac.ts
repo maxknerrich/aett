@@ -220,6 +220,8 @@ export const applyMac = Effect.fn("applyMac")(function* (
 		.pipe(Effect.orElseSucceed(() => ""))).trim();
 
 	if (current === system) {
+		// The system holds, but apps may have come or gone by hand since.
+		yield* reconcileApps(yield* engine.brewfile(build, machine.name), recorded?.zap === true);
 		yield* Console.log(`${machine.name} is up to date.`);
 	} else {
 		const changes =
@@ -262,44 +264,57 @@ export const applyMac = Effect.fn("applyMac")(function* (
 	return false;
 });
 
-/** Upgrades the Mac's Homebrew apps, which aett leaves unpinned. */
-export const upgradeApps = Effect.fn("upgradeApps")(function* (machine: Machine) {
-	if (machine.apps.length === 0) return yield* Effect.void;
-
-	yield* Console.log(`Upgrading ${machine.name}'s apps…`);
-
+// Runs Homebrew as the operator on aett's terminal, where an app's installer may ask for sudo.
+const brewOnTerminal = Effect.fn("brewOnTerminal")(function* (args: ReadonlyArray<string>) {
 	const fs = yield* FileSystem.FileSystem;
 	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 	const [binary] = yield* Effect.filter(brew, (candidate) => fs.exists(candidate));
 
 	if (binary === undefined) return yield* new MacError({ message: "Homebrew isn't installed." });
 
-	// Fresh metadata first, then the upgrade on aett's terminal, where an app's installer may ask
-	// for sudo.
-	const brewing = (args: ReadonlyArray<string>) =>
-		spawner
-			.exitCode(
-				ChildProcess.make(binary, [...args], {
-					stdin: "inherit",
-					stdout: "inherit",
-					stderr: "inherit",
-					detached: false,
-				}),
-			)
-			.pipe(
-				Effect.mapError(
-					(error) => new MacError({ message: `Could not run brew: ${error.message}` }),
-				),
-				Effect.filterOrFail(
-					(exitCode) => exitCode === 0,
-					(exitCode) =>
-						new MacError({ message: `brew ${args[0]} failed with exit code ${exitCode}.` }),
-				),
-			);
+	const exitCode = yield* spawner
+		.exitCode(
+			ChildProcess.make(binary, [...args], {
+				stdin: "inherit",
+				stdout: "inherit",
+				stderr: "inherit",
+				detached: false,
+			}),
+		)
+		.pipe(
+			Effect.mapError((error) => new MacError({ message: `Could not run brew: ${error.message}` })),
+		);
 
-	yield* brewing(["update"]);
+	return yield* exitCode === 0
+		? Effect.void
+		: new MacError({ message: `brew ${args.join(" ")} failed with exit code ${exitCode}.` });
+});
 
-	return yield* brewing(["upgrade", "--cask", ...machine.apps]);
+/**
+ * Brings Homebrew to the Mac's Brewfile without switching the system, as its
+ * activation would: installs what is missing and, once the operator agreed,
+ * zaps what fleet.ts doesn't list.
+ */
+const reconcileApps = Effect.fn("reconcileApps")(function* (brewfile: string, zap: boolean) {
+	const fs = yield* FileSystem.FileSystem;
+	const file = `${yield* fs.makeTempDirectoryScoped({ prefix: "aett-" })}/Brewfile`;
+
+	yield* fs.writeFileString(file, brewfile);
+	yield* brewOnTerminal(["bundle", "install", `--file=${file}`, "--no-upgrade"]);
+
+	if (zap) yield* brewOnTerminal(["bundle", "cleanup", `--file=${file}`, "--force", "--zap"]);
+}, Effect.scoped);
+
+/** Upgrades the Mac's Homebrew apps, which aett leaves unpinned. */
+export const upgradeApps = Effect.fn("upgradeApps")(function* (machine: Machine) {
+	if (machine.apps.length === 0) return yield* Effect.void;
+
+	yield* Console.log(`Upgrading ${machine.name}'s apps…`);
+
+	// Fresh metadata first; an app's installer may ask for sudo on the terminal.
+	yield* brewOnTerminal(["update"]);
+
+	return yield* brewOnTerminal(["upgrade", "--cask", ...machine.apps]);
 });
 
 /** The casks Homebrew has on this Mac, which aett create adopts as its apps. */

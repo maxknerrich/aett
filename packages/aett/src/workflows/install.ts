@@ -124,27 +124,37 @@ export const install = Effect.fn("install")(function* (
 	// Trusted before the build, so the machine is a recipient of the secrets it reads on first boot.
 	yield* trustHostKey(root, name, hostKey.publicKey);
 
-	// Erasing the disk erases the machine's tailnet identity and its initrd's, so the build is made
-	// to join again with a new key. Until the install succeeds, the old nodes stay, and a failure
-	// before it puts their records back.
+	// Erasing the disk erases the machine's tailnet identity, its initrd's and its guests', so the
+	// build is made to join them again with new keys. Until the install succeeds, the old nodes stay,
+	// and a failure puts their records back.
 	const reinstalling = recorded?.installed === true;
-	const record = path.join(root, "state", name, "machine.json");
 
-	const before = (yield* fs.exists(record))
-		? Option.some(yield* fs.readFileString(record))
-		: Option.none();
+	// Its guests' identities live on its disk too.
+	const erased = [name, ...guestsOf(fleet, name)];
+
+	const before = yield* Effect.forEach(erased, (machineName) =>
+		Effect.gen(function* () {
+			const record = path.join(root, "state", machineName, "machine.json");
+
+			return (yield* fs.exists(record))
+				? [{ record, content: yield* fs.readFileString(record) }]
+				: [];
+		}),
+	);
 
 	if (reinstalling) {
-		yield* forgetRecord(root, name, [
-			"tailnet",
-			"tailnetName",
-			"node",
-			"unlock",
-			"tailscaleKeyExpires",
-		]);
+		yield* Effect.forEach(erased, (machineName) =>
+			forgetRecord(root, machineName, [
+				"tailnet",
+				"tailnetName",
+				"node",
+				"unlock",
+				"tailscaleKeyExpires",
+			]),
+		);
 	}
 
-	const restore = Effect.forEach(Option.toArray(before), (content) =>
+	const restore = Effect.forEach(before.flat(), ({ record, content }) =>
 		fs.writeFileString(record, content),
 	);
 
@@ -185,7 +195,9 @@ export const install = Effect.fn("install")(function* (
 		return keys;
 	}).pipe(Effect.onError(() => Effect.ignore(restore)));
 
-	if (reinstalling) yield* revokeOldNodes(root, state, name);
+	if (reinstalling) {
+		yield* Effect.forEach(erased, (machineName) => revokeOldNodes(root, state, machineName));
+	}
 
 	yield* updateRecord(root, name, { ...chosen, encrypted: machine.encrypted, installed: true });
 	yield* Effect.forEach(guests, ([guest, key]) => trustHostKey(root, guest, key.publicKey));
