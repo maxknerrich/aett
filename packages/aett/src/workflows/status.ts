@@ -157,8 +157,18 @@ export const status = Effect.fn("status")(function* (root: string) {
 				included.some(({ name: reader }) => secret.readers.includes(reader)),
 			);
 
+			// A package without a source yet is left out of the build until apply picks one.
+			const unsourced = [
+				...new Set(
+					included.flatMap(({ packages }) =>
+						packages.filter((pkg) => pins.packages[pkg] === undefined),
+					),
+				),
+			];
+
 			const pending = [
 				...unpinned.map(({ bin }) => `${bin} isn't pinned yet`),
+				...unsourced.map((pkg) => `${pkg} isn't pinned yet`),
 				...secrets.map(({ secret, reason }) => `${secret.name} ${reason}`),
 			];
 

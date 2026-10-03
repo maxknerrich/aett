@@ -152,14 +152,6 @@ export const mintKeys = Effect.fn("mintKeys")(function* (
 		joining,
 		(machine) =>
 			Effect.gen(function* () {
-				// A machine that joined since its key expired needs no new one: its node is the one
-				// that joined after the old key was minted.
-				if (state.machines.get(machine.name)?.tailscaleKeyExpires !== undefined) {
-					const joined = yield* findOnTailnet(root, fleet, state, machine.name);
-
-					if (Option.isSome(joined)) return;
-				}
-
 				const { key, expires } = yield* tailscale.mintKey(client.value, [tagOf(machine.role)]);
 				const recipients = yield* machineAgeKeys(root, state, [machine.name]);
 
@@ -177,43 +169,60 @@ export const mintKeys = Effect.fn("mintKeys")(function* (
 });
 
 /**
- * Records the tailnet name and node of each of `machines` that state knows
- * only by its tailnet address, as the tailnet lists them, so plugins can name
- * their peers and destroy can remove them. Without the OAuth client it waits.
+ * Records what state lacks about each of `machines` on the tailnet, as the
+ * tailnet lists them: the name and node of one known by its address, and
+ * all of it for one that joined with the key aett minted for it. Plugins then
+ * name their peers, and no machine gets a key it doesn't need. Without the
+ * OAuth client it waits.
  */
 export const nameOnTailnet = Effect.fn("nameOnTailnet")(function* (
 	root: string,
+	fleet: Fleet,
 	state: State,
 	machines: ReadonlySet<string>,
 ) {
-	const unnamed = [...machines].flatMap((name) => {
+	const missing = fleet.machines.filter(({ name }) => {
 		const recorded = state.machines.get(name);
 
-		return recorded?.tailnet !== undefined &&
-			(recorded.tailnetName === undefined || recorded.node === undefined)
-			? [{ name, address: recorded.tailnet }]
-			: [];
+		return (
+			machines.has(name) &&
+			(recorded?.tailnet === undefined
+				? recorded?.tailscaleKeyExpires !== undefined
+				: recorded.tailnetName === undefined || recorded.node === undefined)
+		);
 	});
 
-	if (unnamed.length === 0) return false;
+	if (missing.length === 0) return;
 
 	const client = yield* oauthClient(root);
 
-	if (Option.isNone(client)) return false;
+	if (Option.isNone(client)) return;
 
 	const devices = yield* (yield* Tailscale).devices(client.value);
 
-	const named = yield* Effect.forEach(unnamed, ({ name, address }) =>
-		Option.match(Option.fromUndefinedOr(devices.find((device) => device.address === address)), {
-			onNone: () => Effect.succeed(false),
-			onSome: (device) =>
-				updateRecord(root, name, { tailnetName: device.name, node: device.node }).pipe(
-					Effect.as(true),
-				),
-		}),
-	);
+	yield* Effect.forEach(missing, ({ name, role }) => {
+		const recorded = state.machines.get(name);
 
-	return named.includes(true);
+		// The machine joined after aett minted its key, which is good for a day.
+		const device = Option.fromUndefinedOr(
+			recorded?.tailnet === undefined
+				? joinedAs(
+						devices,
+						name,
+						tagOf(role),
+						new Date(Date.parse(recorded?.tailscaleKeyExpires ?? "") - 86_400_000),
+					)
+				: devices.find(({ address }) => address === recorded.tailnet),
+		);
+
+		return Effect.forEach(Option.toArray(device), (found) =>
+			updateRecord(root, name, {
+				tailnet: found.address,
+				tailnetName: found.name,
+				node: found.node,
+			}),
+		);
+	});
 });
 
 /** A one-time key for an encrypted machine's initrd to join with as tag:unlock, if the OAuth client is set up. */

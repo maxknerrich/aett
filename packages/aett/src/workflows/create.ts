@@ -355,10 +355,12 @@ const toClipboard = Effect.fn("toClipboard")(function* (text: string) {
 		copiers.map(([command, ...args]) =>
 			spawner
 				.exitCode(
+					// wl-copy and xclip leave a process serving the clipboard, which must outlive aett.
 					ChildProcess.make(command, [...args], {
 						stdin: Stream.make(new TextEncoder().encode(text)),
 						stdout: "ignore",
 						stderr: "ignore",
+						detached: false,
 					}),
 				)
 				.pipe(Effect.filterOrFail((exitCode) => exitCode === 0)),

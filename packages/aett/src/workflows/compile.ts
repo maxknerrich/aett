@@ -33,7 +33,7 @@ export const emit = Effect.fn("emit")(function* (root: string) {
 	const state = changes.size === 0 ? recorded : yield* readState(root, fleet);
 
 	yield* ensureGuestKeys(root, fleet, state.operator.ageKeys);
-	yield* nameOnTailnet(root, state, buildable(fleet, state));
+	yield* nameOnTailnet(root, fleet, state, buildable(fleet, state));
 	yield* mintKeys(root, fleet, yield* readState(root, fleet), buildable(fleet, state));
 
 	// Naming and minting record what they found and when each key stops working.

@@ -175,7 +175,7 @@ const PluginMetadata = Schema.Struct({
 				}),
 				Schema.Struct({
 					prompt: Schema.NonEmptyString,
-					per: Schema.optionalKey(Schema.Literals(["fleet", "instance"])),
+					per: Schema.optionalKey(Schema.Literals(["fleet", "instance", "client"])),
 				}),
 			]),
 		),

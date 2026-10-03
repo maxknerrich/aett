@@ -268,13 +268,38 @@ export const upgradeApps = Effect.fn("upgradeApps")(function* (machine: Machine)
 
 	yield* Console.log(`Upgrading ${machine.name}'s apps…`);
 
-	const { stdout, exitCode } = yield* runBrew(["upgrade", "--cask", ...machine.apps]);
+	const fs = yield* FileSystem.FileSystem;
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const [binary] = yield* Effect.filter(brew, (candidate) => fs.exists(candidate));
 
-	yield* Console.log(stdout.trim() === "" ? "Its apps are up to date." : stdout.trim());
+	if (binary === undefined) return yield* new MacError({ message: "Homebrew isn't installed." });
 
-	return yield* exitCode === 0
-		? Effect.void
-		: new MacError({ message: `brew upgrade failed with exit code ${exitCode}.` });
+	// Fresh metadata first, then the upgrade on aett's terminal, where an app's installer may ask
+	// for sudo.
+	const brewing = (args: ReadonlyArray<string>) =>
+		spawner
+			.exitCode(
+				ChildProcess.make(binary, [...args], {
+					stdin: "inherit",
+					stdout: "inherit",
+					stderr: "inherit",
+					detached: false,
+				}),
+			)
+			.pipe(
+				Effect.mapError(
+					(error) => new MacError({ message: `Could not run brew: ${error.message}` }),
+				),
+				Effect.filterOrFail(
+					(exitCode) => exitCode === 0,
+					(exitCode) =>
+						new MacError({ message: `brew ${args[0]} failed with exit code ${exitCode}.` }),
+				),
+			);
+
+	yield* brewing(["update"]);
+
+	return yield* brewing(["upgrade", "--cask", ...machine.apps]);
 });
 
 /** The casks Homebrew has on this Mac, which aett create adopts as its apps. */

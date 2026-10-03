@@ -25,7 +25,7 @@ export type Secret =
 	| {
 			/** What aett asks for. */
 			readonly prompt: string;
-			readonly per?: "fleet" | "instance";
+			readonly per?: "fleet" | "instance" | "client";
 	  };
 
 /** A port a plugin's instances serve on the tailnet. */

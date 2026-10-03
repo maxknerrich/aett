@@ -181,9 +181,14 @@ export class Tailscale extends Context.Service<
 			) {
 				const api = yield* authorized(client);
 
-				yield* api
-					.del(`/device/${encodeURIComponent(node)}`)
-					.pipe(Effect.mapError(failure(`remove the device ${node}`)));
+				// A device that is gone already, removed by hand or by an earlier run, is what was wanted.
+				yield* api.del(`/device/${encodeURIComponent(node)}`).pipe(
+					Effect.catchIf(
+						(error) => "response" in error && error.response?.status === 404,
+						() => Effect.void,
+					),
+					Effect.mapError(failure(`remove the device ${node}`)),
+				);
 			});
 
 			const check = Effect.fn("Tailscale.check")(function* (client: OAuthClient) {
