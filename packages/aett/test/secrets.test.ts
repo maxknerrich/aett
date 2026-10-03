@@ -2,7 +2,8 @@ import { Option, Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
 import { machineSecrets } from "../src/domain/secrets.ts";
-import { fleet, hypervisor, server } from "../src/index.ts";
+import { grantsFor } from "../src/domain/tailnet.ts";
+import { computer, fleet, hypervisor, nas, server } from "../src/index.ts";
 
 // The fleet aett works with for a declaration.
 const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
@@ -41,6 +42,27 @@ describe("machineSecrets", () => {
 				certificate: "state/hades/backup.tls.pem",
 			},
 			{ name: "backup/client/zeus", readers: ["zeus", "hades"], kind: "random", certificate: null },
+		]);
+	});
+});
+
+describe("grantsFor", () => {
+	it("lets each plugin's machines reach its instances' endpoints, by tag, Macs being their owner's", () => {
+		const declared = loaded(
+			fleet({
+				user: "mkn",
+				machines: {
+					kronos: hypervisor(),
+					hades: server({ host: "kronos" }),
+					vault: nas(),
+					fawkes: computer({ os: "macos" }),
+				},
+				services: { backup: "hades" },
+			}),
+		);
+
+		expect(grantsFor(declared)).toEqual([
+			{ src: ["tag:nas", "tag:server"], dst: ["tag:server"], ip: ["tcp:51515"] },
 		]);
 	});
 });

@@ -44,7 +44,8 @@ rec {
   sources = lib.optional (cfg.user != null) "${home}/${cfg.user.name}" ++ map (dir: dir.path) cfg.state;
 
   # Connects once, as aett@<machine>, then snapshots every source. Kopia keeps the snapshots the
-  # server's global policy says.
+  # server's global policy says. It reaches the server by its tailnet address, which needs no
+  # MagicDNS; the pinned fingerprint, not the name, proves it is the server.
   client = pkgs.writeShellScript "aett-backup" ''
     set -eu
     export KOPIA_PASSWORD="$(cat ${config.sops.secrets."backup/client/${cfg.name}".path})"
@@ -54,7 +55,7 @@ rec {
     if [ ! -f ${clientDirectory}/repository.config ]; then
       mkdir -p ${clientDirectory}
       kc repository connect server \
-        --url=https://${server.tailnet.name}:${toString port} \
+        --url=https://${server.tailnet.address}:${toString port} \
         --server-cert-fingerprint=${server.fingerprints.tls} \
         --override-username=aett --override-hostname=${cfg.name} \
         --cache-directory=${clientDirectory}/cache

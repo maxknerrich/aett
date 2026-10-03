@@ -6,7 +6,7 @@ import type { MachineRecord, State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { buildable } from "../domain/build.ts";
 import { ensureGuestKeys } from "./identity.ts";
-import { mintKeys } from "./tailscale.ts";
+import { mintKeys, nameOnTailnet } from "./tailscale.ts";
 import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
 import { completePins, readPins } from "./pins.ts";
 import { existingSecrets, shareSecrets } from "./secrets.ts";
@@ -32,13 +32,14 @@ export const emit = Effect.fn("emit")(function* (root: string) {
 
 	const state = changes.size === 0 ? recorded : yield* readState(root, fleet);
 
-	yield* writeSshConfig(root, sshConfig(fleet, state, path.join(root, "state", "known_hosts")));
-
 	yield* ensureGuestKeys(root, fleet, state.operator.ageKeys);
-	yield* mintKeys(root, fleet, state, buildable(fleet, state));
+	yield* nameOnTailnet(root, state, buildable(fleet, state));
+	yield* mintKeys(root, fleet, yield* readState(root, fleet), buildable(fleet, state));
 
-	// Minting records when each key stops working.
+	// Naming and minting record what they found and when each key stops working.
 	const minted = yield* readState(root, fleet);
+
+	yield* writeSshConfig(root, sshConfig(fleet, minted, path.join(root, "state", "known_hosts")));
 	const extras = yield* shareSecrets(root, fleet, minted);
 	const pins = yield* completePins(root, fleet, minted);
 	const build = yield* engine.emit(root, fleet, minted, extras, pins);

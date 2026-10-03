@@ -105,3 +105,10 @@ export interface Plugin<Name extends string = string, Options = unknown> {
  * ```
  */
 export const plugin = <const Definition extends Plugin>(definition: Definition) => definition;
+
+/** A rule the tailnet's policy needs so machines reach a plugin's endpoints: who, where, which ports. */
+export interface Grant {
+	readonly src: ReadonlyArray<string>;
+	readonly dst: ReadonlyArray<string>;
+	readonly ip: ReadonlyArray<string>;
+}

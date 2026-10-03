@@ -150,7 +150,14 @@ const enrollUnlocks = Effect.fn("enrollUnlocks")(function* (
 
 	const joined = yield* Effect.forEach(waiting, (machine) =>
 		Effect.gen(function* () {
-			const key = yield* mintUnlockKey(root);
+			// The initrd can join with a later apply; this one goes on without it.
+			const key = yield* mintUnlockKey(root).pipe(
+				Effect.catchTag("TailscaleError", (error) =>
+					Console.log(
+						`${machine.name}'s initrd stays off the tailnet for now. ${error.message}`,
+					).pipe(Effect.as(Option.none())),
+				),
+			);
 
 			if (Option.isNone(key)) return false;
 

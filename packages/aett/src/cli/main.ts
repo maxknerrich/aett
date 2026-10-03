@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -14,6 +15,10 @@ import { Ssh } from "../adapters/ssh.ts";
 import { nixEngine } from "../engine/nix/nix.ts";
 import { command } from "./command.ts";
 import { fleetAett, handOff } from "./hand-off.ts";
+
+// Node gives each address only 250 ms to connect before it tries the next; on a slow link every
+// attempt then times out, as Tailscale's API did. A second each still falls back quickly.
+setDefaultAutoSelectFamilyAttemptTimeout(1000);
 
 // This file sits two levels below the package root in both src/ and dist/.
 const directory = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));

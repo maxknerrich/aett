@@ -3,6 +3,7 @@ import { Prompt } from "effect/cli";
 import { Secrets } from "../adapters/secrets.ts";
 import { joinedAs, OAuthClient, Tailscale } from "../adapters/tailscale.ts";
 import type { Fleet } from "../domain/fleet.ts";
+import { grantsFor, tagOf, unlockTag } from "../domain/tailnet.ts";
 import { secretFile, tailscaleKey } from "../domain/secrets.ts";
 import type { State } from "../domain/state.ts";
 import { machineAgeKeys } from "./identity.ts";
@@ -12,11 +13,6 @@ import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
 const clientFile = secretFile("tailscale/oauth");
 
 const ClientJson = Schema.fromJsonString(OAuthClient);
-
-/** The tag a machine joins the tailnet with: its role's. An encrypted machine's initrd has its own. */
-export const tagOf = (role: string) => `tag:${role}`;
-
-export const unlockTag = "tag:unlock";
 
 /** The fleet's OAuth client, or none before aett tailscale setup. */
 export const oauthClient = Effect.fn("oauthClient")(function* (root: string) {
@@ -46,6 +42,8 @@ export const setupTailscale = Effect.fn("setupTailscale")(function* (root: strin
 	const secrets = yield* Secrets;
 	const state = yield* readState(root, fleet);
 
+	const grants = grantsFor(fleet);
+
 	const tags = [
 		...new Set([
 			...fleet.machines.map(({ role }) => tagOf(role)),
@@ -64,6 +62,14 @@ export const setupTailscale = Effect.fn("setupTailscale")(function* (root: strin
 			"",
 			"   and let this computer reach them on port 22. Give tag:unlock no access of its own: an",
 			"   encrypted machine's initrd joins with it, and its key sits unencrypted on the boot disk.",
+			...(grants.length === 0
+				? []
+				: [
+						"",
+						"   The fleet's machines reach each other's services through these grants:",
+						"",
+						...grants.map((grant) => `   ${JSON.stringify(grant)},`),
+					]),
 			"",
 			"2. Under Settings → OAuth clients (https://login.tailscale.com/admin/settings/oauth),",
 			"   generate a client with these scopes:",
@@ -117,7 +123,12 @@ export const mintKeys = Effect.fn("mintKeys")(function* (
 		fleet.machines.filter(({ name }) => {
 			const recorded = state.machines.get(name);
 
-			return machines.has(name) && recorded?.node === undefined && recorded?.tailscaleApp !== true;
+			return (
+				machines.has(name) &&
+				recorded?.tailnet === undefined &&
+				recorded?.node === undefined &&
+				recorded?.tailscaleApp !== true
+			);
 		}),
 		({ name }) =>
 			Effect.map(fs.exists(path.join(root, secretFile(tailscaleKey(name)))), (exists) => {
@@ -155,6 +166,46 @@ export const mintKeys = Effect.fn("mintKeys")(function* (
 			}),
 		{ discard: true },
 	);
+});
+
+/**
+ * Records the tailnet name and node of each of `machines` that state knows
+ * only by its tailnet address, as the tailnet lists them, so plugins can name
+ * their peers and destroy can remove them. Without the OAuth client it waits.
+ */
+export const nameOnTailnet = Effect.fn("nameOnTailnet")(function* (
+	root: string,
+	state: State,
+	machines: ReadonlySet<string>,
+) {
+	const unnamed = [...machines].flatMap((name) => {
+		const recorded = state.machines.get(name);
+
+		return recorded?.tailnet !== undefined &&
+			(recorded.tailnetName === undefined || recorded.node === undefined)
+			? [{ name, address: recorded.tailnet }]
+			: [];
+	});
+
+	if (unnamed.length === 0) return false;
+
+	const client = yield* oauthClient(root);
+
+	if (Option.isNone(client)) return false;
+
+	const devices = yield* (yield* Tailscale).devices(client.value);
+
+	const named = yield* Effect.forEach(unnamed, ({ name, address }) =>
+		Option.match(Option.fromUndefinedOr(devices.find((device) => device.address === address)), {
+			onNone: () => Effect.succeed(false),
+			onSome: (device) =>
+				updateRecord(root, name, { tailnetName: device.name, node: device.node }).pipe(
+					Effect.as(true),
+				),
+		}),
+	);
+
+	return named.includes(true);
 });
 
 /** A one-time key for an encrypted machine's initrd to join with as tag:unlock, if the OAuth client is set up. */

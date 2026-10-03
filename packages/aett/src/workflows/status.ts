@@ -183,11 +183,25 @@ export const status = Effect.fn("status")(function* (root: string) {
 				({ name: service }) =>
 					Option.match(Option.fromUndefinedOr(fleet.services.get(service)?.plugin.health), {
 						onNone: () => Effect.succeed([]),
+						// Its exit status and the first line it printed, which says how it is either way.
 						onSome: (check) =>
-							connection.run(`${check} 2>&1 | head -n 1; exit "\${PIPESTATUS[0]}"`).pipe(
-								Effect.map((said) => [`${service} ${said.trim() || "healthy"}`]),
-								Effect.catchTag("SshError", () => Effect.succeed([`${service} unhealthy`])),
-							),
+							connection
+								.run(
+									`said=$( (${check}) 2>&1 ); code=$?; printf '%s %s\\n' "$code" "$(printf '%s' "$said" | head -n 1)"`,
+								)
+								.pipe(
+									Effect.map((printed) => {
+										const [code = "", ...words] = printed.trim().split(" ");
+										const said = words.join(" ");
+
+										return [
+											code === "0"
+												? `${service} ${said || "healthy"}`
+												: `${service} unhealthy${said === "" ? "" : `: ${said}`}`,
+										];
+									}),
+									Effect.catchTag("SshError", () => Effect.succeed([`${service} unhealthy`])),
+								),
 					}),
 			);
 

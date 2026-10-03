@@ -178,6 +178,8 @@
             pkgs.gitMinimal
             pkgs.openssl
             pkgs.tailscale
+            # GNU tools for the scripts aett runs on the Mac it applies to.
+            pkgs.coreutils
           ];
         };
 
