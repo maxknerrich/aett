@@ -100,8 +100,8 @@ export const placeGuestKeys = Effect.fn("placeGuestKeys")(function* (
 	);
 });
 
-// The host keys in aett's known_hosts by machine name, as trustHostKey writes them.
-const knownHostKeys = Effect.fn("knownHostKeys")(function* (root: string) {
+/** The host keys in aett's known_hosts by machine name, as trustHostKey writes them. */
+export const knownHostKeys = Effect.fn("knownHostKeys")(function* (root: string) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const file = path.join(root, "state", "known_hosts");

@@ -9,6 +9,7 @@ import { destroy } from "../workflows/destroy.ts";
 import { fleetRoot } from "../workflows/load.ts";
 import { update } from "../workflows/pins.ts";
 import { setSecret } from "../workflows/secrets.ts";
+import { status } from "../workflows/status.ts";
 import { discover, install } from "../workflows/install.ts";
 
 const cwd = Effect.map(Effect.service(Path.Path), (path) => path.resolve());
@@ -193,6 +194,11 @@ export const command = (aett: AettPackage) =>
 			).pipe(
 				Command.withDescription(
 					"Build the declared system on installed machines and their VMs and switch to it.",
+				),
+			),
+			Command.make("status", {}, () => Effect.flatMap(fleet, status)).pipe(
+				Command.withDescription(
+					"Ask every machine how it is reached, its tailnet address, whether it runs what fleet.ts builds, and how its guests are.",
 				),
 			),
 			Command.make(

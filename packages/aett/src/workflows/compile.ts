@@ -1,12 +1,13 @@
 import { Console, Effect, FileSystem, Option, Path } from "effect";
 import type { Fleet } from "../domain/fleet.ts";
 import { allocate, sshConfig } from "../domain/network.ts";
-import type { State } from "../domain/state.ts";
+import { mergeInputs, type Pins } from "../domain/pins.ts";
+import type { MachineRecord, State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { ensureGuestKeys } from "./identity.ts";
 import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
-import { completePins } from "./pins.ts";
-import { shareSecrets } from "./secrets.ts";
+import { completePins, readPins } from "./pins.ts";
+import { existingSecrets, shareSecrets } from "./secrets.ts";
 
 /**
  * Loads the fleet and its state, records the guest addresses and host keys
@@ -59,6 +60,50 @@ const writeSshConfig = Effect.fn("writeSshConfig")(function* (root: string, cont
 });
 
 /**
+ * Writes the build from fleet.ts and what the fleet records, recording
+ * nothing: the addresses and forwards apply would hand out are taken in
+ * memory, as are aett's tested revisions for inputs the pins lack, and no
+ * key, secret or pin is made, asked for or changed. Machines that need one of
+ * them are left out or built without it.
+ */
+export const emitAsIs = Effect.fn("emitAsIs")(function* (root: string) {
+	const engine = yield* Engine;
+	const fleet = yield* loadFleet(root);
+	const recorded = yield* readState(root, fleet);
+
+	const allocated = yield* Effect.fromResult(allocate(fleet, recorded)).pipe(
+		Effect.mapError((message) => new FleetError({ message })),
+	);
+
+	const state: State = {
+		operator: recorded.operator,
+		machines: new Map([
+			...recorded.machines,
+			...[...allocated].map(
+				([name, change]: readonly [string, typeof MachineRecord.Type]) =>
+					[name, { facts: false, ...recorded.machines.get(name), ...change }] as const,
+			),
+		]),
+	};
+
+	const secrets = yield* existingSecrets(root, fleet);
+	const defaults = yield* engine.defaultInputs;
+
+	// Inputs a newer aett added are pinned at its tested revisions, as apply would.
+	const pins = Option.match(yield* readPins(root), {
+		onNone: (): Pins => ({ inputs: defaults, releases: {} }),
+		onSome: ({ inputs, releases }): Pins => ({
+			inputs: mergeInputs(inputs, defaults).lock,
+			releases,
+		}),
+	});
+
+	const build = yield* engine.emit(root, fleet, state, secrets, pins);
+
+	return { build, fleet, state, pins };
+});
+
+/**
  * Emits the build, then evaluates the machines it covers and reports the rest
  * as not discovered or not installed yet.
  */
@@ -76,8 +121,8 @@ export const compile = Effect.fn("compile")(function* (root: string) {
 	);
 });
 
-// Why the build leaves a machine out.
-const notBuilt = (fleet: Fleet, state: State, name: string) => {
+/** Why the build leaves a machine out. */
+export const notBuilt = (fleet: Fleet, state: State, name: string) => {
 	const machine = fleet.machines.find((declared) => declared.name === name);
 	const unsupported = machine?.unsupported ?? [];
 

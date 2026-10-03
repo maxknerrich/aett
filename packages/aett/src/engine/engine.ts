@@ -85,8 +85,15 @@ export class Engine extends Context.Service<
 		readonly prefetch: (url: string) => Effect.Effect<string, EngineError>;
 		/** Checks a machine's system on the controller, before any machine is contacted. Returns what it evaluated. */
 		readonly evaluate: (build: Build, name: string) => Effect.Effect<string, EngineError>;
-		/** The system a machine would run if built from `build`, computed on the controller without building it. */
-		readonly systemPath: (build: Build, name: string) => Effect.Effect<string, EngineError>;
+		/**
+		 * The systems the named machines would run if built from `build`, by
+		 * name, computed on the controller in one evaluation without building
+		 * them. Fails when any of them doesn't evaluate.
+		 */
+		readonly systemPaths: (
+			build: Build,
+			names: ReadonlyArray<string>,
+		) => Effect.Effect<ReadonlyMap<string, string>, EngineError>;
 		/** Copies the build to `target` and builds the machine's system there, streaming the log. Returns the system. */
 		readonly buildSystem: (
 			build: Build,

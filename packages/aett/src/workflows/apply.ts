@@ -230,7 +230,8 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 
 	if (
 		homed &&
-		(yield* engine.systemPath(run.build, host)) !== (yield* engine.currentSystem(connection))
+		(yield* engine.systemPaths(run.build, [host])).get(host) !==
+			(yield* engine.currentSystem(connection))
 	) {
 		yield* Console.log(
 			`${host} doesn't run what fleet.ts builds for it yet. It forwards ${name}'s SSH and mosh from the LAN, so apply ${host} too.`,

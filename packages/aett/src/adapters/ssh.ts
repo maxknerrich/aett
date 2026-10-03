@@ -37,8 +37,11 @@ export interface Connection {
 export const shellQuote = (value: string) =>
 	/^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 
+/** What aett does with a machine's host key that its known hosts lack: records it, or refuses the machine. */
+export type UnknownKey = "record" | "refuse";
+
 // How aett logs in to a machine: only the agent's keys, and only aett's known hosts, keyed by the machine's name.
-const machineOptions = (name: string, knownHosts: string) => [
+const machineOptions = (name: string, knownHosts: string, unknownKey: UnknownKey) => [
 	"BatchMode=yes",
 	// A machine that doesn't answer fails fast, so aett can try another way to it.
 	"ConnectTimeout=10",
@@ -47,7 +50,7 @@ const machineOptions = (name: string, knownHosts: string) => [
 	`UserKnownHostsFile=${sshConfigPath(knownHosts)}`,
 	"GlobalKnownHostsFile=/dev/null",
 	`HostKeyAlias=${name}`,
-	"StrictHostKeyChecking=accept-new",
+	`StrictHostKeyChecking=${unknownKey === "record" ? "accept-new" : "yes"}`,
 	"CheckHostIP=no",
 ];
 
@@ -75,12 +78,14 @@ export class Ssh extends Context.Service<
 		 * Logs in to an installed machine as root with the operator's key from the
 		 * SSH agent and keeps the connection open for the scope. The host key is
 		 * checked against `knownHosts` under the machine's name, whatever its
-		 * address, and recorded there on first contact.
+		 * address. One `knownHosts` lacks is recorded there on first contact,
+		 * unless `unknownKey` is "refuse".
 		 */
 		readonly machine: (
 			name: string,
 			host: Host,
 			knownHosts: string,
+			unknownKey?: UnknownKey,
 		) => Effect.Effect<
 			Connection,
 			SshError | EngineError | PlatformError.PlatformError,
@@ -95,6 +100,7 @@ export class Ssh extends Context.Service<
 			address: string,
 			knownHosts: string,
 			via: Connection,
+			unknownKey?: UnknownKey,
 		) => Effect.Effect<
 			Connection,
 			SshError | EngineError | PlatformError.PlatformError,
@@ -226,10 +232,11 @@ export class Ssh extends Context.Service<
 				name: string,
 				host: Host,
 				knownHosts: string,
+				unknownKey: UnknownKey = "record",
 			) {
 				return yield* open(host, yield* temporaryDirectory, {
 					target: name,
-					options: machineOptions(name, knownHosts),
+					options: machineOptions(name, knownHosts, unknownKey),
 					env: {},
 				});
 			});
@@ -239,6 +246,7 @@ export class Ssh extends Context.Service<
 				address: string,
 				knownHosts: string,
 				via: Connection,
+				unknownKey: UnknownKey = "record",
 			) {
 				const ssh = path.join(yield* engine.tools, "ssh");
 
@@ -253,7 +261,7 @@ export class Ssh extends Context.Service<
 
 				return yield* open({ name: address, port: 22 }, yield* temporaryDirectory, {
 					target: name,
-					options: [...machineOptions(name, knownHosts), `ProxyCommand=${proxy}`],
+					options: [...machineOptions(name, knownHosts, unknownKey), `ProxyCommand=${proxy}`],
 					env: {},
 				});
 			});
