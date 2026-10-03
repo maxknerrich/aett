@@ -380,7 +380,7 @@ export const update = Effect.fn("update")(function* (root: string, names: Readon
 	);
 
 	// Apps come unpinned; updating the Mac aett runs on upgrades them.
-	const mac = yield* thisMac(fleet, Option.none());
+	const mac = yield* thisMac(fleet, Option.none(), false);
 
 	return yield* Effect.forEach(Option.toArray(mac), upgradeApps, { discard: true });
 });

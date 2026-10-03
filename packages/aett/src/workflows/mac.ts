@@ -19,14 +19,24 @@ export class MacError extends Schema.TaggedError<MacError>()("MacError", {
 // Where a Mac's own age key lives in the fleet, encrypted to the operators.
 const ageKeyFile = (name: string) => `secrets/${name}/age-key.json`;
 
+/** Whether this run should go on: the operator agreed, or `yes` answers for them. */
+const agree = (yes: boolean, message: string) =>
+	yes ? Effect.succeed(true) : Prompt.Confirm({ message });
+
 /** Homebrew's binary on this Mac, wherever it was installed. */
 const brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"];
 
 /**
- * The Mac in `fleet` that aett runs on: the one named, or else the one whose
- * local host name it has. None off macOS.
+ * The Mac in `fleet` that aett runs on: the one whose local host name it
+ * has, or the one named. A Mac named under another name is only this Mac
+ * once the operator says so, which `yes` does for them: its first apply
+ * gives it that name. None off macOS.
  */
-export const thisMac = Effect.fn("thisMac")(function* (fleet: Fleet, named: Option.Option<string>) {
+export const thisMac = Effect.fn("thisMac")(function* (
+	fleet: Fleet,
+	named: Option.Option<string>,
+	yes: boolean,
+) {
 	if (platform() !== "darwin") return Option.none<Machine>();
 
 	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -37,12 +47,20 @@ export const thisMac = Effect.fn("thisMac")(function* (fleet: Fleet, named: Opti
 		.trim()
 		.toLowerCase();
 
-	return Option.fromUndefinedOr(
-		fleet.machines.find(
-			(machine) =>
-				machine.kind === "macos" && Option.getOrElse(named, () => local) === machine.name,
-		),
+	const wanted = Option.getOrElse(named, () => local);
+
+	const mac = Option.fromUndefinedOr(
+		fleet.machines.find((machine) => machine.kind === "macos" && machine.name === wanted),
 	);
+
+	if (Option.isNone(mac) || wanted === local) return mac;
+
+	return (yield* agree(
+		yes,
+		`This Mac is ${local}, not ${wanted}. Apply ${wanted} to it, renaming it ${wanted}?`,
+	))
+		? mac
+		: Option.none<Machine>();
 });
 
 /**
@@ -140,10 +158,6 @@ const undeclared = Effect.fn("undeclared")(function* (brewfile: string) {
 		.map((line) => line.trim())
 		.filter((line) => line !== "" && !/^(Would|Run) /.test(line));
 }, Effect.scoped);
-
-/** Whether this run should go on: the operator agreed, or `yes` answers for them. */
-const agree = (yes: boolean, message: string) =>
-	yes ? Effect.succeed(true) : Prompt.Confirm({ message });
 
 /**
  * Applies the Mac aett runs on: builds its nix-darwin system here, shows what

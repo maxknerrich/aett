@@ -48,7 +48,7 @@ export const apply = Effect.fn("apply")(function* (
 ) {
 	const engine = yield* Engine;
 	const declared = yield* loadFleet(root);
-	const local = Option.map(yield* thisMac(declared, name), ({ name: mac }) => mac);
+	const local = Option.map(yield* thisMac(declared, name, options.yes), ({ name: mac }) => mac);
 
 	yield* Effect.forEach(Option.toArray(local), (mac) =>
 		Effect.flatMap(readState(root, declared), (recorded) => prepareMac(root, recorded, mac)),
