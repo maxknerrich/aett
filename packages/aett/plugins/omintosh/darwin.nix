@@ -19,6 +19,17 @@
     ProcessType = "Interactive";
   };
 
+  # Rift runs register.sh only when it starts, often before aett syncs the home; it restarts whenever
+  # the sync places or changes its configuration.
+  launchd.user.agents.rift-restart.serviceConfig = {
+    ProgramArguments = [
+      "/bin/sh"
+      "-c"
+      "/bin/launchctl kickstart -k gui/$(/usr/bin/id -u)/org.nixos.rift"
+    ];
+    WatchPaths = [ "/Users/${config.aett.user.name}/.config/rift" ];
+  };
+
   environment.systemPackages = [ pkgs.jq ];
 
   # Reads ~/.config/sketchybar/sketchybarrc, which the home tree brings.
