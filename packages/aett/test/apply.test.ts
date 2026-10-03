@@ -65,7 +65,7 @@ describe("applyTargets", () => {
 		);
 	});
 
-	it("rejects a machine whose declared disk encryption differs from its install", () => {
+	it("rejects a machine whose declared disks differ from its install", () => {
 		const encrypted = loaded(
 			fleet({ machines: { box: hypervisor({ system: { encrypted: true } }) } }),
 		);
@@ -73,6 +73,19 @@ describe("applyTargets", () => {
 		expect(applyTargets(encrypted, state, Option.none(), Option.none())).toEqual(
 			Result.fail(
 				"box's disk was installed unencrypted, but fleet.ts now declares it encrypted. Only a reinstall changes that: aett machine install box --reinstall.",
+			),
+		);
+
+		const pools = { root: [disk, `${disk}-2`], tank: [`${disk}-3`, `${disk}-4`] };
+
+		const wasNas = {
+			...state,
+			machines: new Map([["box", { facts: true, pools, encrypted: true, installed: true }]]),
+		};
+
+		expect(applyTargets(encrypted, wasNas, Option.none(), Option.none())).toEqual(
+			Result.fail(
+				"box was installed as a NAS, on pools, but fleet.ts now declares it a hypervisor, on one disk. Only a reinstall changes that: aett machine install box --reinstall.",
 			),
 		);
 	});

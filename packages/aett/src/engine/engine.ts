@@ -190,8 +190,8 @@ export class Engine extends Context.Service<
 		) => Effect.Effect<Enrolled, EngineError | SshError>;
 		/**
 		 * Hands the Wi-Fi networks `target` knows to its initrd, so it reaches the
-		 * tailnet without a cable. Returns whether they changed, which the boot
-		 * loader then has to put into the initrd.
+		 * tailnet without a cable. Returns whether the boot loader has yet to put
+		 * them into the initrd: they changed, now or before a refresh that failed.
 		 */
 		readonly unlockWifi: (target: Connection) => Effect.Effect<boolean, SshError>;
 		/** Installs `target`'s boot loader again for the system it runs, with its initrd's secrets as they are now. */

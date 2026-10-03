@@ -347,10 +347,5 @@ const recordedNode = (
 	recorded?.tailnet === undefined
 		? recorded?.tailscaleKeyExpires === undefined || tag === undefined
 			? undefined
-			: joinedAs(
-					devices,
-					name,
-					tag,
-					new Date(Date.parse(recorded.tailscaleKeyExpires) - 86_400_000),
-				)
+			: joinedAs(devices, name, tag, new Date(recorded.tailscaleKeyExpires))
 		: devices.find(({ address }) => address === recorded.tailnet);

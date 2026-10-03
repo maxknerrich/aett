@@ -20,8 +20,8 @@ export interface Targets {
  * aett runs on, last. That leaves out machines not installed yet, VMs whose
  * host isn't, other Macs, which apply to themselves, and machines that use
  * what aett can't build yet; naming one of them is an error. A target whose
- * declared disk encryption differs from how it was installed is an error too,
- * because its new system could not mount its disk.
+ * declared disk encryption or layout differs from how it was installed is an
+ * error too, because its new system could not mount its disks.
  */
 export const applyTargets = (
 	fleet: Fleet,
@@ -30,22 +30,45 @@ export const applyTargets = (
 	local: Option.Option<string>,
 ) =>
 	Result.flatMap(select(fleet, state, name, local), (selected) => {
-		const changed = fleet.machines.find(
-			(machine) =>
-				selected.targets.includes(machine.name) &&
-				(state.machines.get(machine.name)?.encrypted ?? false) !== machine.encrypted,
-		);
+		const changed = fleet.machines
+			.filter((machine) => selected.targets.includes(machine.name))
+			.flatMap((machine) =>
+				Option.toArray(Option.map(diskChange(machine, state), (change) => ({ machine, change }))),
+			)[0];
 
-		if (changed === undefined) return Result.succeed(selected);
+		return changed === undefined
+			? Result.succeed(selected)
+			: Result.fail(
+					`${changed.change} Only a reinstall changes that: aett machine install ${changed.machine.name} --reinstall.`,
+				);
+	});
 
-		const [was, now] = changed.encrypted
+// How fleet.ts changed a machine's disks since its install, if it did.
+const diskChange = (machine: Machine, state: State) => {
+	const recorded = state.machines.get(machine.name);
+
+	if ((recorded?.encrypted ?? false) !== machine.encrypted) {
+		const [was, now] = machine.encrypted
 			? ["unencrypted", "encrypted"]
 			: ["encrypted", "unencrypted"];
 
-		return Result.fail(
-			`${changed.name}'s disk was installed ${was}, but fleet.ts now declares it ${now}. Only a reinstall changes that: aett machine install ${changed.name} --reinstall.`,
+		return Option.some(
+			`${machine.name}'s disk was installed ${was}, but fleet.ts now declares it ${now}.`,
 		);
-	});
+	}
+
+	const metal = machine.kind === "nixos" && Option.isNone(machine.vm);
+
+	if (metal && (machine.role === "nas") !== (recorded?.pools !== undefined)) {
+		return Option.some(
+			machine.role === "nas"
+				? `${machine.name} was installed on one disk, but fleet.ts now declares it a NAS, on pools.`
+				: `${machine.name} was installed as a NAS, on pools, but fleet.ts now declares it a ${machine.role}, on one disk.`,
+		);
+	}
+
+	return Option.none<string>();
+};
 
 // Why apply can't reach a machine, if it can't: as the reason a run skips it and the error naming it gives.
 const blocker = (fleet: Fleet, machine: Machine, state: State, local: Option.Option<string>) => {

@@ -139,7 +139,7 @@ export class Tailscale extends Context.Service<
 								create: { reusable: false, ephemeral: false, preauthorized: true, tags },
 							},
 						},
-						expirySeconds: 86_400,
+						expirySeconds: keyLifetime / 1000,
 						description: "aett",
 					}),
 					Effect.flatMap(api.execute),
@@ -229,21 +229,27 @@ export class Tailscale extends Context.Service<
 	).pipe(Layer.provide(FetchHttpClient.layer));
 }
 
+// How long a key aett mints is good for, in milliseconds.
+const keyLifetime = 86_400_000;
+
 /**
- * The device a machine became when it joined with a key aett minted at
- * `since`: the newest one with its hostname and `tag` that joined after.
+ * The device a machine became when it joined with a key aett minted that
+ * `expires`: the one with its hostname and `tag` that joined while the key
+ * was good, if only one did, as a one-time key joins one device.
  */
 export const joinedAs = (
 	devices: ReadonlyArray<Device>,
 	hostname: string,
 	tag: string,
-	since: Date,
-) =>
-	devices
-		.filter(
-			(device) =>
-				device.hostname === hostname &&
-				device.tags.includes(tag) &&
-				device.created.getTime() >= since.getTime() - 60_000,
-		)
-		.toSorted((a, b) => b.created.getTime() - a.created.getTime())[0];
+	expires: Date,
+) => {
+	const joined = devices.filter(
+		(device) =>
+			device.hostname === hostname &&
+			device.tags.includes(tag) &&
+			device.created.getTime() >= expires.getTime() - keyLifetime - 60_000 &&
+			device.created.getTime() <= expires.getTime() + 60_000,
+	);
+
+	return joined.length === 1 ? joined[0] : undefined;
+};

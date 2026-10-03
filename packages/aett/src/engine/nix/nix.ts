@@ -118,6 +118,8 @@ const switchTo = (target: Connection, system: string) =>
 const activate = Effect.fn("NixEngine.activate")(function* (target: Connection, system: string) {
 	yield* target.run(`nix-env -p /nix/var/nix/profiles/system --set ${shellQuote(system)}`);
 	yield* switchTo(target, system);
+	// The switch installed the boot loader, which put the Wi-Fi networks into the initrd.
+	yield* target.run(`rm -f ${wifiPending}`);
 });
 
 // A guest boots whatever its host's runner says, and its store is the host's, read-only, so a
@@ -228,8 +230,11 @@ echo
 cat "$dir/ssh_host_ed25519_key.pub"
 `;
 
+// Marks Wi-Fi networks the boot loader has yet to put into the initrd, until a boot loader install does.
+const wifiPending = `${unlockDirectory}/wifi-pending`;
+
 // Hands the Wi-Fi networks NetworkManager knows to the initrd as wpa_supplicant's configuration,
-// which only root can read. Says whether it changed.
+// which only root can read. Says whether the boot loader has yet to put them into the initrd.
 const unlockWifi = Effect.fn("NixEngine.unlockWifi")(function* (target: Connection) {
 	const separator = "\n--- aett ---\n";
 
@@ -238,17 +243,19 @@ const unlockWifi = Effect.fn("NixEngine.unlockWifi")(function* (target: Connecti
 	);
 
 	const said = yield* target.run(
-		`umask 077 && next=$(mktemp) && cat > "$next" && if cmp -s "$next" ${unlockDirectory}/wpa_supplicant.conf; then rm -f "$next"; echo same; else mv -f "$next" ${unlockDirectory}/wpa_supplicant.conf; echo changed; fi`,
+		`umask 077 && next=$(mktemp) && cat > "$next" && if cmp -s "$next" ${unlockDirectory}/wpa_supplicant.conf; then rm -f "$next"; else mv -f "$next" ${unlockDirectory}/wpa_supplicant.conf && touch ${wifiPending}; fi && if [ -e ${wifiPending} ]; then echo pending; fi`,
 		wpaSupplicant(keyfiles.split(separator)),
 	);
 
-	return said.trim() === "changed";
+	return said.trim() === "pending";
 });
 
 // Installs the boot loader again for the system the machine runs, which appends the initrd's
 // secrets as they are now.
 const refreshBoot = (target: Connection) =>
-	target.stream("/run/current-system/bin/switch-to-configuration boot >&2").pipe(Effect.asVoid);
+	target
+		.stream(`/run/current-system/bin/switch-to-configuration boot >&2 && rm -f ${wifiPending}`)
+		.pipe(Effect.asVoid);
 
 // What tailscale status --json says about a node itself.
 const EnrolledStatus = Schema.fromJsonString(
