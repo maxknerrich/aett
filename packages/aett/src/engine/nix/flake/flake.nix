@@ -157,7 +157,11 @@
           modules = [
             "${nixpkgs}/nixos/modules/installer/cd-dvd/installation-cd-minimal.nix"
             ./installer.nix
-            { nixpkgs.hostPlatform = system; }
+            {
+              nixpkgs.hostPlatform = system;
+              # The commit it was built from, which its console shows.
+              _module.args.revision = self.shortRev or self.dirtyShortRev or "unknown";
+            }
           ];
         }).config.system.build.isoImage;
 

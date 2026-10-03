@@ -1,7 +1,24 @@
 {
 	"name": "aett",
-	"version": "0.0.0",
-	"private": true,
+	"version": "0.1.0",
+	"description": "Declare a fleet of NixOS machines, VMs, NASes and Macs in one TypeScript file, and install, apply and back them up over your tailnet.",
+	"keywords": [
+		"fleet",
+		"homelab",
+		"nix",
+		"nix-darwin",
+		"nixos",
+		"tailscale"
+	],
+	"homepage": "https://github.com/maxknerrich/aett",
+	"bugs": "https://github.com/maxknerrich/aett/issues",
+	"license": "MIT",
+	"author": "Max Knerrich",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/maxknerrich/aett.git",
+		"directory": "packages/aett"
+	},
 	"bin": {
 		"aett": "./dist/cli/main.js"
 	},
@@ -23,11 +40,17 @@
 		},
 		"./package.json": "./package.json"
 	},
+	"publishConfig": {
+		"access": "public"
+	},
 	"scripts": {
 		"build": "vp pack"
 	},
 	"dependencies": {
 		"@effect/platform-node": "catalog:",
 		"effect": "catalog:"
+	},
+	"engines": {
+		"node": ">=24.11.0"
 	}
 }
