@@ -31,6 +31,8 @@ export interface Connection {
 	readonly run: (command: string, input?: string) => Effect.Effect<string, SshError>;
 	/** Runs a shell command like `run`, streaming its stderr to the terminal, for long commands such as builds. */
 	readonly stream: (command: string) => Effect.Effect<string, SshError>;
+	/** Set on the Mac aett runs on, where commands run as the operator, not as root over SSH. */
+	readonly local?: boolean;
 }
 
 /** Quotes an argument for a remote shell command. */

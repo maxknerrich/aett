@@ -1,7 +1,7 @@
 import { Option, Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
-import { allocate, guestInterface } from "../src/domain/network.ts";
+import { allocate, guestInterface, sshConfig } from "../src/domain/network.ts";
 import type { MachineState, State } from "../src/domain/state.ts";
 import { fleet, hypervisor, server } from "../src/index.ts";
 
@@ -20,6 +20,7 @@ const stateWith = (machines: ReadonlyArray<readonly [string, MachineState]>): St
 
 const declared = loaded(
 	fleet({
+		user: "mkn",
 		machines: {
 			kronos: hypervisor(),
 			nas: server(),
@@ -31,10 +32,18 @@ const declared = loaded(
 );
 
 describe("allocate", () => {
-	it("gives each host a subnet and each VM the next free address on it, keeping what state records", () => {
+	it("gives each host a subnet and each VM the next free address on it and its forwards, keeping what state records", () => {
 		const state = stateWith([
 			["kronos", { facts: true, subnet: "10.100.1.0/24" }],
-			["hades", { facts: false, host: "kronos", address: "10.100.1.2" }],
+			[
+				"hades",
+				{
+					facts: false,
+					host: "kronos",
+					address: "10.100.1.2",
+					forwards: { ssh: 2202, mosh: [61010, 61019] },
+				},
+			],
 			// Removed from fleet.ts but not destroyed: its address stays taken.
 			["old", { facts: false, host: "kronos", address: "10.100.1.3" }],
 		]);
@@ -43,8 +52,18 @@ describe("allocate", () => {
 			Result.succeed(
 				new Map([
 					["nas", { subnet: "10.100.2.0/24" }],
-					["web", { host: "nas", address: "10.100.2.2" }],
-					["zeus", { host: "kronos", address: "10.100.1.4" }],
+					[
+						"web",
+						{ host: "nas", address: "10.100.2.2", forwards: { ssh: 2202, mosh: [61010, 61019] } },
+					],
+					[
+						"zeus",
+						{
+							host: "kronos",
+							address: "10.100.1.4",
+							forwards: { ssh: 2204, mosh: [61030, 61039] },
+						},
+					],
 				]),
 			),
 		);
@@ -54,9 +73,33 @@ describe("allocate", () => {
 		const state = stateWith([
 			["kronos", { facts: true, subnet: "10.100.1.0/24" }],
 			["nas", { facts: true, subnet: "10.100.2.0/24" }],
-			["zeus", { facts: false, host: "kronos", address: "10.100.1.2" }],
-			["hades", { facts: false, host: "kronos", address: "10.100.1.3" }],
-			["web", { facts: false, host: "nas", address: "10.100.2.2" }],
+			[
+				"zeus",
+				{
+					facts: false,
+					host: "kronos",
+					address: "10.100.1.2",
+					forwards: { ssh: 2202, mosh: [61010, 61019] },
+				},
+			],
+			[
+				"hades",
+				{
+					facts: false,
+					host: "kronos",
+					address: "10.100.1.3",
+					forwards: { ssh: 2203, mosh: [61020, 61029] },
+				},
+			],
+			[
+				"web",
+				{
+					facts: false,
+					host: "nas",
+					address: "10.100.2.2",
+					forwards: { ssh: 2202, mosh: [61010, 61019] },
+				},
+			],
 		]);
 
 		expect(allocate(declared, state)).toEqual(Result.succeed(new Map()));
@@ -69,6 +112,47 @@ describe("allocate", () => {
 			Result.fail(
 				"web runs on kronos, but fleet.ts now puts it on nas. aett can't move a VM yet: remove it from fleet.ts, apply kronos, run aett machine destroy web, then declare it on nas.",
 			),
+		);
+	});
+});
+
+describe("sshConfig", () => {
+	it("logs in as the user at each machine's tailnet name, or through its host's forward before it joined", () => {
+		const state = stateWith([
+			[
+				"zeus",
+				{ facts: false, host: "kronos", address: "10.100.1.2", tailnetName: "zeus.example.ts.net" },
+			],
+			[
+				"hades",
+				{
+					facts: false,
+					host: "kronos",
+					address: "10.100.1.3",
+					forwards: { ssh: 2203, mosh: [61020, 61029] },
+				},
+			],
+		]);
+
+		expect(sshConfig(declared, state, "/fleet/state/known_hosts")).toBe(
+			[
+				"# Written by aett: the fleet's machines, over the tailnet. Include it from ~/.ssh/config.",
+				"",
+				"Host zeus",
+				"\tHostName zeus.example.ts.net",
+				"\tUser mkn",
+				"\tHostKeyAlias zeus",
+				'\tUserKnownHostsFile "/fleet/state/known_hosts"',
+				"",
+				"Host hades",
+				"\tHostName kronos.local",
+				"\tPort 2203",
+				"\tAddressFamily inet",
+				"\tUser mkn",
+				"\tHostKeyAlias hades",
+				'\tUserKnownHostsFile "/fleet/state/known_hosts"',
+				"",
+			].join("\n"),
 		);
 	});
 });

@@ -50,10 +50,12 @@ export const status = Effect.fn("status")(function* (root: string) {
 	// The system the build makes for each machine it covers, from one evaluation when a line first
 	// asks. When the build doesn't evaluate as a whole, each machine is evaluated alone, so one whose
 	// declaration fails leaves the others' comparisons.
+	const linux = build.machines.filter((name) => !build.macs.includes(name));
+
 	const expected = yield* Effect.cached(
-		engine.systemPaths(build, build.machines).pipe(
+		engine.systemPaths(build, linux).pipe(
 			Effect.catchTag("EngineError", () =>
-				Effect.forEach(build.machines, (name) =>
+				Effect.forEach(linux, (name) =>
 					engine.systemPaths(build, [name]).pipe(
 						Effect.map((paths) => [...paths]),
 						Effect.orElseSucceed(() => []),
@@ -63,19 +65,14 @@ export const status = Effect.fn("status")(function* (root: string) {
 		),
 	);
 
-	// A bare-metal machine's ways in: <name>.local first, the tailnet second.
-	const metal = (name: string): ReadonlyArray<Way> => [
-		{
-			label: `${name}.local`,
-			connect: ssh.machine(name, { name: `${name}.local`, port: 22 }, knownHosts, "refuse"),
-		},
-		...Option.toArray(
+	// A bare-metal machine's way in: the tailnet.
+	const metal = (name: string): ReadonlyArray<Way> =>
+		Option.toArray(
 			Option.map(tailnetHost(state, name), (host) => ({
 				label: "the tailnet",
 				connect: ssh.machine(name, host, knownHosts, "refuse"),
 			})),
-		),
-	];
+		);
 
 	// A guest's ways in: the tailnet first, through its host second.
 	const guest = (name: string, host: string): ReadonlyArray<Way> => [
@@ -114,6 +111,11 @@ export const status = Effect.fn("status")(function* (root: string) {
 		Effect.gen(function* () {
 			if (!build.machines.includes(name)) return notBuilt(fleet, state, name);
 
+			// aett doesn't log in to Macs: each applies to itself.
+			if (fleet.machines.some((declared) => declared.name === name && declared.kind === "macos")) {
+				return "a Mac, which aett apply on it brings up to date";
+			}
+
 			const machine = Option.fromUndefinedOr(
 				fleet.machines.find((declared) => declared.name === name),
 			);
@@ -124,7 +126,11 @@ export const status = Effect.fn("status")(function* (root: string) {
 				Option.match(host, { onNone: () => metal(name), onSome: (vm) => guest(name, vm.host) }),
 			);
 
-			if (Option.isNone(reached)) return "unreachable";
+			if (Option.isNone(reached)) {
+				return Option.isNone(tailnetHost(state, name)) && Option.isNone(host)
+					? "not on the tailnet yet"
+					: "unreachable";
+			}
 
 			const { label, connection } = reached.value;
 			const running = yield* engine.currentSystem(connection);
@@ -147,7 +153,9 @@ export const status = Effect.fn("status")(function* (root: string) {
 					}),
 				);
 
-			const secrets = unshared.filter(({ secret }) => included.some(secret.readBy));
+			const secrets = unshared.filter(({ secret }) =>
+				included.some(({ name: reader }) => secret.readers.includes(reader)),
+			);
 
 			const pending = [
 				...unpinned.map(({ bin }) => `${bin} isn't pinned yet`),
@@ -167,10 +175,27 @@ export const status = Effect.fn("status")(function* (root: string) {
 				Effect.map(engine.guestState(connection, on), (unit) => `${on} ${unit}`),
 			);
 
+			// Each plugin's own health check, run where it is; tailscale's is the tailnet line above.
+			const health = yield* Effect.forEach(
+				Option.match(machine, { onNone: () => [], onSome: ({ services }) => services }).filter(
+					({ name: service }) => service !== "tailscale",
+				),
+				({ name: service }) =>
+					Option.match(Option.fromUndefinedOr(fleet.services.get(service)?.plugin.health), {
+						onNone: () => Effect.succeed([]),
+						onSome: (check) =>
+							connection.run(`${check} 2>&1 | head -n 1; exit "\${PIPESTATUS[0]}"`).pipe(
+								Effect.map((said) => [`${service} ${said.trim() || "healthy"}`]),
+								Effect.catchTag("SshError", () => Effect.succeed([`${service} unhealthy`])),
+							),
+					}),
+			);
+
 			return [
 				`reached at ${label}`,
 				tailnet === "" ? "not on the tailnet" : `tailnet ${tailnet.split("\n")[0]}`,
 				comparison,
+				...health.flat(),
 				...(guests.length > 0 ? [`guests: ${guests.join(", ")}`] : []),
 			].join(" · ");
 		}).pipe(

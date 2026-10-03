@@ -6,7 +6,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Console, Effect, Option } from "effect";
 import { Command } from "effect/cli";
 import metadata from "../../package.json" with { type: "json" };
+import { Assets } from "../adapters/assets.ts";
 import { GitHub } from "../adapters/github.ts";
+import { Tailscale } from "../adapters/tailscale.ts";
 import { Secrets } from "../adapters/secrets.ts";
 import { Ssh } from "../adapters/ssh.ts";
 import { nixEngine } from "../engine/nix/nix.ts";
@@ -41,10 +43,13 @@ fleetAett(directory).pipe(
 			"GitHubError",
 			"HomeError",
 			"InstallError",
+			"MacError",
 			"PinsError",
 			"PlatformError",
 			"SecretsError",
 			"SshError",
+			"TailscaleError",
+			"UnlockError",
 		],
 		(error) =>
 			Console.error(error.message).pipe(
@@ -58,8 +63,12 @@ fleetAett(directory).pipe(
 	Effect.provide(Ssh.layer),
 	Effect.provide(GitHub.layer),
 	Effect.provide(Secrets.layer),
-	// The flake ships as source in the package, also next to dist/.
-	Effect.provide(nixEngine(join(directory, "src", "engine", "nix", "flake"))),
+	Effect.provide(Tailscale.layer),
+	// The flake and the shipped plugins ship as source in the package, also next to dist/.
+	Effect.provide(
+		nixEngine(join(directory, "src", "engine", "nix", "flake"), join(directory, "plugins")),
+	),
+	Effect.provide(Assets.layer(join(directory, "plugins"))),
 	Effect.provide(NodeServices.layer),
 	NodeRuntime.runMain,
 );

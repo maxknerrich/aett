@@ -5,6 +5,7 @@ import {
 	fillPlaceholders,
 	fingerprint,
 	hostColor,
+	overlay,
 	planSync,
 	resolveHome,
 } from "../src/domain/home.ts";
@@ -84,11 +85,10 @@ describe("resolveHome", () => {
 		);
 	});
 
-	it("names every problem at once", () => {
+	it("names every problem at once, and takes a name without a tree as adding nothing", () => {
 		expect(resolveHome(sets, ["work", "missing", "escape", "dev"])).toEqual(
 			Result.fail(
 				[
-					"The dotfile set missing doesn't exist: there is no home/missing/.",
 					".config/git/config is in both dev and work.",
 					"home/escape/.evil links to ../../etc/passwd, which is outside the home.",
 					"home/escape/.config/absolute links to the absolute path /etc/passwd. Links in a set are relative.",
@@ -99,16 +99,57 @@ describe("resolveHome", () => {
 });
 
 describe("fillPlaceholders", () => {
-	it("fills the host's name and color and leaves other placeholders and links alone", () => {
+	it("fills the host's name and color and the home, and leaves other placeholders and links alone", () => {
 		const entries = [
-			file(".config/starship.toml", "{{host.name}} {{host.color}} {{host.name}} {{user}}", true),
+			file(
+				".config/starship.toml",
+				"{{host.name}} {{host.color}} {{host.name}} {{home}} {{user}}",
+				true,
+			),
 			link(".link", "{{host.name}}"),
 		];
 
-		expect(fillPlaceholders(entries, "zeus")).toEqual([
-			file(".config/starship.toml", `zeus ${hostColor("zeus")} zeus {{user}}`, true),
+		expect(fillPlaceholders(entries, "zeus", "/home/mkn")).toEqual([
+			file(".config/starship.toml", `zeus ${hostColor("zeus")} zeus /home/mkn {{user}}`, true),
 			link(".link", "{{host.name}}"),
 		]);
+	});
+});
+
+describe("overlay", () => {
+	it("lets the fleet's file win over a plugin's at the same path, above it or below it", () => {
+		const shipped = new Map([
+			[
+				"omintosh",
+				[
+					file(".config/rift/config.toml", "shipped"),
+					file(".config/sketchybar/sketchybarrc", "shipped"),
+					file(".config/karabiner/karabiner.json", "shipped"),
+				],
+			],
+		]);
+
+		const own = new Map([
+			[
+				"omintosh",
+				[file(".config/rift/config.toml", "mine"), link(".config/sketchybar", "../bar")],
+			],
+			["default", [file(".config/fish/config.fish", "fish")]],
+		]);
+
+		expect(overlay(shipped, own)).toEqual(
+			new Map([
+				[
+					"omintosh",
+					[
+						file(".config/karabiner/karabiner.json", "shipped"),
+						file(".config/rift/config.toml", "mine"),
+						link(".config/sketchybar", "../bar"),
+					],
+				],
+				["default", [file(".config/fish/config.fish", "fish")]],
+			]),
+		);
 	});
 });
 

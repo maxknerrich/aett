@@ -10,79 +10,112 @@ import {
 } from "effect";
 import { Base64 } from "effect/encoding";
 import { type Connection, shellQuote } from "../adapters/ssh.ts";
-import { Entry, fillPlaceholders, type HomePlan, manifestPath, planSync } from "../domain/home.ts";
+import { Assets, pluginDirectory } from "../adapters/assets.ts";
+import type { Fleet } from "../domain/fleet.ts";
+import {
+	Entry,
+	fillPlaceholders,
+	type HomePlan,
+	manifestPath,
+	overlay,
+	planSync,
+} from "../domain/home.ts";
 
 /** A problem syncing dotfile sets onto a machine. */
 export class HomeError extends Schema.TaggedError<HomeError>()("HomeError", {
 	message: Schema.String,
 }) {}
 
-/**
- * Reads every set under `<root>/home/` by name: regular files as text,
- * executable when any x bit is set, and symlinks as links with their targets
- * as written. .DS_Store files are left out; a fleet without home/ has no sets.
- */
-export const readSets = Effect.fn("readSets")(function* (root: string) {
+// The entries under `tree`, their paths prefixed with `prefix`: regular files as text, executable
+// when any x bit is set, and symlinks as links with their targets as written. .DS_Store files are
+// left out.
+const readTree = Effect.fnUntraced(function* (
+	tree: string,
+	prefix: string,
+): Effect.fn.Return<
+	ReadonlyArray<Entry>,
+	PlatformError.PlatformError,
+	FileSystem.FileSystem | Path.Path
+> {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
-	const directory = path.join(root, "home");
+	const names = yield* fs.readDirectory(tree);
 
-	// The entries under `tree`, their paths prefixed with `prefix`.
-	const readTree = Effect.fnUntraced(function* (
-		tree: string,
-		prefix: string,
-	): Effect.fn.Return<ReadonlyArray<Entry>, PlatformError.PlatformError> {
-		const names = yield* fs.readDirectory(tree);
+	const entries = yield* Effect.forEach(
+		names.filter((name) => name !== ".DS_Store"),
+		Effect.fnUntraced(function* (name: string) {
+			const file = path.join(tree, name);
+			const relative = `${prefix}${name}`;
 
-		const entries = yield* Effect.forEach(
-			names.filter((name) => name !== ".DS_Store"),
-			Effect.fnUntraced(function* (name: string) {
-				const file = path.join(tree, name);
-				const relative = `${prefix}${name}`;
+			// readLink fails on anything but a link; stat then tells files from directories and reports real problems.
+			const target = yield* Effect.option(fs.readLink(file));
 
-				// readLink fails on anything but a link; stat then tells files from directories and reports real problems.
-				const target = yield* Effect.option(fs.readLink(file));
+			if (Option.isSome(target)) return [Entry.Link({ path: relative, target: target.value })];
 
-				if (Option.isSome(target)) return [Entry.Link({ path: relative, target: target.value })];
+			const info = yield* fs.stat(file);
 
-				const info = yield* fs.stat(file);
+			if (info.type === "Directory") return yield* readTree(file, `${relative}/`);
 
-				if (info.type === "Directory") return yield* readTree(file, `${relative}/`);
+			if (info.type !== "File") return [];
 
-				if (info.type !== "File") return [];
+			return [
+				Entry.File({
+					path: relative,
+					content: yield* fs.readFileString(file),
+					executable: (info.mode & 0o111) !== 0,
+				}),
+			];
+		}),
+	);
 
-				return [
-					Entry.File({
-						path: relative,
-						content: yield* fs.readFileString(file),
-						executable: (info.mode & 0o111) !== 0,
-					}),
-				];
-			}),
-		);
+	return entries.flat();
+});
 
-		return entries.flat();
-	});
+// The trees in the subdirectories of `directory`, by name; none when it doesn't exist.
+const readTrees = Effect.fn("readTrees")(function* (directory: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
 
 	if (!(yield* fs.exists(directory))) return new Map<string, ReadonlyArray<Entry>>();
 
-	const sets = yield* fs
+	const names = yield* fs
 		.readDirectory(directory)
 		.pipe(
-			Effect.flatMap((names) =>
-				Effect.filter(names, (name) =>
+			Effect.flatMap((found) =>
+				Effect.filter(found, (name) =>
 					fs.stat(path.join(directory, name)).pipe(Effect.map(({ type }) => type === "Directory")),
 				),
 			),
 		);
 
 	return new Map(
-		yield* Effect.forEach(sets, (set) =>
-			readTree(path.join(directory, set), "").pipe(
-				Effect.map((entries) => [set, entries] as const),
+		yield* Effect.forEach(names, (name) =>
+			readTree(path.join(directory, name), "").pipe(
+				Effect.map((entries) => [name, entries] as const),
 			),
 		),
 	);
+});
+
+/**
+ * Reads every home tree by name: each plugin's own home/, under the plugin's
+ * name, with the fleet's `<root>/home/<name>/` laid over it, and the fleet's
+ * other trees such as home/default/.
+ */
+export const readHomes = Effect.fn("readHomes")(function* (root: string, fleet: Fleet) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const { plugins } = yield* Assets;
+
+	const shipped = yield* Effect.forEach([...fleet.services.values()], ({ plugin }) =>
+		Effect.gen(function* () {
+			const tree = path.join(pluginDirectory(plugins, plugin), "home");
+
+			return (yield* fs.exists(tree)) ? [[plugin.name, yield* readTree(tree, "")] as const] : [];
+		}),
+	);
+
+	return overlay(new Map(shipped.flat()), yield* readTrees(path.join(root, "home")));
 });
 
 /** A planned sync of one user's home on one machine, which applyHome carries out. */
@@ -109,12 +142,12 @@ inside() {
 }
 `;
 
-// Run as root: prints the user's home directory on the first line, then the manifest if there is one.
-// A manifest that is a symlink or whose directory leads out of the home stays unread; the fingerprints
-// then report it.
+// Run as root or the user: prints the user's home directory on the first line, then the manifest if
+// there is one. A manifest that is a symlink or whose directory leads out of the home stays unread;
+// the fingerprints then report it.
 const locateScript = (user: string) => `set -eu
-home=$(getent passwd ${shellQuote(user)} | cut -d: -f6)
-if [ -z "$home" ]; then echo ${shellQuote(`There is no user ${user}.`)} >&2; exit 1; fi
+home=$(eval echo ~${user})
+case "$home" in /*) ;; *) echo ${shellQuote(`There is no user ${user}.`)} >&2; exit 1 ;; esac
 printf '%s\\n' "$home"
 cd -- "$home"
 ${insideFunction}
@@ -243,8 +276,8 @@ export const planHome = Effect.fn("planHome")(function* (
 	user: string,
 	entries: ReadonlyArray<Entry>,
 ) {
-	const desired = fillPlaceholders(entries, machine);
 	const [home = "", ...rest] = (yield* connection.run("sh -s", locateScript(user))).split("\n");
+	const desired = fillPlaceholders(entries, machine, home);
 	const recorded = rest.join("\n");
 
 	const manifest =
@@ -327,7 +360,11 @@ export const applyHome = Effect.fn("applyHome")(function* (connection: Connectio
 
 	if (!plan.changes && Option.isNone(plan.manifest)) return;
 
-	yield* connection.run(`runuser -u ${shellQuote(user)} -- sh -s`, applyScript(home, plan));
+	// On the Mac aett runs on, it already is the user.
+	yield* connection.run(
+		connection.local === true ? "sh -s" : `runuser -u ${shellQuote(user)} -- sh -s`,
+		applyScript(home, plan),
+	);
 
 	if (plan.changes) yield* Console.log(`Synced ${user}'s home on ${machine}.`);
 });

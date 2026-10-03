@@ -1,9 +1,10 @@
-import { Console, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Console, Effect, FileSystem, Path, Schema } from "effect";
 import { Prompt } from "effect/cli";
 import { forgetHost } from "../domain/host.ts";
 import { Engine } from "../engine/engine.ts";
 import { loadFleet, readState } from "./load.ts";
 import { connectMachine } from "./reach.ts";
+import { removeFromTailnet } from "./tailscale.ts";
 
 export class DestroyError extends Schema.TaggedError<DestroyError>()("DestroyError", {
 	message: Schema.String,
@@ -41,7 +42,7 @@ export const destroy = Effect.fn("destroy")(function* (
 	}
 
 	const knownHostsFile = path.join(root, "state", "known_hosts");
-	const connection = yield* connectMachine(root, state, host, Option.none());
+	const connection = yield* connectMachine(root, fleet, state, host);
 
 	if ((yield* engine.guestState(connection, name)) === "running") {
 		return yield* new DestroyError({
@@ -87,7 +88,11 @@ export const destroy = Effect.fn("destroy")(function* (
 		);
 	}
 
+	const removed = yield* removeFromTailnet(root, state, name);
+
 	return yield* Console.log(
-		`Destroyed ${name}. If it joined your tailnet, remove it in the Tailscale admin console too.`,
+		removed
+			? `Destroyed ${name}, and removed it from the tailnet.`
+			: `Destroyed ${name}. Remove it in the Tailscale admin console too: aett can only do that once aett tailscale setup ran.`,
 	);
 }, Effect.scoped);

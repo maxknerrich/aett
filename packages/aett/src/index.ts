@@ -1,15 +1,24 @@
 import type { Channel } from "./domain/fleet.ts";
-import type { Services } from "./domain/stacks.ts";
+import type { Plugin, Role } from "./domain/plugin.ts";
+import type { shipped } from "./domain/shipped.ts";
 
-export type { Channel, Role } from "./domain/fleet.ts";
+export { Schema } from "effect";
+export type { Channel } from "./domain/fleet.ts";
+export { plugin } from "./domain/plugin.ts";
+export type { Endpoint, Plugin, Role, Secret, State } from "./domain/plugin.ts";
 
 /** A size such as "32 GiB". */
 export type Size = `${number} ${"MiB" | "GiB" | "TiB"}`;
 
 /** Settings of a bare-metal NixOS machine. */
 export interface NixosSystem {
-	/** Puts the btrfs partition inside LUKS; the passphrase is typed at the console on every boot. */
+	/** Puts the btrfs partition inside LUKS; the passphrase is typed at the console or sent with aett machine unlock. */
 	readonly encrypted?: boolean;
+	readonly channel?: Channel;
+}
+
+/** Settings of a NAS. Its pools root and tank are always inside LUKS. */
+export interface NasSystem {
 	readonly channel?: Channel;
 }
 
@@ -45,7 +54,7 @@ interface BareMetal<System> {
 }
 
 interface Vm {
-	/** The hypervisor or bare-metal server the VM runs on. */
+	/** The hypervisor, NAS or bare-metal server the VM runs on. */
 	readonly host: string;
 	readonly os?: never;
 	readonly system?: Only<VmSystem, AnySystem>;
@@ -72,11 +81,13 @@ interface NoRole {
 
 export type HypervisorConfig = BareMetal<NixosSystem>;
 
+export type NasConfig = BareMetal<NasSystem>;
+
 export type ServerConfig = BareMetal<NixosSystem> | Vm;
 
 export type ComputerConfig = BareMetal<ComputerSystem> | Mac;
 
-/** An appliance that only runs VMs, like Proxmox. Stacks never reach it. */
+/** An appliance that only runs VMs, like Proxmox. Packs never reach it; services can run on it. */
 export function hypervisor(): { readonly role: "hypervisor" };
 export function hypervisor<const Config extends HypervisorConfig>(
 	config: Config & Known<Config> & NoRole,
@@ -85,7 +96,20 @@ export function hypervisor(config: HypervisorConfig = {}) {
 	return { ...config, role: "hypervisor" as const };
 }
 
-/** A headless machine reached over SSH, on bare metal or as a VM with `host`. Its stacks make it what it is. */
+/**
+ * Storage that runs services directly and can host VMs. Its two pools, root
+ * and tank, are btrfs mirrors inside LUKS; install asks which disks form each.
+ * Bulk state lands on tank.
+ */
+export function nas(): { readonly role: "nas" };
+export function nas<const Config extends NasConfig>(
+	config: Config & Known<Config> & NoRole,
+): Config & { readonly role: "nas" };
+export function nas(config: NasConfig = {}) {
+	return { ...config, role: "nas" as const };
+}
+
+/** A headless machine reached over SSH, on bare metal or as a VM with `host`. */
 export function server(): { readonly role: "server" };
 export function server<const Config extends ServerConfig>(
 	config: Config & Known<Config> & NoRole,
@@ -106,12 +130,13 @@ export function computer(config: ComputerConfig = {}) {
 // A machine as a role function returns it: its role with that role's config.
 type Declared =
 	| (HypervisorConfig & { readonly role: "hypervisor" })
+	| (NasConfig & { readonly role: "nas" })
 	| (ServerConfig & { readonly role: "server" })
 	| (ComputerConfig & { readonly role: "computer" });
 
-// The machines a VM can run on: hypervisors and bare-metal servers.
+// The machines a VM can run on: hypervisors, NASes and bare-metal servers.
 type Hosts<Machines> = {
-	[Name in keyof Machines]: Machines[Name] extends { readonly role: "hypervisor" }
+	[Name in keyof Machines]: Machines[Name] extends { readonly role: "hypervisor" | "nas" }
 		? Name
 		: Machines[Name] extends { readonly role: "server"; readonly host?: undefined }
 			? Name
@@ -126,14 +151,14 @@ type CheckedHosts<Machines> = {
 		: unknown;
 };
 
-/** A tool from a GitHub release, for a stack's `fast` list. */
+/** A tool from a GitHub release, for a `packages` list. */
 export interface Release {
 	/** The repository, "owner/name". */
 	readonly github: string;
 	/**
 	 * The asset's name. `{version}` is the release's tag without a leading "v";
 	 * `{target}` is the platform's Rust target, musl first, then glibc, such as
-	 * "x86_64-unknown-linux-musl".
+	 * "x86_64-unknown-linux-musl" or "aarch64-apple-darwin".
 	 */
 	readonly asset: string;
 	/** The binary in the asset, or the asset itself when it is no archive. */
@@ -141,8 +166,8 @@ export interface Release {
 }
 
 /**
- * Declares a tool from a GitHub release for a stack's `fast` list. aett pins
- * its version and hash in state/pins.json; aett update moves it.
+ * Declares a tool from a GitHub release for a `packages` list. aett pins its
+ * version and hash in state/pins.json; aett update moves it.
  *
  * ```ts
  * release({ github: "voidzero-dev/vite-plus", asset: "vp-{target}.tar.gz", bin: "vp" })
@@ -150,64 +175,113 @@ export interface Release {
  */
 export const release = (source: Release): Release => source;
 
-/** What a stack puts on a machine. */
-interface Content {
-	/** Pinned packages from nixpkgs on the machine's channel, by attribute path. */
-	readonly packages?: ReadonlyArray<string>;
-	/** Pinned packages from nixpkgs unstable, whatever the machine's channel, for a tool whose stable version is too old. */
-	readonly unstable?: ReadonlyArray<string>;
-	/**
-	 * Dev tools from the fastest source: a release() declared here, or else
-	 * the llm-agents.nix package of that name. Pinned like everything else.
-	 */
-	readonly fast?: ReadonlyArray<string | Release>;
-	/** Catalog services by name; false keeps one off. */
-	readonly services?: Services;
-	/**
-	 * Dotfile sets by name, each a directory under the fleet's home/. A machine
-	 * with at least one set has the fleet's user and those sets in its home.
-	 */
-	readonly home?: ReadonlyArray<string>;
-}
+/**
+ * A package: a name aett looks up the first time it sees it, in llm-agents.nix,
+ * then nixpkgs on the machine's channel, then nixpkgs unstable, and pins in
+ * state/pins.json; or a release().
+ */
+export type Package = string | Release;
 
-// What a stack can put on one named machine: apps only on computers.
-type ContentFor<Machine> = Machine extends { readonly role: "computer" }
-	? Content & { readonly apps?: ReadonlyArray<string> }
-	: Content & { readonly apps?: never };
-
-// The machines stacks reach: everything but hypervisors.
-type Reached<Machines> = {
-	[Name in keyof Machines]: Machines[Name] extends { readonly role: "hypervisor" } ? never : Name;
+// The names of the machines whose role is one of `Roles`.
+type WithRole<Machines, Roles> = {
+	[Name in keyof Machines]: Machines[Name] extends { readonly role: Roles } ? Name : never;
 }[keyof Machines] &
 	string;
 
-/** A stack: for every server and computer at the top level, per machine under `machines`. */
-export type Stack<Machines> = Content & {
-	/** GUI applications; they reach only computers. */
+// One machine or several.
+type On<Name extends string> = Name | ReadonlyArray<Name>;
+
+/** What any entry can add to the machines it is on. */
+interface Content {
+	/** Packages, each pinned by the fleet. */
+	readonly packages?: ReadonlyArray<Package>;
+	/** GUI applications from Homebrew casks, unpinned. They reach only Macs. */
 	readonly apps?: ReadonlyArray<string>;
-	// With nothing to reach, an empty mapped type would accept any name.
-	readonly machines?: [Reached<Machines>] extends [never]
-		? { readonly [name: string]: never }
-		: { readonly [Name in Reached<Machines>]?: ContentFor<Machines[Name]> };
+}
+
+// Every plugin a fleet knows: aett's and its own.
+type AllPlugins<Plugins> =
+	| (typeof shipped)[number]
+	| (Plugins extends ReadonlyArray<infer P> ? P : never);
+
+// The machines a plugin's instances can be.
+type Instances<P, Machines> = WithRole<
+	Machines,
+	P extends { readonly roles: ReadonlyArray<infer R> } ? R : Role
+>;
+
+// The options a plugin's entry takes besides on, packages and apps.
+type OptionsOf<P> = P extends Plugin<string, infer Options> ? Options : never;
+
+// The entry a plugin takes in `services`, as a machine, machines, or an object.
+type PluginEntry<P, Machines> = P extends { readonly always: true }
+	? never
+	: P extends { readonly single: true }
+		? Instances<P, Machines> | (Content & { readonly on: Instances<P, Machines> } & OptionsOf<P>)
+		:
+				| On<Instances<P, Machines>>
+				| (Content & { readonly on?: On<Instances<P, Machines>> } & OptionsOf<P>);
+
+// A pack of the fleet's own: content for every machine but hypervisors, or for those it is on.
+type PackEntry<Machines> =
+	| On<WithRole<Machines, "nas" | "server" | "computer">>
+	| (Content & { readonly on?: On<WithRole<Machines, "nas" | "server" | "computer">> });
+
+// What an entry must be: a machine or a list of them out of the allowed ones, or an object without
+// keys the entry type lacks, which a generic's inference would let pass. The machines are checked
+// apart, because a string intersected with an object type of optional keys accepts any string.
+type Exact<Value, Allowed> = Value extends string | ReadonlyArray<unknown>
+	? Value extends Allowed
+		? unknown
+		: Extract<Allowed, string | ReadonlyArray<unknown>>
+	: Allowed & {
+			readonly [
+				Key in Exclude<keyof Value, keyof Exclude<Allowed, string | ReadonlyArray<unknown>>>
+			]: never;
+		};
+
+// The names of plugins.
+type NameOf<P> = P extends { readonly name: infer Name } ? Name : never;
+
+// Each entry checked against what its name is: one of the plugins, or else a pack.
+type CheckedServices<Services, Machines, Plugins> = {
+	readonly [Name in keyof Services]: Name extends NameOf<AllPlugins<Plugins>>
+		? Exact<
+				Services[Name],
+				PluginEntry<Extract<AllPlugins<Plugins>, { readonly name: Name }>, Machines>
+			>
+		: Exact<Services[Name], PackEntry<Machines>>;
 };
 
 /**
  * Declares the fleet; fleet.ts default-exports the result. `user` names the
- * fleet's one person, `machines` says what exists, keyed by hostname, and
- * `stacks` says what is on it.
+ * fleet's one person, whom every machine but a hypervisor has. `machines` is
+ * hardware, keyed by hostname. `services` puts things on them: a known name
+ * is a service aett ships or a plugin from `plugins`, any other name is a
+ * pack of your own. An entry is the machine it is on, a list of them, or an
+ * object with `on`, `packages`, `apps` and a service's options; without `on`
+ * it is on every machine it can be. `home/<name>/` follows its entry, and
+ * `home/default/` goes to every machine with the user.
  *
  * ```ts
  * export default fleet({
  * 	user: "mkn",
  * 	machines: { kronos: hypervisor(), hades: server({ host: "kronos" }) },
- * 	stacks: { tools: { packages: ["git"], home: ["shell"] } },
+ * 	services: { backup: "kronos", tools: { packages: ["git", "claude-code"] } },
  * })
  * ```
  */
-export const fleet = <const Machines extends { readonly [name: string]: Declared }>(declaration: {
-	/** The login name of the fleet's user, which every machine with a home has. Required once one does. */
+export const fleet = <
+	const Machines extends { readonly [name: string]: Declared },
+	const Services extends { readonly [name: string]: unknown },
+	const Plugins extends ReadonlyArray<Plugin> = readonly [],
+>(declaration: {
+	/** The login name of the fleet's user, whom every machine but a hypervisor has. */
 	readonly user?: string;
 	readonly machines: Machines &
 		CheckedHosts<Machines> & { readonly [Name in keyof Machines]: Known<Machines[Name]> };
-	readonly stacks?: { readonly [name: string]: Stack<NoInfer<Machines>> };
+	readonly services?: Services &
+		CheckedServices<NoInfer<Services>, NoInfer<Machines>, NoInfer<Plugins>>;
+	/** Plugins of your own, each placed by the entry of its name in `services`. */
+	readonly plugins?: Plugins;
 }) => declaration;

@@ -144,19 +144,44 @@ export const readState = Effect.fn("readState")(function* (root: string, fleet: 
 
 	const names = [...new Set([...fleet.machines.map(({ name }) => name), ...recorded])];
 
-	const machines = yield* Effect.forEach(names, (name) =>
+	const recordedMachines = yield* Effect.forEach(names, (name) =>
 		Effect.gen(function* () {
 			const directory = path.join(root, "state", name);
 			const recordFile = path.join(directory, "machine.json");
-			const facts = yield* engine.discovered(root, name);
+			const reported = yield* engine.discovered(root, name);
 
 			const record = (yield* fs.exists(recordFile))
 				? yield* readJson(recordFile, MachineRecord)
 				: {};
 
-			return [name, { ...record, facts }] as const;
+			return {
+				name,
+				record,
+				facts: Option.isSome(reported),
+				platform: Option.getOrUndefined(
+					Option.orElse(reported, () => Option.fromUndefinedOr(record.system)),
+				),
+			};
 		}),
 	);
+
+	// A VM runs on its host's platform.
+	const platforms = new Map(recordedMachines.map(({ name, platform }) => [name, platform]));
+
+	const hostOf = (name: string) =>
+		fleet.machines
+			.find((machine) => machine.name === name)
+			?.vm.pipe(
+				Option.map(({ host }) => host),
+				Option.getOrUndefined,
+			);
+
+	const machines = recordedMachines.map(({ name, record, facts, platform }) => {
+		const host = hostOf(name) ?? record.host;
+		const known = platform ?? (host === undefined ? undefined : platforms.get(host));
+
+		return [name, { ...record, facts, platform: known }] as const;
+	});
 
 	return { operator, machines: new Map(machines) } satisfies State;
 });

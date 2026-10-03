@@ -12,7 +12,10 @@ import {
 } from "effect";
 import { Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { keychainService } from "../adapters/secrets.ts";
+import { MachineName, UserName } from "../domain/fleet.ts";
 import {
+	type Adopted,
 	aettDependency,
 	duplicateName,
 	FleetName,
@@ -25,6 +28,7 @@ import {
 } from "../domain/scaffold.ts";
 import { ageKeyPair, type Operator, SshPublicKey } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
+import { installedApps } from "./mac.ts";
 import { writePins } from "./pins.ts";
 
 export class CreateError extends Schema.TaggedError<CreateError>()("CreateError", {
@@ -40,6 +44,12 @@ export interface AettPackage {
 /** The answers `aett create` takes as flags instead of prompts. */
 export interface CreateOptions {
 	readonly name: Option.Option<string>;
+	/** The fleet's user; create asks, suggesting the login name it runs as. */
+	readonly user: Option.Option<string>;
+	/** On a Mac, keeps the age key in the login keychain unless false. */
+	readonly keychain: boolean;
+	/** Prints the age key, for a terminal without a clipboard such as an SSH session. */
+	readonly showKey: boolean;
 	readonly sshKey: Option.Option<string>;
 	/** Machines from --machine; when there are none, create asks unless `noMachines`. */
 	readonly machines: ReadonlyArray<NewMachine>;
@@ -53,12 +63,14 @@ const isSshPublicKey = Schema.is(SshPublicKey);
 const isFleetName = Schema.is(FleetName);
 
 /**
- * Starts a fleet in a new directory under `cwd`: asks for its name, the
- * operator's SSH key and its first machines, writes fleet.ts, package.json,
- * .gitignore, state/operator.json and state/pins.json with aett's tested
- * pins, makes it a Git repository and installs
- * aett with the package manager that started aett. A new age key encrypts the
- * fleet's secrets; its private half is shown once and never stored.
+ * Starts a fleet in a new directory under `cwd`: asks for its name, its user,
+ * the operator's SSH key and its first machines, on a Mac the Mac itself with
+ * the apps Homebrew has on it, writes fleet.ts, package.json, .gitignore,
+ * state/operator.json and state/pins.json with aett's tested pins, makes it a
+ * Git repository and installs aett with the package manager that started
+ * aett. A new age key encrypts the fleet's secrets. On a Mac it goes into the
+ * login keychain; for the password manager it goes to the clipboard, and it
+ * is printed only on request or when there is nowhere else to put it.
  */
 export const create = Effect.fn("create")(function* (
 	cwd: string,
@@ -118,8 +130,38 @@ export const create = Effect.fn("create")(function* (
 		return yield* new CreateError({ message: "Pass either --machine or --no-machines, not both." });
 	}
 
+	const user = yield* Option.match(options.user, {
+		onSome: (given) =>
+			Schema.decodeUnknownEffect(UserName)(given).pipe(
+				Effect.mapError(
+					() =>
+						new CreateError({
+							message: `"${given}" can't be the fleet's user. Use a lowercase login name of at most 31 characters, not root.`,
+						}),
+				),
+			),
+		onNone: () => askUser,
+	});
+
+	const mac = yield* thisMacName;
+
 	const machines =
-		options.machines.length > 0 || options.noMachines ? options.machines : yield* askMachines([]);
+		options.machines.length > 0 || options.noMachines
+			? options.machines
+			: yield* Option.match(mac, {
+					onNone: () => askMachines([]),
+					onSome: (here) =>
+						Prompt.Confirm({
+							message: `Add this Mac as ${here}? aett adopts the apps Homebrew has on it.`,
+							initial: true,
+						}).pipe(
+							Effect.flatMap((add) =>
+								askMachines(
+									add ? [{ name: here, role: "computer", mac: true, encrypted: false }] : [],
+								),
+							),
+						),
+				});
 
 	const duplicate = duplicateName(machines);
 
@@ -146,53 +188,185 @@ export const create = Effect.fn("create")(function* (
 	};
 
 	yield* fs.makeDirectory(path.join(root, "state"), { recursive: true });
-	yield* fs.writeFileString(path.join(root, "fleet.ts"), fleetSource(machines));
+
+	// The Mac aett runs on brings the apps it has, if fleet.ts declares it.
+	const adopted = yield* Effect.transposeOption(
+		Option.map(
+			Option.filter(mac, (here) =>
+				machines.some((machine) => machine.mac && machine.name === here),
+			),
+			(here) => Effect.map(installedApps, (apps): Adopted => ({ mac: here, apps })),
+		),
+	);
+
+	yield* fs.writeFileString(path.join(root, "fleet.ts"), fleetSource(user, machines, adopted));
 	yield* fs.writeFileString(
 		path.join(root, "package.json"),
 		`${JSON.stringify(manifest, null, "\t")}\n`,
 	);
 	yield* fs.writeFileString(path.join(root, ".gitignore"), "node_modules/\n.aett/build/\n");
 	// Before operator.json, so nothing that can fail comes between it and showing the private key.
-	yield* writePins(root, { inputs: yield* (yield* Engine).defaultInputs, releases: {} });
+	yield* writePins(root, {
+		inputs: yield* (yield* Engine).defaultInputs,
+		releases: {},
+		packages: {},
+	});
 	yield* fs.writeFileString(
 		path.join(root, "state", "operator.json"),
 		`${JSON.stringify({ sshKeys: [key], ageKeys: [age.publicKey] } satisfies Operator, null, "\t")}\n`,
 	);
 	yield* Console.log(`\nWrote the fleet to ${path.relative(cwd, root)}/.`);
 
-	// Shown as soon as its public half is in state, so no later failure can lose it.
-	yield* Console.log(
-		[
-			"",
-			"Your private age key decrypts the fleet's secrets. aett shows it only this once:",
-			"",
-			`  ${age.secretKey}`,
-			"",
-			"Store it in your password manager. aett reads it from SOPS_AGE_KEY, or runs",
-			"SOPS_AGE_KEY_CMD to fetch it. On a Mac, keep a copy in the login keychain:",
-			"",
-			`  security add-generic-password -a $USER -s aett-${name} -w`,
-			`  export SOPS_AGE_KEY_CMD="security find-generic-password -a $USER -s aett-${name} -w"`,
-			"",
-		].join("\n"),
-	);
+	// Kept as soon as its public half is in state, so no later failure can lose it.
+	yield* keepAgeKey(name, age.secretKey, options);
 
 	const failures = Arr.getSomes([yield* gitInit(root), yield* installDependencies(root, manager)]);
 
 	yield* Effect.forEach(failures, (failure) => Console.error(failure));
 
-	const next =
-		machines.length === 0
-			? "  Declare machines in fleet.ts, then boot one from the aett installer and run aett machine install <name>."
-			: `  Boot ${machines.length === 1 ? "the machine" : "a machine"} from the aett installer, then: aett machine install ${machines[0]?.name ?? "<name>"}`;
+	const installed = machines.find((machine) => !machine.mac);
 
-	yield* Console.log(["", "Next:", `  cd ${path.relative(cwd, root)}`, next].join("\n"));
+	const next = [
+		"  aett tailscale setup, once: every machine joins your tailnet through it.",
+		...Option.toArray(
+			Option.map(adopted, ({ mac: here }) => `  aett apply ${here}, to take over this Mac.`),
+		),
+		installed === undefined
+			? "  Declare machines in fleet.ts, then boot one from the aett installer and run aett machine install <name>."
+			: `  Boot ${installed.name} from the aett installer, then: aett machine install ${installed.name}`,
+	];
+
+	yield* Console.log(["", "Next:", `  cd ${path.relative(cwd, root)}`, ...next].join("\n"));
 
 	return yield* failures.length === 0
 		? Effect.void
 		: new CreateError({
 				message: `The fleet is written, but setting it up failed as shown above. Finish those steps in ${path.relative(cwd, root)}/ by hand.`,
 			});
+});
+
+// Asks for the fleet's user, suggesting the login name aett runs as.
+const askUser = Effect.gen(function* () {
+	const login = (yield* Config.option(Config.String("USER")).pipe(Effect.orDie)).pipe(
+		Option.map((value) => value.toLowerCase()),
+		Option.filter(Schema.is(UserName)),
+	);
+
+	return yield* Prompt.String({
+		message: "Your login name on the fleet's machines",
+		...Option.match(login, { onNone: () => ({}), onSome: (value) => ({ default: value }) }),
+		validate: (value) =>
+			Schema.is(UserName)(value)
+				? Effect.succeed(value)
+				: Effect.fail("Use a lowercase login name of at most 31 characters, not root"),
+	});
+});
+
+// The name the Mac aett runs on would have in the fleet: its local host name, lowercased. None off a Mac.
+const thisMacName = Effect.gen(function* () {
+	if (process.platform !== "darwin") return Option.none<string>();
+
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+	const local = yield* spawner
+		.string(ChildProcess.make("/usr/sbin/scutil", ["--get", "LocalHostName"], { stdin: "ignore" }))
+		.pipe(Effect.orElseSucceed(() => ""));
+
+	return Option.filter(Option.some(local.trim().toLowerCase()), (name) =>
+		Option.isSome(Schema.decodeUnknownOption(MachineName)(name)),
+	);
+});
+
+/**
+ * Keeps the operator's new age key, which nothing else holds: on a Mac in the
+ * login keychain, where aett finds it, and for the password manager on the
+ * clipboard until the operator saved it. It is printed only on request, or
+ * when neither keeps it.
+ */
+const keepAgeKey = Effect.fn("keepAgeKey")(function* (
+	fleet: string,
+	key: string,
+	options: Pick<CreateOptions, "keychain" | "showKey">,
+) {
+	yield* Console.log(
+		"\naett made an age key for you. It decrypts the fleet's secrets, and only you have it.",
+	);
+
+	const inKeychain =
+		process.platform === "darwin" &&
+		options.keychain &&
+		(yield* storeInKeychain(keychainService(fleet), key));
+
+	if (inKeychain) {
+		yield* Console.log(
+			`It is in your login keychain as ${keychainService(fleet)}; aett reads it from there.`,
+		);
+	}
+
+	const copied = !options.showKey && (yield* toClipboard(key));
+
+	if (copied) {
+		yield* Prompt.Confirm({
+			message:
+				"It is on the clipboard. Save it in your password manager, then press Enter to clear the clipboard.",
+			initial: true,
+		});
+		yield* toClipboard("");
+	}
+
+	if (options.showKey || (!inKeychain && !copied)) yield* Console.log(`\n  ${key}\n`);
+
+	if (!inKeychain) {
+		yield* Console.log(
+			"aett reads it from SOPS_AGE_KEY, or runs SOPS_AGE_KEY_CMD to fetch it, such as from your password manager's CLI.",
+		);
+	}
+});
+
+// Adds a generic password to the login keychain, the value fed to security on stdin rather than
+// on its command line, where ps would show it. Returns whether it worked.
+const storeInKeychain = Effect.fn("storeInKeychain")(function* (service: string, key: string) {
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+	const exitCode = yield* spawner
+		.exitCode(
+			ChildProcess.make("/usr/bin/security", ["-i"], {
+				stdin: Stream.make(
+					new TextEncoder().encode(
+						`add-generic-password -U -a ${JSON.stringify(process.env["USER"] ?? "aett")} -s ${JSON.stringify(service)} -w ${JSON.stringify(key)}\n`,
+					),
+				),
+				stdout: "ignore",
+				stderr: "ignore",
+			}),
+		)
+		.pipe(Effect.orElseSucceed(() => -1));
+
+	return exitCode === 0;
+});
+
+// Puts text on the clipboard with pbcopy, wl-copy or xclip, whichever runs. Returns whether one did.
+const toClipboard = Effect.fn("toClipboard")(function* (text: string) {
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+	const copiers = [["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"]] as const;
+
+	return yield* Effect.firstSuccessOf(
+		copiers.map(([command, ...args]) =>
+			spawner
+				.exitCode(
+					ChildProcess.make(command, [...args], {
+						stdin: Stream.make(new TextEncoder().encode(text)),
+						stdout: "ignore",
+						stderr: "ignore",
+					}),
+				)
+				.pipe(Effect.filterOrFail((exitCode) => exitCode === 0)),
+		),
+	).pipe(
+		Effect.as(true),
+		Effect.orElseSucceed(() => false),
+	);
 });
 
 // Asks for the fleet's first machines one by one until the operator stops, adding them to `machines`.

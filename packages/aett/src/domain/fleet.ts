@@ -1,5 +1,7 @@
-import { Option, Predicate, Result, Schema, SchemaIssue } from "effect";
-import { type Release, resolveStacks, Stack } from "./stacks.ts";
+import { Match, Option, Predicate, Result, Schema, SchemaIssue } from "effect";
+import { Package, type Release, splitPackages } from "./packages.ts";
+import type { Plugin, Role as PluginRole } from "./plugin.ts";
+import { shippedPlugins as shipped } from "./shipped.ts";
 
 export const MachineName = Schema.String.check(
 	Schema.isPattern(/^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/, {
@@ -7,10 +9,10 @@ export const MachineName = Schema.String.check(
 	}),
 );
 
-/** hypervisor: an appliance that only runs VMs; server: headless, reached over SSH; computer: graphical, used in person. */
-export const Role = Schema.Literals(["hypervisor", "server", "computer"]);
+/** hypervisor: an appliance that only runs VMs; nas: storage that runs services and VMs; server: headless, reached over SSH; computer: graphical, used in person. */
+export const Role = Schema.Literals(["hypervisor", "nas", "server", "computer"]);
 
-export type Role = typeof Role.Type;
+export type Role = PluginRole;
 
 /** stable is the NixOS release aett pins; unstable opts a machine into nixos-unstable. */
 export const Channel = Schema.Literals(["stable", "unstable"]);
@@ -62,6 +64,12 @@ const Hypervisor = Schema.Struct({
 	system: Schema.optionalKey(NixosSystem),
 });
 
+const Nas = Schema.Struct({
+	role: Schema.Literal("nas"),
+	os: Schema.optionalKey(Schema.Literal("nixos")),
+	system: Schema.optionalKey(Schema.Struct({ channel: Schema.optionalKey(Channel) })),
+});
+
 const Server = Schema.Struct({
 	role: Schema.Literal("server"),
 	os: Schema.optionalKey(Schema.Literal("nixos")),
@@ -100,7 +108,7 @@ const Declared = Schema.StructWithRest(
 );
 
 /**
- * What fleet.ts must default-export before its machines and stacks are
+ * What fleet.ts must default-export before its machines and services are
  * checked. Other keys pass through so that decodeFleet can reject them.
  */
 export const Declaration = Schema.StructWithRest(
@@ -110,7 +118,7 @@ export const Declaration = Schema.StructWithRest(
 
 export interface Declaration extends Schema.Schema.Type<typeof Declaration> {}
 
-/** A user's login name, which NixOS takes: lowercase, shorter than 32 characters, and not root. */
+/** A user's login name, which NixOS and macOS take: lowercase, shorter than 32 characters, and not root. */
 export const UserName = Schema.String.check(
 	Schema.isPattern(/^[a-z_][a-z0-9_-]{0,30}$/, {
 		expected: "a lowercase login name of at most 31 characters",
@@ -120,17 +128,81 @@ export const UserName = Schema.String.check(
 	),
 );
 
+/** An entry's name in `services`, which home/<name>/ follows. "default" names the home tree every machine gets. */
+export const EntryName = Schema.String.check(
+	Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/, {
+		expected: "a lowercase name: a-z, 0-9, dots, dashes and underscores",
+	}),
+	Schema.makeFilter(
+		(name: string) =>
+			name !== "default" || "Expected another name: home/default/ goes to every machine already",
+	),
+);
+
 const Top = Schema.Struct({
 	user: Schema.optionalKey(UserName),
 	machines: Schema.Record(Schema.String, Schema.Unknown),
-	stacks: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+	services: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+	plugins: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+});
+
+// What aett checks of a plugin from `plugins`: the rest is read where it is used.
+const PluginMetadata = Schema.Struct({
+	name: EntryName,
+	options: Schema.optionalKey(
+		Schema.declare((input): input is Schema.Decoder<unknown> => Schema.isSchema(input), {
+			expected: "a Schema, such as Schema.Struct({…})",
+		}),
+	),
+	directory: Schema.optionalKey(Schema.Union([Schema.String, Schema.instanceOf(URL)])),
+	package: Schema.optionalKey(Schema.String),
+	endpoints: Schema.optionalKey(
+		Schema.Record(
+			Schema.String,
+			Schema.Struct({
+				port: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
+				web: Schema.optionalKey(Schema.Boolean),
+			}),
+		),
+	),
+	secrets: Schema.optionalKey(
+		Schema.Record(
+			Schema.String,
+			Schema.Union([
+				Schema.Struct({
+					generate: Schema.Literals(["password", "certificate"]),
+					per: Schema.optionalKey(Schema.Literals(["fleet", "instance", "client"])),
+				}),
+				Schema.Struct({
+					prompt: Schema.NonEmptyString,
+					per: Schema.optionalKey(Schema.Literals(["fleet", "instance"])),
+				}),
+			]),
+		),
+	),
+	state: Schema.optionalKey(
+		Schema.Record(Schema.String, Schema.Struct({ bulk: Schema.optionalKey(Schema.Boolean) })),
+	),
+	health: Schema.optionalKey(Schema.String),
+	roles: Schema.optionalKey(Schema.Array(Role)),
+	systems: Schema.optionalKey(Schema.Array(Schema.Literals(["nixos", "darwin"]))),
+	single: Schema.optionalKey(Schema.Boolean),
+	always: Schema.optionalKey(Schema.Boolean),
+	clients: Schema.optionalKey(Schema.Boolean),
+});
+
+// The keys every entry takes; the rest are a plugin's options.
+const EntryBase = Schema.Struct({
+	on: Schema.optionalKey(Schema.Union([MachineName, Schema.Array(MachineName)])),
+	packages: Schema.optionalKey(Schema.Array(Package)),
+	apps: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
 });
 
 export type Kind = "nixos" | "macos" | "vm";
 
 /** Where a VM runs and its size, with the defaults filled in. Sizes are whole MiB. */
 export interface VmSettings {
-	/** The hypervisor or bare-metal server that builds and runs it. */
+	/** The hypervisor, NAS or bare-metal server that builds and runs it. */
 	readonly host: string;
 	readonly cpu: number;
 	readonly memory: number;
@@ -138,34 +210,57 @@ export interface VmSettings {
 	readonly disk: number;
 }
 
-/** A machine as aett works with it: what fleet.ts declares, with its stacks resolved. */
+/** A plugin on one machine: as an instance, or as a client of the instances. */
+export interface Placement {
+	readonly name: string;
+	readonly instance: boolean;
+}
+
+/** A plugin as the fleet places it: its options and the machines it configures. */
+export interface Service {
+	readonly plugin: Plugin;
+	/** The entry's options, as the plugin's schema decoded them. */
+	readonly options: unknown;
+	readonly instances: ReadonlyArray<string>;
+	/** Machines it configures as clients of the instances. */
+	readonly clients: ReadonlyArray<string>;
+}
+
+/** A machine as aett works with it: what fleet.ts declares, with its entries resolved. */
 export interface Machine {
 	readonly name: string;
 	readonly role: Role;
 	/** Bare-metal NixOS, a Mac, or a VM; only bare-metal NixOS comes from the installer. */
 	readonly kind: Kind;
+	/** Inside LUKS: an encrypted bare-metal machine, and every NAS. */
 	readonly encrypted: boolean;
 	readonly channel: Channel;
 	/** Set exactly for a VM. */
 	readonly vm: Option.Option<VmSettings>;
-	/** On the tailnet: a role default that only a stack can turn off, and never on a hypervisor. */
-	readonly tailscale: boolean;
+	/** Whether it has the fleet's user and a home: every machine but a hypervisor. */
+	readonly user: boolean;
+	/** Package names, each from the source the fleet's pins record. */
 	readonly packages: ReadonlyArray<string>;
-	readonly unstable: ReadonlyArray<string>;
-	/** Fast tools from llm-agents.nix, by name. */
-	readonly fast: ReadonlyArray<string>;
-	/** Fast tools from GitHub releases. */
+	/** Packages from GitHub releases, one per repository. */
 	readonly releases: ReadonlyArray<Release>;
-	/** Its dotfile sets. Any set gives it a home: the fleet's user with a home directory that persists. */
+	/** Homebrew casks; only Macs get any. */
+	readonly apps: ReadonlyArray<string>;
+	/** The plugins on it, by name. */
+	readonly services: ReadonlyArray<Placement>;
+	/** The trees under home/ that land in its home: default, then each entry it is on. */
 	readonly home: ReadonlyArray<string>;
 	/** What it declares that aett can't build yet; install and apply refuse it while there is any. */
 	readonly unsupported: ReadonlyArray<string>;
 }
 
 export interface Fleet {
-	/** The fleet's one user, whom every machine with a home has. */
+	/** The fleet's one user, whom every machine but a hypervisor has. */
 	readonly user: Option.Option<string>;
 	readonly machines: ReadonlyArray<Machine>;
+	/** Every plugin some machine has, by name. */
+	readonly services: ReadonlyMap<string, Service>;
+	/** The fleet's own plugins, which aett copies into the build. */
+	readonly plugins: ReadonlyArray<Plugin>;
 }
 
 const formatIssue = SchemaIssue.makeFormatterStandardSchemaV1();
@@ -192,6 +287,7 @@ const decodeAt = <S extends Schema.Decoder<unknown>>(
 
 /** A machine as declared, after its shape was checked: what it is, where it runs and its settings. */
 interface Decoded {
+	readonly name: string;
 	readonly role: Role;
 	readonly kind: Kind;
 	readonly host: string | undefined;
@@ -209,6 +305,8 @@ interface Decoded {
 const declarationFor = (role: Role, vm: boolean, macos: boolean) => {
 	if (role === "hypervisor") return Hypervisor;
 
+	if (role === "nas") return Nas;
+
 	if (role === "computer") return macos ? Mac : Computer;
 
 	return vm ? Vm : Server;
@@ -223,7 +321,7 @@ const decodeMachine = (
 	const declared = decodeAt(Declared, input, at);
 
 	if (Result.isFailure(declared)) {
-		return Result.fail([`${at}: Expected hypervisor(…), server(…) or computer(…)`]);
+		return Result.fail([`${at}: Expected hypervisor(…), nas(…), server(…) or computer(…)`]);
 	}
 
 	const { role, host, os } = declared.success;
@@ -241,6 +339,7 @@ const decodeMachine = (
 
 	return decodeAt(declarationFor(role, vm, macos), input, at).pipe(
 		Result.map((machine) => ({
+			name,
 			role,
 			kind: vm ? "vm" : macos ? "macos" : "nixos",
 			host: "host" in machine ? machine.host : undefined,
@@ -253,12 +352,166 @@ const decodeMachine = (
 const failures = <A>(results: ReadonlyArray<Result.Result<A, ReadonlyArray<string>>>) =>
 	results.flatMap((result) => (Result.isFailure(result) ? result.failure : []));
 
+// The successes of a list of decode results.
+const successes = <A>(results: ReadonlyArray<Result.Result<A, ReadonlyArray<string>>>) =>
+	results.flatMap((result) => (Result.isSuccess(result) ? [result.success] : []));
+
+/** One entry of `services`, decoded: the plugin it names, if any, and its parts. */
+interface Entry {
+	readonly name: string;
+	readonly plugin: Option.Option<Plugin>;
+	/** The machines named in `on`; none means every machine it can be on. */
+	readonly on: Option.Option<ReadonlyArray<string>>;
+	readonly packages: ReadonlyArray<Package>;
+	readonly apps: ReadonlyArray<string>;
+	readonly options: unknown;
+}
+
+// An entry given as a machine or a list of machines is the object with only `on`.
+const asObject = (value: Declaration["machines"][string]) =>
+	Predicate.isString(value) || Array.isArray(value) ? { on: value } : value;
+
+// Decodes one entry: the keys every entry has, then the rest with the plugin's options, if it names one.
+const decodeEntry = (
+	name: string,
+	value: Declaration["machines"][string],
+	plugins: ReadonlyMap<string, Plugin>,
+): Result.Result<Entry, ReadonlyArray<string>> => {
+	const at = `services.${name}`;
+	const plugin = Option.fromUndefinedOr(plugins.get(name));
+
+	if (Option.exists(plugin, ({ always }) => always === true)) {
+		return Result.fail([`${at}: ${name} is on every machine already and takes no entry`]);
+	}
+
+	const named = decodeAt(EntryName, name, `services`);
+
+	if (Result.isFailure(named)) return Result.fail([`${at}: ${named.failure.join("; ")}`]);
+
+	const object = asObject(value);
+
+	if (!Predicate.isObject(object)) {
+		return Result.fail([`${at}: Expected a machine, a list of machines or an entry`]);
+	}
+
+	// The keys every entry takes go to EntryBase, the rest to the plugin's options.
+	const common = (key: string) => key in EntryBase.fields;
+	const entries = Object.entries(object);
+	const base = decodeAt(EntryBase, Object.fromEntries(entries.filter(([key]) => common(key))), at);
+	const rest = Object.fromEntries(entries.filter(([key]) => !common(key)));
+
+	// A pack, or a plugin without options, takes no other keys.
+	const options = Option.match(
+		Option.flatMapNullishOr(plugin, ({ options: schema }) => schema),
+		{
+			onNone: () => {
+				const extra = Object.keys(rest);
+
+				return extra.length === 0
+					? Result.succeed({})
+					: Result.fail(
+							extra.map(
+								(key) =>
+									`${at}.${key}: Unexpected key; ${Option.isNone(plugin) ? "a pack" : name} takes on, packages and apps`,
+							),
+						);
+			},
+			onSome: (schema) => decodeAt(schema, rest, at),
+		},
+	);
+
+	const problems = [...failures([base]), ...failures([options])];
+
+	if (Result.isFailure(base) || Result.isFailure(options) || problems.length > 0) {
+		return Result.fail(problems);
+	}
+
+	const decoded = base.success;
+
+	return Result.succeed({
+		name,
+		plugin,
+		on: Option.map(Option.fromUndefinedOr(decoded.on), (given) =>
+			Predicate.isString(given) ? [given] : given,
+		),
+		packages: decoded.packages ?? [],
+		apps: decoded.apps ?? [],
+		options: options.success,
+	});
+};
+
+// The system a machine's modules are for.
+const systemOf = (machine: Decoded) => (machine.kind === "macos" ? "darwin" : "nixos");
+
+// What a machine is, as an error names it: a Mac, a VM or its role.
+const describeKind = (machine: Decoded) =>
+	Match.value(machine.kind).pipe(
+		Match.when("macos", () => "a Mac"),
+		Match.when("vm", () => "a VM"),
+		Match.orElse(() => `a ${machine.role}`),
+	);
+
+// Where an entry is, or why it can't be there: the machines in `on`, else every machine it can be on.
+const placeEntry = (
+	entry: Entry,
+	machines: ReadonlyArray<Decoded>,
+): Result.Result<ReadonlyArray<string>, ReadonlyArray<string>> => {
+	const at = `services.${entry.name}`;
+
+	const fits = (machine: Decoded) =>
+		Option.match(entry.plugin, {
+			onNone: () => machine.role !== "hypervisor",
+			onSome: ({ roles, systems }) =>
+				(roles ?? Role.literals).includes(machine.role) &&
+				(systems ?? ["nixos", "darwin"]).includes(systemOf(machine)),
+		});
+
+	const named = Option.getOrUndefined(entry.on);
+
+	if (named === undefined) {
+		return Option.exists(entry.plugin, ({ single }) => single === true)
+			? Result.fail([
+					`${at}.on: ${entry.name} has one machine; name it, such as ${entry.name}: "box"`,
+				])
+			: Result.succeed(machines.flatMap((machine) => (fits(machine) ? [machine.name] : [])));
+	}
+
+	const problems = named.flatMap((name) => {
+		const machine = machines.find((declared) => declared.name === name);
+
+		if (machine === undefined) return [`${at}.on: There is no machine named "${name}"`];
+
+		if (fits(machine)) return [];
+
+		if (Option.isNone(entry.plugin)) {
+			return [`${at}.on: ${name} is a hypervisor, which runs nothing but VMs and services`];
+		}
+
+		return [`${at}.on: ${entry.name} can't run on ${name}, which is ${describeKind(machine)}`];
+	});
+
+	const single = Option.exists(entry.plugin, (plugin) => plugin.single === true);
+
+	if (single && named.length !== 1) {
+		return Result.fail([...problems, `${at}.on: ${entry.name} runs on exactly one machine`]);
+	}
+
+	return problems.length > 0 ? Result.fail(problems) : Result.succeed([...new Set(named)]);
+};
+
 /**
  * Decodes fleet.ts's default export into a fleet: every machine's shape, each
- * VM's host, the stacks and where they reach, then each machine with its
- * stacks resolved. A failure holds one line per problem, naming where it is.
+ * VM's host, each plugin and each entry of `services` and where it is, then
+ * each machine with its entries resolved. A failure holds one line per
+ * problem, naming where it is.
  */
 export const decodeFleet = (declaration: Declaration): Result.Result<Fleet, string> => {
+	if ("stacks" in declaration) {
+		return Result.fail(
+			'fleet(): stacks are gone. Put packages and apps in entries of services, such as services: { dev: { on: ["zeus"], packages: ["git"] } }.',
+		);
+	}
+
 	const top = decodeAt(Top, declaration, "fleet()");
 
 	if (Result.isFailure(top)) return Result.fail(top.failure.join("\n"));
@@ -273,148 +526,186 @@ export const decodeFleet = (declaration: Declaration): Result.Result<Fleet, stri
 				]),
 	);
 
-	const stacks = Object.entries(top.success.stacks ?? {}).map(([name, stack]) =>
-		decodeAt(Stack, stack, `stacks.${name}`).pipe(
-			Result.map((decoded) => ({ name, stack: decoded })),
-		),
+	const ownPlugins = (top.success.plugins ?? []).map(
+		(input, index): Result.Result<Plugin, ReadonlyArray<string>> =>
+			decodeAt(PluginMetadata, input, `plugins.${index}`),
 	);
 
-	const declarationProblems = [...failures(machines), ...failures(stacks)];
+	const own = successes(ownPlugins);
+
+	const clashes = own.flatMap(({ name }, index) =>
+		shipped.some((plugin) => plugin.name === name) ||
+		own.findIndex((other) => other.name === name) !== index
+			? [`plugins.${index}.name: aett already knows a plugin named ${name}`]
+			: [],
+	);
+
+	const plugins = new Map<string, Plugin>(
+		[...shipped, ...own].map((plugin) => [plugin.name, plugin]),
+	);
+
+	const entries = Object.entries(top.success.services ?? {}).map(([name, value]) =>
+		decodeEntry(name, value, plugins),
+	);
+
+	const declarationProblems = [
+		...failures(machines),
+		...failures(ownPlugins),
+		...clashes,
+		...failures(entries),
+	];
 
 	if (declarationProblems.length > 0) return Result.fail(declarationProblems.join("\n"));
 
-	const decoded = new Map(
-		names.flatMap((name, index) => {
-			const machine = machines[index];
+	const decoded = successes(machines);
+	const declared = successes(entries);
 
-			return machine !== undefined && Result.isSuccess(machine)
-				? [[name, machine.success] as const]
-				: [];
-		}),
+	// Plugins that are on every machine without an entry, such as tailscale.
+	const always = shipped
+		.filter(({ always: everywhere }) => everywhere === true)
+		.map((plugin): Entry => ({
+			name: plugin.name,
+			plugin: Option.some(plugin),
+			on: Option.none(),
+			packages: [],
+			apps: [],
+			options: {},
+		}));
+
+	const placed = [...always, ...declared].map((entry) =>
+		placeEntry(entry, decoded).pipe(Result.map((on) => ({ entry, on }))),
 	);
 
-	const declaredStacks = stacks.flatMap((result) =>
-		Result.isSuccess(result) ? [result.success] : [],
-	);
-
-	const problems = [
-		...hostProblems(decoded),
-		...reachProblems(decoded, declaredStacks),
-		...releaseProblems(declaredStacks),
-	];
+	const problems = [...hostProblems(decoded), ...failures(placed), ...releaseProblems(declared)];
 
 	if (problems.length > 0) return Result.fail(problems.join("\n"));
 
-	const resolved = [...decoded].map(([name, machine]) => toMachine(name, machine, declaredStacks));
-	const homed = resolved.find(({ home }) => home.length > 0);
+	const hasUser = decoded.some(({ role }) => role !== "hypervisor");
 
-	if (top.success.user === undefined && homed !== undefined) {
+	if (top.success.user === undefined && hasUser) {
 		return Result.fail(
-			`fleet(): user is required, because a stack gives ${homed.name} a home. Name the fleet's user, such as user: "you".`,
+			`fleet(): user is required, because every machine but a hypervisor has the fleet's user. Name it, such as user: "you".`,
 		);
 	}
 
-	return Result.succeed({ user: Option.fromUndefinedOr(top.success.user), machines: resolved });
+	const services = placeServices(successes(placed), decoded);
+
+	return Result.succeed({
+		user: Option.fromUndefinedOr(top.success.user),
+		machines: decoded.map((machine) => toMachine(machine, successes(placed), services)),
+		services,
+		plugins: own,
+	});
+};
+
+/** An entry and the machines it is on. */
+interface Placed {
+	readonly entry: Entry;
+	readonly on: ReadonlyArray<string>;
+}
+
+// Each plugin with its instances and, for one that has clients, every other machine with the
+// user or a service's state on it whose system it has modules for.
+const placeServices = (placed: ReadonlyArray<Placed>, machines: ReadonlyArray<Decoded>) => {
+	const plugins = placed.flatMap(({ entry, on }) =>
+		Option.toArray(Option.map(entry.plugin, (plugin) => ({ plugin, entry, on }))),
+	);
+
+	// Machines that keep a service's state: instances of a plugin that declares some.
+	const stateful = new Set(
+		plugins.flatMap(({ plugin, on }) => (Object.keys(plugin.state ?? {}).length > 0 ? on : [])),
+	);
+
+	return new Map(
+		plugins.map(({ plugin, entry, on }) => {
+			const clients =
+				plugin.clients === true
+					? machines.flatMap((machine) =>
+							!on.includes(machine.name) &&
+							(machine.role !== "hypervisor" || stateful.has(machine.name)) &&
+							(plugin.systems ?? ["nixos", "darwin"]).includes(systemOf(machine))
+								? [machine.name]
+								: [],
+						)
+					: [];
+
+			return [
+				plugin.name,
+				{ plugin, options: entry.options, instances: on, clients } satisfies Service,
+			] as const;
+		}),
+	);
 };
 
 // A repository's release is declared the same way wherever it appears, since aett pins one per repository.
-const releaseProblems = (
-	stacks: ReadonlyArray<{ readonly name: string; readonly stack: Stack }>,
-) => {
-	const declared = stacks.flatMap(({ name, stack }) =>
-		[stack, ...Object.values(stack.machines ?? {})].flatMap((content) =>
-			(content.fast ?? []).flatMap((tool) =>
-				Predicate.isString(tool) ? [] : [{ stack: name, release: tool }],
-			),
-		),
+const releaseProblems = (entries: ReadonlyArray<Entry>) => {
+	const declared = entries.flatMap(({ name, packages }) =>
+		packages.flatMap((tool) => (Predicate.isString(tool) ? [] : [{ entry: name, release: tool }])),
 	);
 
 	return [...Map.groupBy(declared, ({ release }) => release.github)].flatMap(([github, uses]) =>
 		new Set(uses.map(({ release }) => `${release.asset}\0${release.bin}`)).size > 1
 			? [
-					`stacks: ${github} is released with different asset or bin in ${[...new Set(uses.map(({ stack }) => stack))].join(" and ")}; declare it once and share it.`,
+					`services: ${github} is released with different asset or bin in ${[...new Set(uses.map(({ entry }) => entry))].join(" and ")}; declare it once and share it.`,
 				]
 			: [],
 	);
 };
 
-// Each VM's host must be a hypervisor or a bare-metal server.
-const hostProblems = (machines: ReadonlyMap<string, Decoded>) =>
-	[...machines].flatMap(([name, machine]) => {
+// Each VM's host must be a hypervisor, a NAS or a bare-metal server.
+const hostProblems = (machines: ReadonlyArray<Decoded>) =>
+	machines.flatMap((machine) => {
 		if (machine.host === undefined) return [];
 
-		const host = machines.get(machine.host);
+		const host = machines.find(({ name }) => name === machine.host);
 
 		if (host === undefined)
-			return [`machines.${name}.host: There is no machine named "${machine.host}"`];
+			return [`machines.${machine.name}.host: There is no machine named "${machine.host}"`];
 
-		return host.role === "hypervisor" || (host.role === "server" && host.kind === "nixos")
+		return host.role === "hypervisor" ||
+			host.role === "nas" ||
+			(host.role === "server" && host.kind === "nixos")
 			? []
 			: [
-					`machines.${name}.host: ${machine.host} is a ${host.kind === "vm" ? "VM" : host.role}; a VM runs on a hypervisor or a bare-metal server`,
+					`machines.${machine.name}.host: ${machine.host} is a ${host.kind === "vm" ? "VM" : host.role}; a VM runs on a hypervisor, a NAS or a bare-metal server`,
 				];
 	});
 
-// Stacks reach declared servers and computers only, with what fits each.
-const reachProblems = (
-	machines: ReadonlyMap<string, Decoded>,
-	stacks: ReadonlyArray<{ readonly name: string; readonly stack: Stack }>,
-) =>
-	stacks.flatMap(({ name, stack }) =>
-		Object.entries(stack.machines ?? {}).flatMap(([machineName, content]) => {
-			const at = `stacks.${name}.machines.${machineName}`;
-			const machine = machines.get(machineName);
-
-			if (machine === undefined) return [`${at}: There is no machine named "${machineName}"`];
-
-			if (machine.role === "hypervisor") {
-				return [`${at}: ${machineName} is a hypervisor; stacks never reach hypervisors`];
-			}
-
-			if (machine.role === "server" && content.apps !== undefined) {
-				return [`${at}.apps: ${machineName} is a server; apps need a computer`];
-			}
-
-			return [];
-		}),
-	);
-
-// The machine aett works with: its settings, the packages its stacks bring and what it declares that aett can't build yet.
+// The machine aett works with: its settings, what its entries bring and what aett can't build yet.
 const toMachine = (
-	name: string,
 	machine: Decoded,
-	stacks: ReadonlyArray<{ readonly stack: Stack }>,
+	placed: ReadonlyArray<Placed>,
+	services: ReadonlyMap<string, Service>,
 ): Machine => {
-	const resolved =
-		machine.role === "hypervisor"
-			? {
-					packages: [],
-					unstable: [],
-					fast: [],
-					releases: [],
-					apps: [],
-					services: [],
-					off: [],
-					home: [],
-				}
-			: resolveStacks(
-					stacks.map(({ stack }) => stack),
-					{ name, computer: machine.role === "computer" },
-				);
-
+	const mine = placed.flatMap(({ on, entry }) => (on.includes(machine.name) ? [entry] : []));
+	const { names, releases } = splitPackages(mine.flatMap(({ packages }) => packages));
+	const apps = [...new Set(mine.flatMap((entry) => entry.apps))].toSorted();
+	const user = machine.role !== "hypervisor";
 	const { system } = machine;
 
 	const unsupported = [
-		machine.kind === "macos" ? ["Macs"] : [],
 		system.desktop === undefined ? [] : ["desktops"],
-		resolved.apps.length > 0 ? ["apps"] : [],
+		apps.length > 0 && machine.kind !== "macos" && machine.role === "computer"
+			? ["apps on NixOS"]
+			: [],
 	].flat();
 
+	const placements = [...services].flatMap(([name, service]) => {
+		if (service.instances.includes(machine.name)) return [{ name, instance: true }];
+
+		return service.clients.includes(machine.name) ? [{ name, instance: false }] : [];
+	});
+
+	// Each plugin on it brings its package, which its modules run and the operator can use there.
+	const pluginPackages = placements.flatMap(({ name }) =>
+		Option.toArray(Option.fromUndefinedOr(services.get(name)?.plugin.package)),
+	);
+
 	return {
-		name,
+		name: machine.name,
 		role: machine.role,
 		kind: machine.kind,
-		encrypted: system.encrypted === true,
+		encrypted: machine.role === "nas" || system.encrypted === true,
 		channel: system.channel ?? "stable",
 		vm: Option.map(Option.fromUndefinedOr(machine.host), (host) => ({
 			host,
@@ -422,12 +713,22 @@ const toMachine = (
 			memory: mebibytes(system.memory ?? "2 GiB"),
 			disk: mebibytes(system.disk ?? "20 GiB"),
 		})),
-		tailscale: !resolved.off.includes("tailscale"),
-		home: resolved.home,
-		packages: resolved.packages,
-		unstable: resolved.unstable,
-		fast: resolved.fast,
-		releases: resolved.releases,
+		user,
+		packages: [...new Set([...names, ...pluginPackages])].toSorted(),
+		releases,
+		apps: machine.kind === "macos" ? apps : [],
+		services: placements,
+		// Plugins on every machine have no entry, so no home tree follows them.
+		home: user
+			? [
+					"default",
+					...mine
+						.flatMap(({ name, plugin }) =>
+							Option.exists(plugin, ({ always }) => always === true) ? [] : [name],
+						)
+						.toSorted(),
+				]
+			: [],
 		unsupported,
 	};
 };

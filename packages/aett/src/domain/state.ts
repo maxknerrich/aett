@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect";
+import { Platform } from "./pins.ts";
 
 /** One OpenSSH public key line: type, base64 blob and an optional comment. */
 export const SshPublicKey = Schema.String.check(
@@ -42,6 +43,12 @@ export interface Operator extends Schema.Schema.Type<typeof Operator> {}
 export const MachineRecord = Schema.Struct({
 	// The disk install erased, by its /dev/disk/by-id/ path.
 	disk: Schema.optionalKey(Schema.String),
+	// A NAS: the disks of each pool, by their /dev/disk/by-id/ paths, chosen at install.
+	pools: Schema.optionalKey(
+		Schema.Struct({ root: Schema.Array(Schema.String), tank: Schema.Array(Schema.String) }),
+	),
+	// A Mac's platform, which a NixOS machine's hardware report says instead.
+	system: Schema.optionalKey(Platform),
 	// Whether the installed btrfs partition is inside LUKS; absent means it is not.
 	encrypted: Schema.optionalKey(Schema.Boolean),
 	installed: Schema.optionalKey(Schema.Boolean),
@@ -54,15 +61,31 @@ export const MachineRecord = Schema.Struct({
 	forwards: Schema.optionalKey(
 		Schema.Struct({ ssh: Schema.Int, mosh: Schema.Tuple([Schema.Int, Schema.Int]) }),
 	),
-	// The machine's tailnet address, once Tailscale reported one.
+	// The machine on the tailnet, once it joined: its IPv4 address, its name there and its node id.
 	tailnet: Schema.optionalKey(Schema.String),
+	tailnetName: Schema.optionalKey(Schema.String),
+	node: Schema.optionalKey(Schema.String),
+	// An encrypted machine's initrd on the tailnet, which aett machine unlock reaches.
+	unlock: Schema.optionalKey(
+		Schema.Struct({ tailnet: Schema.String, tailnetName: Schema.String, node: Schema.String }),
+	),
+	// A Mac: the public half of the age key aett made for it, which its secrets are encrypted to.
+	age: Schema.optionalKey(AgePublicKey),
+	// A Mac: whether it runs the Tailscale app, which aett leaves to it.
+	tailscaleApp: Schema.optionalKey(Schema.Boolean),
+	// A Mac: whether the operator agreed to remove the Homebrew apps fleet.ts doesn't list.
+	zap: Schema.optionalKey(Schema.Boolean),
+	// When the one-time Tailscale key aett minted for the machine stops working, if it hasn't joined yet.
+	tailscaleKeyExpires: Schema.optionalKey(Schema.String),
 });
 
 export interface MachineRecord extends Schema.Schema.Type<typeof MachineRecord> {}
 
-/** What state holds for one declared machine: its record and whether its hardware report exists. */
+/** What state holds for one declared machine: its record, whether its hardware report exists, and its platform. */
 export interface MachineState extends MachineRecord {
 	readonly facts: boolean;
+	/** From its hardware report, its record, or its host's report for a VM; none until aett knows. */
+	readonly platform?: Platform | undefined;
 }
 
 /**

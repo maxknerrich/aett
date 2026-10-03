@@ -1,52 +1,61 @@
-import { Console, Effect, Option, Path, Schedule } from "effect";
-import { type Connection, Ssh } from "../adapters/ssh.ts";
-import { formatHost, type Host } from "../domain/host.ts";
+import { isIP } from "node:net";
+import { Console, Effect, Option, Path, Schedule, Schema } from "effect";
+import { type Connection, Ssh, SshError } from "../adapters/ssh.ts";
+import type { Fleet } from "../domain/fleet.ts";
 import type { State } from "../domain/state.ts";
 import { updateRecord } from "./load.ts";
+import { findOnTailnet } from "./tailscale.ts";
 
-// Where aett finds a machine on the tailnet: the address state recorded, if any.
+// Where state says a machine is on the tailnet, as an SSH endpoint.
 const tailnetHost = (state: State, name: string) =>
-	Option.map(Option.fromUndefinedOr(state.machines.get(name)?.tailnet), (address): Host => ({
+	Option.map(Option.fromUndefinedOr(state.machines.get(name)?.tailnet), (address) => ({
 		name: address,
 		port: 22,
 	}));
 
 /**
- * Logs in to a bare-metal machine with aett's known hosts: at `given`, or
- * else at <name>.local first and its tailnet address second.
+ * Logs in to a bare-metal machine over the tailnet, aett's only way to it,
+ * with aett's known hosts. A machine state has no address for yet is looked
+ * up on the tailnet first; one that just booted gets a few minutes to join.
  */
 export const connectMachine = Effect.fn("connectMachine")(function* (
 	root: string,
+	fleet: Fleet,
 	state: State,
 	name: string,
-	given: Option.Option<Host>,
 ) {
 	const ssh = yield* Ssh;
 	const path = yield* Path.Path;
 	const knownHosts = path.join(root, "state", "known_hosts");
 
-	const hosts = Option.match(given, {
-		onSome: (host) => [host],
-		onNone: () => [
-			{ name: `${name}.local`, port: 22 },
-			...Option.toArray(tailnetHost(state, name)),
-		],
+	const address = yield* Option.match(tailnetHost(state, name), {
+		onSome: ({ name: recorded }) => Effect.succeed(recorded),
+		onNone: () =>
+			Console.log(`Looking for ${name} on the tailnet…`).pipe(
+				Effect.andThen(findOnTailnet(root, fleet, state, name)),
+				Effect.flatMap((found) =>
+					Effect.fromOption(
+						found,
+						() =>
+							new SshError({
+								message: `${name} isn't on the tailnet yet, and aett reaches machines only there.`,
+							}),
+					),
+				),
+				Effect.retry(Schedule.spaced("10 seconds").pipe(Schedule.upTo({ duration: "5 minutes" }))),
+			),
 	});
 
-	return yield* Effect.firstSuccessOf(
-		hosts.map((host) =>
-			Console.log(`Connecting to ${name} at ${formatHost(host)}…`).pipe(
-				Effect.andThen(ssh.machine(name, host, knownHosts)),
-			),
-		),
-	);
+	yield* Console.log(`Connecting to ${name} at ${address}…`);
+
+	return yield* ssh.machine(name, { name: address, port: 22 }, knownHosts);
 });
 
 /**
- * Logs in to a running guest over the tailnet when state knows its address
- * there, else through `host`, the open connection to its host. A guest its
- * host just started needs a moment before sshd answers, so through its host
- * aett keeps trying for a minute and a half.
+ * Logs in to a running guest over the tailnet once it joined, else through
+ * `host`, the open connection to its host. A guest its host just started
+ * needs a moment before sshd answers, so through its host aett keeps trying
+ * for a minute and a half.
  */
 export const connectGuest = Effect.fn("connectGuest")(function* (
 	root: string,
@@ -80,23 +89,48 @@ export const connectGuest = Effect.fn("connectGuest")(function* (
 	});
 });
 
-/** Records the machine's tailnet address in state once Tailscale reports one that state lacks. */
+// What `tailscale status --json` says about the machine itself.
+const SelfStatus = Schema.fromJsonString(
+	Schema.Struct({
+		Self: Schema.Struct({
+			ID: Schema.String,
+			DNSName: Schema.String,
+			TailscaleIPs: Schema.Array(Schema.String),
+		}),
+	}),
+);
+
+/** Records the machine's address, name and node on the tailnet once Tailscale reports them and state lacks them. */
 export const recordTailnet = Effect.fn("recordTailnet")(function* (
 	root: string,
 	state: State,
 	name: string,
 	connection: Connection,
 ) {
-	const reported =
-		(yield* connection.run("tailscale ip -4 2>/dev/null || true")).trim().split("\n")[0] ?? "";
+	const printed = yield* connection.run(
+		"tailscale status --json --peers=false 2>/dev/null || true",
+	);
+
+	const status = yield* Schema.decodeUnknownEffect(SelfStatus)(printed).pipe(Effect.option);
+
+	if (Option.isNone(status)) return;
+
+	const { ID, DNSName, TailscaleIPs } = status.value.Self;
+	const address = TailscaleIPs.find((ip) => isIP(ip) === 4);
+	const recorded = state.machines.get(name);
 
 	if (
-		!/^100\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(reported) ||
-		state.machines.get(name)?.tailnet === reported
+		address === undefined ||
+		DNSName === "" ||
+		(recorded?.tailnet === address && recorded.node === ID)
 	) {
 		return;
 	}
 
-	yield* updateRecord(root, name, { tailnet: reported });
-	yield* Console.log(`${name} is on the tailnet at ${reported}.`);
+	yield* updateRecord(root, name, {
+		tailnet: address,
+		tailnetName: DNSName.replace(/\.$/, ""),
+		node: ID,
+	});
+	yield* Console.log(`${name} is on the tailnet as ${DNSName.replace(/\.$/, "")} (${address}).`);
 });

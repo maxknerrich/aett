@@ -1,49 +1,106 @@
 import { Option } from "effect";
-import type { Fleet, Machine } from "./fleet.ts";
+import type { Fleet } from "./fleet.ts";
 
 /**
- * A secret machines read at runtime. It lives in secrets/<name>.json,
- * encrypted to the operators and to every machine that reads it, and the
- * operator sets it with aett secret set <name>.
+ * A secret machines read at runtime. It lives in `secrets/<name>.json`,
+ * encrypted to the operators and to every machine in `readers`, and sops-nix
+ * puts it at /run/secrets/<name> on them.
  */
 export interface MachineSecret {
 	readonly name: string;
-	readonly readBy: (machine: Machine) => boolean;
-	/** What aett secret set asks for. */
+	/** The machines that read it. */
+	readonly readers: ReadonlyArray<string>;
+	/**
+	 * How it comes about: asked for as a password, stored as its hash; asked
+	 * for as a token; made by aett as a random password or a self-signed TLS
+	 * certificate with its key; or a machine's one-time Tailscale key, which
+	 * aett mints for it.
+	 */
+	readonly kind: "password" | "token" | "random" | "certificate" | "tailscale";
+	/** What aett asks for a password or token. */
 	readonly prompt: string;
 	/**
-	 * A password is asked twice and stored as its hash. A required secret is
-	 * asked for the first time a machine that reads it is built; the others
+	 * Whether aett makes or asks for it the first time a build needs it. A
+	 * machine's Tailscale key is minted when it joins instead, and the others
 	 * wait for aett secret set.
 	 */
-	readonly kind: "password" | "token";
 	readonly required: boolean;
 	/** Why a value can't be this secret, if it can't. */
 	readonly invalid: (value: string) => Option.Option<string>;
+	/** Where the public half of a certificate lives in the fleet, once it exists. */
+	readonly certificate: Option.Option<string>;
 }
 
-/** The secrets the fleet's machines read. */
+/** Where a machine secret lives in the fleet. */
+export const secretFile = (name: string) => `secrets/${name}.json`;
+
+const anything = () => Option.none<string>();
+
+// A secret a plugin's entry declares, once or once per machine as its `per` says.
+const pluginSecrets = (fleet: Fleet): ReadonlyArray<MachineSecret> =>
+	[...fleet.services].flatMap(([service, { plugin, instances, clients }]) =>
+		Object.entries(plugin.secrets ?? {}).flatMap(([secret, spec]) => {
+			const base = `${service}/${secret}`;
+			const configured = [...instances, ...clients];
+
+			const kind =
+				"generate" in spec ? (spec.generate === "password" ? "random" : "certificate") : "token";
+
+			const prompt = "prompt" in spec ? spec.prompt : "";
+
+			const make = (
+				name: string,
+				readers: ReadonlyArray<string>,
+				owner: string,
+			): MachineSecret => ({
+				name,
+				readers,
+				kind,
+				prompt,
+				required: true,
+				invalid: anything,
+				certificate:
+					kind === "certificate"
+						? Option.some(`state/${owner}/${service}.${secret}.pem`)
+						: Option.none(),
+			});
+
+			switch (spec.per ?? "fleet") {
+				case "instance":
+					return instances.map((instance) => make(`${base}/${instance}`, [instance], instance));
+				case "client":
+					return clients.map((client) => make(`${base}/${client}`, [client, ...instances], client));
+				default:
+					return [make(base, configured, service)];
+			}
+		}),
+	);
+
+/** Where a machine's one-time Tailscale key lives, under its own secrets. */
+export const tailscaleKey = (machine: string) => `${machine}/tailscale-key`;
+
+/** The secrets the fleet's machines read: the user's password, each machine's Tailscale key and each plugin's. */
 export const machineSecrets = (fleet: Fleet): ReadonlyArray<MachineSecret> => [
-	{
-		name: "tailscale/auth-key",
-		readBy: (machine) => machine.tailscale,
-		prompt: "Tailscale auth key (tskey-auth-…)",
-		kind: "token",
+	...fleet.machines.map(({ name }): MachineSecret => ({
+		name: tailscaleKey(name),
+		readers: [name],
+		kind: "tailscale",
+		prompt: "",
 		required: false,
-		invalid: (value) =>
-			/^tskey-\S+$/.test(value)
-				? Option.none()
-				: Option.some("Expected a Tailscale auth key such as tskey-auth-…"),
-	},
+		invalid: anything,
+		certificate: Option.none(),
+	})),
 	...Option.toArray(
 		Option.map(fleet.user, (user): MachineSecret => ({
 			name: `users/${user}`,
-			readBy: (machine) => machine.home.length > 0,
-			prompt: `Password for ${user}, which sudo asks for on every machine with a home`,
+			readers: fleet.machines.filter((machine) => machine.user).map(({ name }) => name),
 			kind: "password",
+			prompt: `Password for ${user}, which sudo asks for on every machine with a home`,
 			required: true,
 			invalid: (value) =>
 				/^\P{Cc}+$/u.test(value) ? Option.none() : Option.some("Expected a password"),
+			certificate: Option.none(),
 		})),
 	),
+	...pluginSecrets(fleet),
 ];

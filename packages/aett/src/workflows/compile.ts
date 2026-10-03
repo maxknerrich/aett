@@ -4,7 +4,9 @@ import { allocate, sshConfig } from "../domain/network.ts";
 import { mergeInputs, type Pins } from "../domain/pins.ts";
 import type { MachineRecord, State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
+import { buildable } from "../domain/build.ts";
 import { ensureGuestKeys } from "./identity.ts";
+import { mintKeys } from "./tailscale.ts";
 import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
 import { completePins, readPins } from "./pins.ts";
 import { existingSecrets, shareSecrets } from "./secrets.ts";
@@ -33,15 +35,18 @@ export const emit = Effect.fn("emit")(function* (root: string) {
 	yield* writeSshConfig(root, sshConfig(fleet, state, path.join(root, "state", "known_hosts")));
 
 	yield* ensureGuestKeys(root, fleet, state.operator.ageKeys);
+	yield* mintKeys(root, fleet, state, buildable(fleet, state));
 
-	const secrets = yield* shareSecrets(root, fleet, state);
-	const pins = yield* completePins(root, fleet);
-	const build = yield* engine.emit(root, fleet, state, secrets, pins);
+	// Minting records when each key stops working.
+	const minted = yield* readState(root, fleet);
+	const extras = yield* shareSecrets(root, fleet, minted);
+	const pins = yield* completePins(root, fleet, minted);
+	const build = yield* engine.emit(root, fleet, minted, extras, pins);
 
-	return { build, fleet, state, pins };
+	return { build, fleet, state: minted, pins };
 });
 
-// Writes state/ssh_config when it changes, and removes it once no guest has a home.
+// Writes state/ssh_config when it changes, and removes it once no machine has the user.
 const writeSshConfig = Effect.fn("writeSshConfig")(function* (root: string, content: string) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
@@ -55,7 +60,7 @@ const writeSshConfig = Effect.fn("writeSshConfig")(function* (root: string, cont
 	yield* fs.writeFileString(file, content);
 
 	return yield* Console.log(
-		"Wrote state/ssh_config. Include it from ~/.ssh/config to reach the fleet's VMs from the LAN.",
+		"Wrote state/ssh_config. Include it from ~/.ssh/config to log in to the fleet's machines as yourself.",
 	);
 });
 
@@ -86,19 +91,20 @@ export const emitAsIs = Effect.fn("emitAsIs")(function* (root: string) {
 		]),
 	};
 
-	const secrets = yield* existingSecrets(root, fleet);
+	const extras = yield* existingSecrets(root, fleet);
 	const defaults = yield* engine.defaultInputs;
 
 	// Inputs a newer aett added are pinned at its tested revisions, as apply would.
 	const pins = Option.match(yield* readPins(root), {
-		onNone: (): Pins => ({ inputs: defaults, releases: {} }),
-		onSome: ({ inputs, releases }): Pins => ({
+		onNone: (): Pins => ({ inputs: defaults, releases: {}, packages: {} }),
+		onSome: ({ inputs, releases, packages }): Pins => ({
 			inputs: mergeInputs(inputs, defaults).lock,
 			releases,
+			packages,
 		}),
 	});
 
-	const build = yield* engine.emit(root, fleet, state, secrets, pins);
+	const build = yield* engine.emit(root, fleet, state, extras, pins);
 
 	return { build, fleet, state, pins };
 });
@@ -131,6 +137,8 @@ export const notBuilt = (fleet: Fleet, state: State, name: string) => {
 	const host = Option.flatMap(Option.fromUndefinedOr(machine), ({ vm }) => vm);
 
 	if (Option.isSome(host)) return `runs on ${host.value.host}, which is not installed yet`;
+
+	if (machine?.kind === "macos") return "not applied on it yet: run aett apply on the Mac";
 
 	return state.machines.get(name)?.facts === true ? "not installed yet" : "not discovered yet";
 };

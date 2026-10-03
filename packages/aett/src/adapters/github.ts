@@ -23,6 +23,11 @@ export class GitHub extends Context.Service<
 	{
 		/** The repository's latest release, "owner/name". */
 		readonly latestRelease: (repository: string) => Effect.Effect<PublishedRelease, GitHubError>;
+		/** The repository's release with `tag`. */
+		readonly release: (
+			repository: string,
+			tag: string,
+		) => Effect.Effect<PublishedRelease, GitHubError>;
 	}
 >()("aett/adapters/GitHub") {
 	static readonly layer = Layer.effect(
@@ -43,13 +48,14 @@ export class GitHub extends Context.Service<
 				HttpClient.filterStatusOk,
 			);
 
-			const latestRelease = Effect.fn("GitHub.latestRelease")(function* (repository: string) {
-				const release = yield* client.get(`/repos/${repository}/releases/latest`).pipe(
+			// A release from the API at `path`, described as `which` when it can't be read.
+			const read = Effect.fn("GitHub.read")(function* (path: string, which: string) {
+				const release = yield* client.get(path).pipe(
 					Effect.flatMap(HttpClientResponse.schemaBodyJson(LatestRelease)),
 					Effect.mapError(
 						(cause) =>
 							new GitHubError({
-								message: `Could not read ${repository}'s latest release from GitHub: ${cause.message}`,
+								message: `Could not read ${which} from GitHub: ${cause.message}`,
 							}),
 					),
 				);
@@ -62,7 +68,16 @@ export class GitHub extends Context.Service<
 				} satisfies PublishedRelease;
 			});
 
-			return GitHub.of({ latestRelease });
+			const latestRelease = (repository: string) =>
+				read(`/repos/${repository}/releases/latest`, `${repository}'s latest release`);
+
+			const release = (repository: string, tag: string) =>
+				read(
+					`/repos/${repository}/releases/tags/${encodeURIComponent(tag)}`,
+					`${repository}'s release ${tag}`,
+				);
+
+			return GitHub.of({ latestRelease, release });
 		}),
 	).pipe(Layer.provide(FetchHttpClient.layer));
 }

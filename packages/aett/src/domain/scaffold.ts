@@ -21,6 +21,7 @@ export interface NewMachine {
 /** The roles `aett create` offers, with what each means. */
 export const roles: ReadonlyArray<{ readonly role: Role; readonly description: string }> = [
 	{ role: "hypervisor", description: "Only runs VMs, like Proxmox" },
+	{ role: "nas", description: "Storage with mirrored disks that runs services and VMs" },
 	{ role: "server", description: "A headless machine you reach over SSH" },
 	{ role: "computer", description: "A machine you sit in front of, such as a Mac or a laptop" },
 ];
@@ -49,21 +50,45 @@ export const parseMachineFlag = (value: string): Option.Option<NewMachine> => {
 		: Option.none();
 };
 
-// One machine's entry in fleet.ts: a key, quoted when the name has a hyphen, and its role's call.
-const entry = ({ name, role, mac, encrypted }: NewMachine) => {
-	const key = /^[a-z][a-z0-9]*$/.test(name) ? name : JSON.stringify(name);
-	const config = mac ? '{ os: "macos" }' : encrypted ? "{ system: { encrypted: true } }" : "";
+// A name as an object key in fleet.ts: quoted when it has a hyphen.
+const key = (name: string) => (/^[a-z][a-z0-9]*$/.test(name) ? name : JSON.stringify(name));
 
-	return `\t\t${key}: ${role}(${config}),\n`;
+// One machine's entry in fleet.ts: its key and its role's call.
+const entry = ({ name, role, mac, encrypted }: NewMachine) => {
+	const config = mac
+		? '{ os: "macos" }'
+		: encrypted && role !== "nas"
+			? "{ system: { encrypted: true } }"
+			: "";
+
+	return `\t\t${key(name)}: ${role}(${config}),\n`;
 };
 
-/** Renders fleet.ts for the machines create was given. */
-export const fleetSource = (machines: ReadonlyArray<NewMachine>) => {
+/** A Mac's apps that create adopts: the casks Homebrew has on it. */
+export interface Adopted {
+	readonly mac: string;
+	readonly apps: ReadonlyArray<string>;
+}
+
+/**
+ * Renders fleet.ts for what create was given: the user, the first machines,
+ * and the apps of the Mac it runs on, in a pack named after the Mac, whose
+ * home/<mac>/ then holds that Mac's own dotfiles.
+ */
+export const fleetSource = (
+	user: string,
+	machines: ReadonlyArray<NewMachine>,
+	adopted: Option.Option<Adopted>,
+) => {
 	const imports = [...new Set(["fleet", ...machines.map(({ role }) => role)])].toSorted();
 
-	return machines.length === 0
-		? 'import { fleet } from "aett"\n\nexport default fleet({\n\tmachines: {},\n})\n'
-		: `import { ${imports.join(", ")} } from "aett"\n\nexport default fleet({\n\tmachines: {\n${machines.map(entry).join("")}\t},\n})\n`;
+	const services = Option.match(adopted, {
+		onNone: () => "",
+		onSome: ({ mac, apps }) =>
+			`\tservices: {\n\t\t${key(mac)}: { on: ${JSON.stringify(mac)}, apps: [${apps.map((app) => JSON.stringify(app)).join(", ")}] },\n\t},\n`,
+	});
+
+	return `import { ${imports.join(", ")} } from "aett"\n\nexport default fleet({\n\tuser: ${JSON.stringify(user)},\n\tmachines: {${machines.length === 0 ? "" : `\n${machines.map(entry).join("")}\t`}},\n${services}})\n`;
 };
 
 /** A name the list uses twice, which a fleet can't have. */

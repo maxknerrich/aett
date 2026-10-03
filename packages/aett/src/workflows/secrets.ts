@@ -1,28 +1,23 @@
-import { Console, Effect, FileSystem, Option, Path, Redacted, Schema, Stream } from "effect";
+import { X509Certificate, randomBytes } from "node:crypto";
+import { Console, Effect, FileSystem, Match, Option, Path, Redacted, Schema, Stream } from "effect";
 import { Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Secrets, SecretsError } from "../adapters/secrets.ts";
 import { type Fleet, UserName } from "../domain/fleet.ts";
-import { type MachineSecret, machineSecrets } from "../domain/secrets.ts";
+import { type MachineSecret, machineSecrets, secretFile } from "../domain/secrets.ts";
 import { buildable } from "../domain/build.ts";
 import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { knownHostKeys, machineAgeKeys } from "./identity.ts";
 import { loadFleet, readState } from "./load.ts";
 
-// Where a machine secret lives in the fleet.
-const secretFile = (secret: MachineSecret) => `secrets/${secret.name}.json`;
-
-// Who a machine secret is encrypted to: the operators, and every declared machine that reads it and has a host key.
+// Who a machine secret is encrypted to: the operators, and every machine that reads it and has an age key.
 const recipientsOf = Effect.fn("recipientsOf")(function* (
 	root: string,
-	fleet: Fleet,
 	state: State,
 	secret: MachineSecret,
 ) {
-	const readers = fleet.machines.filter(secret.readBy).map(({ name }) => name);
-
-	return [...state.operator.ageKeys, ...(yield* machineAgeKeys(root, readers))];
+	return [...state.operator.ageKeys, ...(yield* machineAgeKeys(root, state, secret.readers))];
 });
 
 // Hashes a password the way NixOS reads hashedPasswordFile, with the pinned mkpasswd.
@@ -43,6 +38,57 @@ const hashPassword = Effect.fn("hashPassword")(function* (password: Redacted.Red
 
 	return hash;
 });
+
+// A self-signed TLS certificate with its key, as one PEM file, made with the pinned openssl. Peers
+// pin its fingerprint, so its name and lifetime don't matter.
+const makeCertificate = Effect.fn("makeCertificate")(function* (name: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const openssl = path.join(yield* (yield* Engine).tools, "openssl");
+	const directory = yield* fs.makeTempDirectoryScoped({ prefix: "aett-" });
+	const key = path.join(directory, "key.pem");
+	const certificate = path.join(directory, "certificate.pem");
+
+	const exitCode = yield* spawner.exitCode(
+		ChildProcess.make(
+			openssl,
+			[
+				"req",
+				"-x509",
+				"-newkey",
+				"ec",
+				"-pkeyopt",
+				"ec_paramgen_curve:prime256v1",
+				"-noenc",
+				"-sha256",
+				"-days",
+				"36500",
+				"-batch",
+				"-subj",
+				// Slashes separate the subject's fields.
+				`/CN=${name.replaceAll("/", "-")}`,
+				"-keyout",
+				key,
+				"-out",
+				certificate,
+			],
+			{ stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+		),
+	);
+
+	if (exitCode !== 0) {
+		return yield* new SecretsError({
+			message: `openssl could not make a certificate for ${name}.`,
+		});
+	}
+
+	return `${yield* fs.readFileString(certificate)}${yield* fs.readFileString(key)}`;
+}, Effect.scoped);
+
+/** The SHA-256 fingerprint of the certificate in a PEM file, as lowercase hex without colons. */
+export const fingerprintOf = (pem: string) =>
+	new X509Certificate(pem).fingerprint256.replaceAll(":", "").toLowerCase();
 
 // Asks for a secret's value: a token once, a password twice until both match, stored as its hash.
 const ask = (secret: MachineSecret) => {
@@ -72,31 +118,51 @@ const ask = (secret: MachineSecret) => {
 	);
 };
 
-// Asks for a machine secret and stores it, encrypted to the operators and the machines that read it.
-const store = Effect.fn("store")(function* (
-	root: string,
-	fleet: Fleet,
-	state: State,
-	secret: MachineSecret,
-) {
+// Makes a secret aett generates, or asks for one it can't, and stores it encrypted to the operators
+// and the machines that read it. A certificate's public half goes next to the machine's state too.
+const store = Effect.fn("store")(function* (root: string, state: State, secret: MachineSecret) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
 	const secrets = yield* Secrets;
-	const value = yield* ask(secret);
+
+	const value = yield* Match.value(secret.kind).pipe(
+		Match.when("random", () => Effect.succeed(randomBytes(32).toString("hex"))),
+		Match.when("certificate", () => makeCertificate(secret.name)),
+		Match.orElse(() => ask(secret)),
+	);
 
 	yield* secrets.write(
 		root,
-		secretFile(secret),
-		yield* recipientsOf(root, fleet, state, secret),
+		secretFile(secret.name),
+		yield* recipientsOf(root, state, secret),
 		value,
+	);
+
+	yield* Effect.forEach(Option.toArray(secret.certificate), (file) =>
+		fs
+			.makeDirectory(path.dirname(path.join(root, file)), { recursive: true })
+			.pipe(
+				Effect.andThen(
+					fs.writeFileString(
+						path.join(root, file),
+						value.slice(0, value.indexOf("-----END CERTIFICATE-----") + 26),
+					),
+				),
+			),
 	);
 });
 
+// The secrets a build that covers `included` needs: those some included machine reads.
+const wantedBy = (fleet: Fleet, included: ReadonlySet<string>) =>
+	machineSecrets(fleet).filter((secret) => secret.readers.some((reader) => included.has(reader)));
+
 /**
- * Brings the machine secrets up to date for a build: asks for a required one
- * that a machine the build covers reads and the fleet lacks, says which
- * optional ones are missing, and encrypts each one the fleet has to the
- * operators and the machines that read it now, none left included,
- * decrypting it only when they changed. Returns the names of the secrets that
- * exist.
+ * Brings the machine secrets up to date for a build: makes or asks for each
+ * required one that a machine the build covers reads and the fleet lacks, says
+ * which optional ones are missing, and encrypts each one the fleet has to the
+ * operators and the machines that read it now, decrypting it only when they
+ * changed. Returns the names of the secrets that exist and the fingerprint of
+ * each certificate by secret.
  */
 export const shareSecrets = Effect.fn("shareSecrets")(function* (
 	root: string,
@@ -106,52 +172,76 @@ export const shareSecrets = Effect.fn("shareSecrets")(function* (
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const secrets = yield* Secrets;
-	const included = buildable(fleet, state);
+	const exists = (secret: MachineSecret) => fs.exists(path.join(root, secretFile(secret.name)));
 
-	const wanted = machineSecrets(fleet).filter((secret) =>
-		fleet.machines.some((machine) => included.has(machine.name) && secret.readBy(machine)),
-	);
-
-	const missing = yield* Effect.filter(wanted, (secret) =>
-		Effect.map(fs.exists(path.join(root, secretFile(secret))), (exists) => !exists),
+	const missing = yield* Effect.filter(wantedBy(fleet, buildable(fleet, state)), (secret) =>
+		Effect.map(exists(secret), (found) => !found),
 	);
 
 	yield* Effect.forEach(missing, (secret) =>
 		secret.required
-			? store(root, fleet, state, secret)
-			: Console.log(
-					`${secretFile(secret)} is missing, so machines go without it until you run aett secret set ${secret.name}.`,
-				),
+			? store(root, state, secret)
+			: secret.kind === "tailscale"
+				? Effect.void
+				: Console.log(
+						`${secretFile(secret.name)} is missing, so machines go without it until you run aett secret set ${secret.name}.`,
+					),
 	);
 
-	const present = yield* Effect.filter(machineSecrets(fleet), (secret) =>
-		fs.exists(path.join(root, secretFile(secret))),
-	);
+	const present = yield* Effect.filter(machineSecrets(fleet), exists);
 
 	yield* Effect.forEach(present, (secret) =>
-		recipientsOf(root, fleet, state, secret).pipe(
-			Effect.flatMap((recipients) => secrets.share(root, secretFile(secret), recipients)),
+		recipientsOf(root, state, secret).pipe(
+			Effect.flatMap((recipients) => secrets.share(root, secretFile(secret.name), recipients)),
 			Effect.flatMap((changed) =>
 				changed
-					? Console.log(`Encrypted ${secretFile(secret)} to the machines that read it now.`)
+					? Console.log(`Encrypted ${secretFile(secret.name)} to the machines that read it now.`)
 					: Effect.void,
 			),
 		),
 	);
 
-	return present.map(({ name }) => name);
+	return {
+		secrets: present.map(({ name }) => name),
+		fingerprints: yield* fingerprints(root, fleet),
+	};
 });
 
-/** The names of the machine secrets the fleet has, as they are. */
+/** The names of the machine secrets the fleet has, as they are, and each certificate's fingerprint. */
 export const existingSecrets = Effect.fn("existingSecrets")(function* (root: string, fleet: Fleet) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 
 	const present = yield* Effect.filter(machineSecrets(fleet), (secret) =>
-		fs.exists(path.join(root, secretFile(secret))),
+		fs.exists(path.join(root, secretFile(secret.name))),
 	);
 
-	return present.map(({ name }) => name);
+	return {
+		secrets: present.map(({ name }) => name),
+		fingerprints: yield* fingerprints(root, fleet),
+	};
+});
+
+// The fingerprint of every certificate whose public half the fleet keeps, by secret name.
+const fingerprints = Effect.fn("fingerprints")(function* (root: string, fleet: Fleet) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+
+	const found = yield* Effect.forEach(machineSecrets(fleet), (secret) =>
+		Option.match(secret.certificate, {
+			onNone: () => Effect.succeed([]),
+			onSome: (file) =>
+				Effect.gen(function* () {
+					const full = path.join(root, file);
+
+					return (yield* fs.exists(full))
+						? [[secret.name, fingerprintOf(yield* fs.readFileString(full))] as const]
+						: [];
+				}),
+		}),
+	);
+
+	return new Map(found.flat());
 });
 
 /**
@@ -171,20 +261,22 @@ export const pendingSecrets = Effect.fn("pendingSecrets")(function* (
 
 	const pending = yield* Effect.forEach(machineSecrets(fleet), (secret) =>
 		Effect.gen(function* () {
-			const file = secretFile(secret);
+			const file = secretFile(secret.name);
 
 			if (!(yield* fs.exists(path.join(root, file)))) {
 				return secret.required ? [{ secret, reason: "isn't set yet" }] : [];
 			}
 
 			const had = yield* secrets.recipients(root, file);
-			const wanted = new Set(yield* recipientsOf(root, fleet, state, secret));
+			const wanted = new Set(yield* recipientsOf(root, state, secret));
 			const known = yield* knownHostKeys(root);
 
 			// A guest gets its host key from apply, which then encrypts the secrets it reads to it.
 			const keyless = fleet.machines.some(
 				(machine) =>
-					Option.isSome(machine.vm) && !known.has(machine.name) && secret.readBy(machine),
+					Option.isSome(machine.vm) &&
+					!known.has(machine.name) &&
+					secret.readers.includes(machine.name),
 			);
 
 			const shared =
@@ -203,10 +295,10 @@ export const pendingSecrets = Effect.fn("pendingSecrets")(function* (
 	return pending.flat();
 });
 
-/** Asks for a machine secret and stores it, encrypted to the operators and the machines that read it. */
+/** Asks for a machine secret, or makes it again, and stores it encrypted to the operators and the machines that read it. */
 export const setSecret = Effect.fn("setSecret")(function* (root: string, name: string) {
 	const fleet = yield* loadFleet(root);
-	const known = machineSecrets(fleet);
+	const known = machineSecrets(fleet).filter(({ kind }) => kind !== "tailscale");
 	const secret = known.find((candidate) => candidate.name === name);
 
 	if (secret === undefined) {
@@ -223,7 +315,7 @@ export const setSecret = Effect.fn("setSecret")(function* (root: string, name: s
 		});
 	}
 
-	yield* store(root, fleet, yield* readState(root, fleet), secret);
+	yield* store(root, yield* readState(root, fleet), secret);
 
 	return yield* Console.log(`Machines that read it get it with their next apply.`);
 });

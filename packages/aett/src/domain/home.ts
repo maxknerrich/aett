@@ -64,13 +64,41 @@ const linkProblems = (set: string, path: string, target: string, links: Readonly
 };
 
 /**
- * Merges the dotfile sets a machine gets into its home, sorted by path so the
- * order of the sets can't change it. Links inside the home stay links, also
- * when they lead into another set. Fails with every problem, one per line: a
- * set missing from home/, a path in more than one set, a path that is a file
- * or link in one set and a directory in another, a path in the way of aett's
- * manifest, and a link that is absolute, leads out of the home or leads
- * through another link.
+ * Lays a fleet's home trees over the home trees its plugins ship: under the
+ * same name, the fleet's file at a path wins over the plugin's at that path
+ * or above or below it.
+ */
+export const overlay = (
+	shipped: ReadonlyMap<string, ReadonlyArray<Entry>>,
+	own: ReadonlyMap<string, ReadonlyArray<Entry>>,
+) =>
+	new Map(
+		[...new Set([...shipped.keys(), ...own.keys()])].map((name) => {
+			const mine = own.get(name) ?? [];
+
+			const shadowed = (path: string) =>
+				mine.some(
+					(entry) =>
+						entry.path === path ||
+						path.startsWith(`${entry.path}/`) ||
+						entry.path.startsWith(`${path}/`),
+				);
+
+			return [
+				name,
+				[...(shipped.get(name) ?? []).filter(({ path }) => !shadowed(path)), ...mine],
+			] as const;
+		}),
+	);
+
+/**
+ * Merges the home trees a machine gets into its home, sorted by path so the
+ * order of the trees can't change it. A name without a tree adds nothing.
+ * Links inside the home stay links, also when they lead into another tree.
+ * Fails with every problem, one per line: a path in more than one tree, a
+ * path that is a file or link in one tree and a directory in another, a path
+ * in the way of aett's manifest, and a link that is absolute, leads out of
+ * the home or leads through another link.
  */
 export const resolveHome = (
 	sets: ReadonlyMap<string, ReadonlyArray<Entry>>,
@@ -79,10 +107,6 @@ export const resolveHome = (
 	const names = [...new Set(chosen)].toSorted();
 
 	const placed = names.flatMap((set) => (sets.get(set) ?? []).map((entry) => ({ set, entry })));
-
-	const missing = names.flatMap((set) =>
-		sets.has(set) ? [] : [`The dotfile set ${set} doesn't exist: there is no home/${set}/.`],
-	);
 
 	const conflicts = [...Map.groupBy(placed, ({ entry }) => entry.path)].flatMap(
 		([path, owners]) => {
@@ -131,7 +155,7 @@ export const resolveHome = (
 		}),
 	);
 
-	const problems = [...missing, ...[...conflicts, ...nested].toSorted(), ...reserved, ...badLinks];
+	const problems = [...[...conflicts, ...nested].toSorted(), ...reserved, ...badLinks];
 
 	return problems.length > 0
 		? Result.fail(problems.join("\n"))
@@ -178,10 +202,11 @@ export const hostColor = (name: string) => {
 };
 
 /**
- * Fills `{{host.name}}` and `{{host.color}}` in the files' contents with the
- * machine's name and color. Any other `{{…}}` stays as written.
+ * Fills `{{host.name}}`, `{{host.color}}` and `{{home}}` in the files'
+ * contents with the machine's name and color and the home directory. Any
+ * other `{{…}}` stays as written.
  */
-export const fillPlaceholders = (entries: ReadonlyArray<Entry>, name: string) => {
+export const fillPlaceholders = (entries: ReadonlyArray<Entry>, name: string, home: string) => {
 	const color = hostColor(name);
 
 	return entries.map((entry) =>
@@ -190,7 +215,10 @@ export const fillPlaceholders = (entries: ReadonlyArray<Entry>, name: string) =>
 				Entry.File({
 					path,
 					executable,
-					content: content.replaceAll("{{host.name}}", name).replaceAll("{{host.color}}", color),
+					content: content
+						.replaceAll("{{host.name}}", name)
+						.replaceAll("{{host.color}}", color)
+						.replaceAll("{{home}}", home),
 				}),
 			Link: (link) => link,
 		}),
