@@ -461,9 +461,14 @@ const placeEntry = (
 	const fits = (machine: Decoded) =>
 		Option.match(entry.plugin, {
 			onNone: () => machine.role !== "hypervisor",
-			onSome: ({ roles, systems }) =>
+			// Caddy serves web endpoints on NixOS only.
+			onSome: ({ roles, systems, endpoints }) =>
 				(roles ?? Role.literals).includes(machine.role) &&
-				(systems ?? ["nixos", "darwin"]).includes(systemOf(machine)),
+				(systems ?? ["nixos", "darwin"]).includes(systemOf(machine)) &&
+				!(
+					systemOf(machine) === "darwin" &&
+					Object.values(endpoints ?? {}).some(({ web }) => web === true)
+				),
 		});
 
 	const named = Option.getOrUndefined(entry.on);

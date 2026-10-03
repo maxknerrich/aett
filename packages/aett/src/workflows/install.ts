@@ -138,7 +138,9 @@ export const install = Effect.fn("install")(function* (
 				}
 			: { disk: layout.disk.byId };
 
-	if (recorded?.disk === undefined && recorded?.pools === undefined) {
+	// A role that changed from or to nas() needs the other layout recorded instead.
+	if ("pools" in chosen ? recorded?.pools === undefined : recorded?.disk === undefined) {
+		yield* forgetRecord(root, name, ["disk", "pools"]);
 		yield* updateRecord(root, name, chosen);
 	}
 

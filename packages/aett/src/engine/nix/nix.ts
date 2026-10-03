@@ -733,10 +733,12 @@ export const nixEngine = (flake: string, plugins: string) =>
 			) {
 				const exitCode = yield* spawner
 					.exitCode(
+						// Attached to aett's terminal, where sudo asks for the password or Touch ID.
 						ChildProcess.make("/usr/bin/sudo", [...args], {
 							stdin: input === undefined ? "inherit" : Stream.make(new TextEncoder().encode(input)),
 							stdout: "inherit",
 							stderr: "inherit",
+							detached: false,
 						}),
 					)
 					.pipe(

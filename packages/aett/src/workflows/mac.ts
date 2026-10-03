@@ -11,6 +11,7 @@ import type { State } from "../domain/state.ts";
 import { type Build, Engine } from "../engine/engine.ts";
 import { applyHome, planHome } from "./home.ts";
 import { updateRecord } from "./load.ts";
+import { recordTailnet } from "./reach.ts";
 
 export class MacError extends Schema.TaggedError<MacError>()("MacError", {
 	message: Schema.String,
@@ -91,6 +92,9 @@ export const prepareMac = Effect.fn("prepareMac")(function* (
 		yield* updateRecord(root, name, { system, tailscaleApp: app, determinate });
 	}
 
+	// A Mac already on the tailnet, through the app or an earlier apply, is known there by its node.
+	yield* recordTailnet(root, state, name, yield* localConnection);
+
 	if (recorded?.age !== undefined && (yield* fs.exists(path.join(root, ageKeyFile(name))))) {
 		return;
 	}
@@ -128,6 +132,7 @@ const runBrew = Effect.fn("runBrew")(function* (args: ReadonlyArray<string>) {
 					env: { HOMEBREW_NO_AUTO_UPDATE: "1" },
 					extendEnv: true,
 					stdin: "ignore",
+					stderr: "inherit",
 				}),
 			);
 
@@ -189,20 +194,23 @@ export const applyMac = Effect.fn("applyMac")(function* (
 	if (recorded?.zap === undefined) {
 		const extra = yield* undeclared(yield* engine.brewfile(build, machine.name));
 
-		const zap =
-			extra.length === 0 ||
-			(yield* Prompt.Confirm({
-				message: [
-					`Homebrew has these on ${machine.name}, and fleet.ts doesn't list them:`,
-					...extra.map((line) => `  ${line}`),
-					"Remove them now, and from now on whatever fleet.ts drops? (aett asks only this once)",
-				].join("\n"),
-				initial: false,
-			}));
+		const zap = yield* Prompt.Confirm({
+			message: [
+				extra.length === 0
+					? `Homebrew has nothing on ${machine.name} that fleet.ts doesn't list.`
+					: [
+							`Homebrew has these on ${machine.name}, and fleet.ts doesn't list them:`,
+							...extra.map((line) => `  ${line}`),
+						].join("\n"),
+				`Remove ${extra.length === 0 ? "" : "them now, and "}whatever fleet.ts drops from now on? (aett asks only this once)`,
+			].join("\n"),
+			initial: false,
+		});
 
 		yield* updateRecord(root, machine.name, { zap });
 
-		if (zap && extra.length > 0) return true;
+		// The build so far keeps everything; zapping is part of the system.
+		if (zap) return true;
 	}
 
 	const system = yield* engine.buildDarwin(build, machine.name);

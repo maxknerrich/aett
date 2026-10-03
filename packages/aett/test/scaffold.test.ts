@@ -85,6 +85,18 @@ describe("fleetSource", () => {
 	});
 });
 
+describe("fleetSource adopting a Mac named like one of aett's entries", () => {
+	it("puts its apps in a pack named apps instead", () => {
+		expect(
+			fleetSource(
+				"mkn",
+				[newMachine("backup", "computer", { mac: true })],
+				Option.some({ mac: "backup", apps: ["ghostty"] }),
+			),
+		).toContain('\t\tapps: { on: "backup", apps: ["ghostty"] },');
+	});
+});
+
 describe("duplicateName", () => {
 	it("finds a name used twice", () => {
 		expect(duplicateName([newMachine("box", "server"), newMachine("box", "computer")])).toEqual(

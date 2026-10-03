@@ -152,6 +152,14 @@ export const mintKeys = Effect.fn("mintKeys")(function* (
 		joining,
 		(machine) =>
 			Effect.gen(function* () {
+				// A machine that joined since its key expired needs no new one: its node is the one
+				// that joined after the old key was minted.
+				if (state.machines.get(machine.name)?.tailscaleKeyExpires !== undefined) {
+					const joined = yield* findOnTailnet(root, fleet, state, machine.name);
+
+					if (Option.isSome(joined)) return;
+				}
+
 				const { key, expires } = yield* tailscale.mintKey(client.value, [tagOf(machine.role)]);
 				const recipients = yield* machineAgeKeys(root, state, [machine.name]);
 

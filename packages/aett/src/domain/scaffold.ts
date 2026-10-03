@@ -1,5 +1,6 @@
 import { Option, Result, Schema } from "effect";
 import { MachineName, Role } from "./fleet.ts";
+import { shippedPlugins } from "./shipped.ts";
 
 /** A fleet's name: its directory and its package name, so lowercase and URL-safe. */
 export const FleetName = Schema.String.check(
@@ -70,6 +71,10 @@ export interface Adopted {
 	readonly apps: ReadonlyArray<string>;
 }
 
+// The pack a Mac's adopted apps go into: named after the Mac, unless that name is aett's own.
+const packName = (mac: string) =>
+	mac === "default" || shippedPlugins.some(({ name }) => name === mac) ? "apps" : mac;
+
 /**
  * Renders fleet.ts for what create was given: the user, the first machines,
  * and the apps of the Mac it runs on, in a pack named after the Mac, whose
@@ -85,7 +90,7 @@ export const fleetSource = (
 	const services = Option.match(adopted, {
 		onNone: () => "",
 		onSome: ({ mac, apps }) =>
-			`\tservices: {\n\t\t${key(mac)}: { on: ${JSON.stringify(mac)}, apps: [${apps.map((app) => JSON.stringify(app)).join(", ")}] },\n\t},\n`,
+			`\tservices: {\n\t\t${key(packName(mac))}: { on: ${JSON.stringify(mac)}, apps: [${apps.map((app) => JSON.stringify(app)).join(", ")}] },\n\t},\n`,
 	});
 
 	return `import { ${imports.join(", ")} } from "aett"\n\nexport default fleet({\n\tuser: ${JSON.stringify(user)},\n\tmachines: {${machines.length === 0 ? "" : `\n${machines.map(entry).join("")}\t`}},\n${services}})\n`;

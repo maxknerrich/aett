@@ -13,6 +13,7 @@ import { loadFleet, readState, updateRecord } from "./load.ts";
 import { applyMac, prepareMac, thisMac } from "./mac.ts";
 import { connectGuest, connectMachine, recordTailnet } from "./reach.ts";
 import { mintUnlockKey } from "./tailscale.ts";
+import { localConnection } from "../adapters/local.ts";
 import { unlockName } from "./unlock.ts";
 
 export class ApplyError extends Schema.TaggedError<ApplyError>()("ApplyError", {
@@ -127,6 +128,9 @@ const applyLocalMac = Effect.fn("applyLocalMac")(function* (run: Run, name: stri
 
 		yield* applyMac(run.root, again.build, again.state, machine, user, home, run.yes);
 	}
+
+	// Once tailscaled runs, its node is the Mac's peers' way to it.
+	yield* recordTailnet(run.root, run.state, name, yield* localConnection);
 });
 
 // Puts each encrypted target's initrd on the tailnet once, so aett machine unlock reaches it at
