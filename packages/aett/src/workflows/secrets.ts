@@ -326,10 +326,13 @@ export const setSecret = Effect.fn("setSecret")(function* (root: string, name: s
 		// A user's password exists once fleet.ts names the user.
 		const user = name.slice("users/".length);
 
-		const hint =
-			name.startsWith("users/") && Option.isNone(fleet.user) && Schema.is(UserName)(user)
-				? ` ${name} is the password of the fleet's user, and fleet.ts names none: declare it with fleet({ user: "${user}", … }).`
-				: "";
+		const hint = !name.startsWith("users/")
+			? ""
+			: Option.contains(fleet.user, user)
+				? ` ${name} is the password of the fleet's user on NixOS machines, and fleet.ts declares none; a Mac's account keeps its own.`
+				: Option.isNone(fleet.user) && Schema.is(UserName)(user)
+					? ` ${name} is the password of the fleet's user, and fleet.ts names none: declare it with fleet({ user: "${user}", … }).`
+					: "";
 
 		return yield* new SecretsError({
 			message: `aett knows no secret named ${name}. It knows ${typed.map((candidate) => candidate.name).join(", ")}.${hint}`,

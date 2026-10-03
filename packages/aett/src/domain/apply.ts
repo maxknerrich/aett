@@ -57,9 +57,8 @@ const diskChange = (machine: Machine, state: State) => {
 		);
 	}
 
-	const metal = machine.kind === "nixos" && Option.isNone(machine.vm);
-
-	if (metal && (machine.role === "nas") !== (recorded?.pools !== undefined)) {
+	// A bare-metal NixOS machine.
+	if (machine.kind === "nixos" && (machine.role === "nas") !== (recorded?.pools !== undefined)) {
 		return Option.some(
 			machine.role === "nas"
 				? `${machine.name} was installed on one disk, but fleet.ts now declares it a NAS, on pools.`

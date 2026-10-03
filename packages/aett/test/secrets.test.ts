@@ -10,7 +10,7 @@ import { computer, fleet, hypervisor, nas, server } from "../src/index.ts";
 const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
 
 describe("machineSecrets", () => {
-	it("gives each machine its Tailscale key and each plugin secret its readers, as its per says", () => {
+	it("gives each machine its Tailscale key, the user's password to NixOS machines with a home and each plugin secret its readers, as its per says", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
@@ -18,6 +18,7 @@ describe("machineSecrets", () => {
 					kronos: hypervisor(),
 					hades: server({ host: "kronos" }),
 					zeus: server({ host: "kronos" }),
+					fawkes: computer({ os: "macos" }),
 				},
 				services: { backup: "hades" },
 			}),
@@ -34,6 +35,7 @@ describe("machineSecrets", () => {
 			{ name: "kronos/tailscale-key", readers: ["kronos"], kind: "tailscale", certificate: null },
 			{ name: "hades/tailscale-key", readers: ["hades"], kind: "tailscale", certificate: null },
 			{ name: "zeus/tailscale-key", readers: ["zeus"], kind: "tailscale", certificate: null },
+			{ name: "fawkes/tailscale-key", readers: ["fawkes"], kind: "tailscale", certificate: null },
 			{ name: "users/mkn", readers: ["hades", "zeus"], kind: "password", certificate: null },
 			{ name: "backup/repository/hades", readers: ["hades"], kind: "random", certificate: null },
 			{
@@ -43,6 +45,12 @@ describe("machineSecrets", () => {
 				certificate: "state/hades/backup.tls.pem",
 			},
 			{ name: "backup/client/zeus", readers: ["zeus", "hades"], kind: "random", certificate: null },
+			{
+				name: "backup/client/fawkes",
+				readers: ["fawkes", "hades"],
+				kind: "random",
+				certificate: null,
+			},
 		]);
 	});
 });

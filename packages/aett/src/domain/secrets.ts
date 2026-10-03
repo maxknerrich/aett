@@ -101,18 +101,21 @@ export const machineSecrets = (fleet: Fleet): ReadonlyArray<MachineSecret> => [
 		invalid: anything,
 		certificate: Option.none(),
 	})),
+	// A Mac's account keeps its own password, so a fleet of Macs has none.
 	...Option.toArray(
 		Option.map(fleet.user, (user): MachineSecret => ({
 			name: `users/${user}`,
 			file: secretFile(`users/${user}`),
-			readers: fleet.machines.filter((machine) => machine.user).map(({ name }) => name),
+			readers: fleet.machines
+				.filter((machine) => machine.user && machine.kind !== "macos")
+				.map(({ name }) => name),
 			kind: "password",
-			prompt: `Password for ${user}, which sudo asks for on every machine with a home`,
+			prompt: `Password for ${user}, which sudo asks for on every NixOS machine with a home`,
 			required: true,
 			invalid: (value) =>
 				/^\P{Cc}+$/u.test(value) ? Option.none() : Option.some("Expected a password"),
 			certificate: Option.none(),
-		})),
+		})).pipe(Option.filter(({ readers }) => readers.length > 0)),
 	),
 	...pluginSecrets(fleet),
 ];

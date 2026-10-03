@@ -415,7 +415,7 @@ const askMachines = (
 		),
 	);
 
-// Asks for one machine's name and role, then whether it's a Mac or whether to encrypt its disk.
+// Asks for one machine's name and role, then whether it's a Mac or, unless it's a NAS, whether to encrypt its disk.
 const askMachine = Effect.fnUntraced(function* (machines: ReadonlyArray<NewMachine>) {
 	const name = yield* Prompt.String({
 		message: "Machine name (its hostname)",
@@ -429,11 +429,13 @@ const askMachine = Effect.fnUntraced(function* (machines: ReadonlyArray<NewMachi
 
 	const mac = role === "computer" && (yield* Prompt.Confirm({ message: `Is ${name} a Mac?` }));
 
+	// A NAS's pools are always inside LUKS.
 	const encrypted =
-		!mac &&
-		(yield* Prompt.Confirm({
-			message: "Encrypt its disk? You type a passphrase at its console on every boot.",
-		}));
+		role === "nas" ||
+		(!mac &&
+			(yield* Prompt.Confirm({
+				message: "Encrypt its disk? You type a passphrase at its console on every boot.",
+			})));
 
 	return { name, role, mac, encrypted } satisfies NewMachine;
 });
