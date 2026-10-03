@@ -233,23 +233,21 @@ export class Tailscale extends Context.Service<
 const keyLifetime = 86_400_000;
 
 /**
- * The device a machine became when it joined with a key aett minted that
- * `expires`: the one with its hostname and `tag` that joined while the key
- * was good, if only one did, as a one-time key joins one device.
+ * The devices a machine may have become when it joined with a key aett
+ * minted that `expires`: those with its hostname and `tag` that joined while
+ * the key was good. A one-time key joins one device, so with more it is open
+ * which.
  */
 export const joinedAs = (
 	devices: ReadonlyArray<Device>,
 	hostname: string,
 	tag: string,
 	expires: Date,
-) => {
-	const joined = devices.filter(
+) =>
+	devices.filter(
 		(device) =>
 			device.hostname === hostname &&
 			device.tags.includes(tag) &&
 			device.created.getTime() >= expires.getTime() - keyLifetime - 60_000 &&
 			device.created.getTime() <= expires.getTime() + 60_000,
 	);
-
-	return joined.length === 1 ? joined[0] : undefined;
-};

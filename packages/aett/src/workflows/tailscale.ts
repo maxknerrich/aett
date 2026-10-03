@@ -225,7 +225,7 @@ export const nameOnTailnet = Effect.fn("nameOnTailnet")(function* (
 		const recorded = state.machines.get(name);
 
 		const device = Option.fromUndefinedOr(
-			recordedNode(devices, name, recorded, recorded?.tag ?? tagOf(role)),
+			only(recordedNodes(devices, name, recorded, recorded?.tag ?? tagOf(role))),
 		);
 
 		return Effect.forEach(Option.toArray(device), (found) =>
@@ -281,11 +281,13 @@ export const findOnTailnet = Effect.fn("findOnTailnet")(function* (
 		return Option.none<string>();
 	}
 
-	const device = recordedNode(
-		yield* tailscale.devices(client.value),
-		name,
-		recorded,
-		recorded.tag ?? tagOf(machine.role),
+	const device = only(
+		recordedNodes(
+			yield* tailscale.devices(client.value),
+			name,
+			recorded,
+			recorded.tag ?? tagOf(machine.role),
+		),
 	);
 
 	if (device === undefined) return Option.none<string>();
@@ -301,7 +303,10 @@ export const findOnTailnet = Effect.fn("findOnTailnet")(function* (
 	return Option.some(device.address);
 });
 
-/** Removes a machine's node, and its initrd's, from the tailnet, if the OAuth client is set up. */
+/**
+ * Removes a machine's node, and its initrd's, from the tailnet. Says whether it could: not
+ * without the OAuth client, nor when two nodes could be the machine's.
+ */
 export const removeFromTailnet = Effect.fn("removeFromTailnet")(function* (
 	root: string,
 	state: State,
@@ -321,24 +326,25 @@ export const removeFromTailnet = Effect.fn("removeFromTailnet")(function* (
 	if (Option.isNone(client)) return false;
 
 	const found = unnamed
-		? recordedNode(yield* tailscale.devices(client.value), name, recorded, recorded?.tag)?.node
-		: undefined;
+		? recordedNodes(yield* tailscale.devices(client.value), name, recorded, recorded?.tag)
+		: [];
 
-	const nodes = [recorded?.node ?? found, recorded?.unlock?.node].flatMap((node) =>
+	const nodes = [recorded?.node ?? only(found)?.node, recorded?.unlock?.node].flatMap((node) =>
 		Option.toArray(Option.fromUndefinedOr(node)),
 	);
 
 	yield* Effect.forEach(nodes, (node) => tailscale.removeDevice(client.value, node));
 
-	return true;
+	// With two that could be it, aett removes neither, rather than another machine; the operator does.
+	return found.length <= 1;
 });
 
 /**
- * The node a machine joined as, by its record: the one at its address, or,
- * known only by the key aett minted for it with `tag`, the newest named
- * after it with that tag since; keys are good for a day.
+ * The nodes a machine may have joined as, by its record: the one at its
+ * address, or, known only by the key aett minted for it with `tag`, those
+ * that joined with its name and that tag while the key was good.
  */
-const recordedNode = (
+const recordedNodes = (
 	devices: ReadonlyArray<Device>,
 	name: string,
 	recorded: MachineRecord | undefined,
@@ -346,6 +352,9 @@ const recordedNode = (
 ) =>
 	recorded?.tailnet === undefined
 		? recorded?.tailscaleKeyExpires === undefined || tag === undefined
-			? undefined
+			? []
 			: joinedAs(devices, name, tag, new Date(recorded.tailscaleKeyExpires))
-		: devices.find(({ address }) => address === recorded.tailnet);
+		: devices.filter(({ address }) => address === recorded.tailnet);
+
+// The one item there is, or none when there are more or none.
+const only = <A>(items: ReadonlyArray<A>) => (items.length === 1 ? items[0] : undefined);

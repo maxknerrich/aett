@@ -94,6 +94,6 @@ export const destroy = Effect.fn("destroy")(function* (
 	return yield* Console.log(
 		removed
 			? `Destroyed ${name}, and removed it from the tailnet.`
-			: `Destroyed ${name}. Remove it in the Tailscale admin console too: aett can only do that once aett tailscale setup ran.`,
+			: `Destroyed ${name}. Remove it in the Tailscale admin console too: aett couldn't, without aett tailscale setup or with more than one node it could be.`,
 	);
 }, Effect.scoped);
