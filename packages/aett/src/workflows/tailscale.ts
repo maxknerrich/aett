@@ -172,9 +172,10 @@ export const mintKeys = Effect.fn("mintKeys")(function* (
 /**
  * Records what state lacks about each of `machines` on the tailnet, as the
  * tailnet lists them: the name and node of one known by its address, and
- * all of it for one that joined with the key aett minted for it. Plugins then
- * name their peers, and no machine gets a key it doesn't need. Without the
- * OAuth client it waits.
+ * all of it for one that joined with the key aett minted for it. A node
+ * whose tag isn't its machine's role's, after a role changed, gets that tag.
+ * Plugins then name their peers, and no machine gets a key it doesn't need.
+ * Without the OAuth client it waits.
  */
 export const nameOnTailnet = Effect.fn("nameOnTailnet")(function* (
 	root: string,
@@ -182,30 +183,21 @@ export const nameOnTailnet = Effect.fn("nameOnTailnet")(function* (
 	state: State,
 	machines: ReadonlySet<string>,
 ) {
-	const missing = fleet.machines.filter(({ name }) => {
+	const ours = fleet.machines.filter(
+		({ name }) => machines.has(name) && state.machines.get(name)?.tailscaleApp !== true,
+	);
+
+	const unsettled = ours.filter(({ name, role }) => {
 		const recorded = state.machines.get(name);
 
-		return (
-			machines.has(name) &&
-			(recorded?.tailnet === undefined
-				? recorded?.tailscaleKeyExpires !== undefined
-				: recorded.tailnetName === undefined || recorded.node === undefined)
-		);
+		return recorded?.tailnet === undefined
+			? recorded?.tailscaleKeyExpires !== undefined
+			: recorded.tailnetName === undefined ||
+					recorded.node === undefined ||
+					recorded.tag !== tagOf(role);
 	});
 
-	// A machine whose role changed still has its old role's tag, which keys only set when it joined.
-	const retagged = fleet.machines.filter(({ name, role }) => {
-		const recorded = state.machines.get(name);
-
-		return (
-			machines.has(name) &&
-			recorded?.node !== undefined &&
-			recorded.tailscaleApp !== true &&
-			recorded.tag !== tagOf(role)
-		);
-	});
-
-	if (missing.length === 0 && retagged.length === 0) return;
+	if (unsettled.length === 0) return;
 
 	const client = yield* oauthClient(root);
 
@@ -214,27 +206,10 @@ export const nameOnTailnet = Effect.fn("nameOnTailnet")(function* (
 	const tailscale = yield* Tailscale;
 	const devices = yield* tailscale.devices(client.value);
 
-	yield* Effect.forEach(retagged, ({ name, role }) =>
-		Effect.forEach(
-			Option.toArray(
-				Option.fromUndefinedOr(devices.find(({ node }) => node === state.machines.get(name)?.node)),
-			),
-			(device) =>
-				Effect.gen(function* () {
-					if (!(device.tags.length === 1 && device.tags[0] === tagOf(role))) {
-						yield* tailscale.setTags(client.value, device.node, [tagOf(role)]);
-						yield* Console.log(`Tagged ${name} ${tagOf(role)} on the tailnet.`);
-					}
-
-					yield* updateRecord(root, name, { tag: tagOf(role) });
-				}),
-		),
-	);
-
-	yield* Effect.forEach(missing, ({ name, role }) => {
+	yield* Effect.forEach(unsettled, ({ name, role }) => {
 		const recorded = state.machines.get(name);
 
-		// The machine joined after aett minted its key, which is good for a day.
+		// One known only by its key joined after aett minted it; keys are good for a day.
 		const device = Option.fromUndefinedOr(
 			recorded?.tailnet === undefined
 				? joinedAs(
@@ -247,11 +222,18 @@ export const nameOnTailnet = Effect.fn("nameOnTailnet")(function* (
 		);
 
 		return Effect.forEach(Option.toArray(device), (found) =>
-			updateRecord(root, name, {
-				tailnet: found.address,
-				tailnetName: found.name,
-				node: found.node,
-				tag: tagOf(role),
+			Effect.gen(function* () {
+				if (!(found.tags.length === 1 && found.tags[0] === tagOf(role))) {
+					yield* tailscale.setTags(client.value, found.node, [tagOf(role)]);
+					yield* Console.log(`Tagged ${name} ${tagOf(role)} on the tailnet.`);
+				}
+
+				yield* updateRecord(root, name, {
+					tailnet: found.address,
+					tailnetName: found.name,
+					node: found.node,
+					tag: tagOf(role),
+				});
 			}),
 		);
 	});

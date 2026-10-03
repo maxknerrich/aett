@@ -27,6 +27,16 @@
     extraPackages = [ pkgs.jq ];
   };
 
+  # SketchyBar reads its configuration once, often before aett syncs the home; it reloads whenever the
+  # sync places or changes it.
+  launchd.user.agents.sketchybar-reload.serviceConfig = {
+    ProgramArguments = [
+      "${config.services.sketchybar.package}/bin/sketchybar"
+      "--reload"
+    ];
+    WatchPaths = [ "/Users/${config.aett.user.name}/.config/sketchybar" ];
+  };
+
   services.jankyborders = {
     enable = true;
     style = "round";
