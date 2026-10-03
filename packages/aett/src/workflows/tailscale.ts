@@ -44,6 +44,10 @@ export const setupTailscale = Effect.fn("setupTailscale")(function* (root: strin
 
 	const grants = grantsFor(fleet, state);
 
+	const web = [...fleet.services.values()].some(({ plugin }) =>
+		Object.values(plugin.endpoints ?? {}).some((endpoint) => endpoint.web === true),
+	);
+
 	const tags = [
 		...new Set([
 			...fleet.machines.map(({ role }) => tagOf(role)),
@@ -78,6 +82,13 @@ export const setupTailscale = Effect.fn("setupTailscale")(function* (root: strin
 			`   Auth Keys: Write, with the tag ${ownerTag}`,
 			`   Devices Core: Write, with the tag ${ownerTag}`,
 			"",
+			...(web
+				? [
+						"3. Under DNS (https://login.tailscale.com/admin/dns), turn on MagicDNS and HTTPS",
+						"   Certificates: the fleet's web endpoints get their certificates there.",
+						"",
+					]
+				: []),
 		].join("\n"),
 	);
 
@@ -162,7 +173,11 @@ export const mintKeys = Effect.fn("mintKeys")(function* (
 					[...state.operator.ageKeys, ...recipients],
 					Redacted.value(key),
 				);
-				yield* updateRecord(root, machine.name, { tailscaleKeyExpires: expires.toISOString() });
+				// The key's tag is the node's once it joins, whatever role the machine has by then.
+				yield* updateRecord(root, machine.name, {
+					tailscaleKeyExpires: expires.toISOString(),
+					tag: tagOf(machine.role),
+				});
 				yield* Console.log(`Minted ${machine.name}'s key to join the tailnet.`);
 			}),
 		{ discard: true },
@@ -215,7 +230,7 @@ export const nameOnTailnet = Effect.fn("nameOnTailnet")(function* (
 				? joinedAs(
 						devices,
 						name,
-						tagOf(role),
+						recorded?.tag ?? tagOf(role),
 						new Date(Date.parse(recorded?.tailscaleKeyExpires ?? "") - 86_400_000),
 					)
 				: devices.find(({ address }) => address === recorded.tailnet),
@@ -276,7 +291,7 @@ export const findOnTailnet = Effect.fn("findOnTailnet")(function* (
 	const device = joinedAs(
 		yield* tailscale.devices(client.value),
 		name,
-		tagOf(machine.role),
+		state.machines.get(name)?.tag ?? tagOf(machine.role),
 		minted,
 	);
 

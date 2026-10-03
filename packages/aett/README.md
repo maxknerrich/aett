@@ -71,7 +71,7 @@ Dotfiles live in `home/`. `home/default/` goes to every machine with your user, 
 
 ## Services
 
-A web endpoint is served by Caddy with the machine's ts.net certificate, at `https://<machine>.<tailnet>.ts.net:<port>`. Your tailnet policy decides who reaches it, and `aett tailscale setup` prints the grants the fleet's machines need.
+A web endpoint is served by Caddy with the machine's ts.net certificate, at `https://<machine>.<tailnet>.ts.net:<port>`. It needs MagicDNS and HTTPS Certificates turned on under DNS in the Tailscale admin console. Your tailnet policy decides who reaches it, and `aett tailscale setup` prints the grants the fleet's machines need.
 
 `backup: "<machine>"` makes that machine the Kopia repository server. Every other machine with your user or service state backs up its home and that state to it hourly. A built-in ignore list and `.kopiaignore` files leave things out. Restore is manual: `kopia` is on every machine.
 
