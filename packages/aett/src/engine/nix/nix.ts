@@ -467,7 +467,10 @@ export const nixEngine = (flake: string, plugins: string) =>
 
 				// Every plugin a machine has brings its modules, as plugins/<name>/ next to flake.nix.
 				yield* Effect.forEach([...fleet.services.values()], ({ plugin }) =>
-					fs.copy(pluginDirectory(plugins, plugin), path.join(directory, "plugins", plugin.name)),
+					fs.copy(
+						pluginDirectory(plugins, root, plugin),
+						path.join(directory, "plugins", plugin.name),
+					),
 				);
 
 				// sops-nix on each machine decrypts these; secrets.nix lists them for it.

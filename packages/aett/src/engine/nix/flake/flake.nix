@@ -195,7 +195,7 @@
             let
               value = lib.attrByPath (lib.splitString "." name) null set;
             in
-            value != null && lib.isDerivation value && lib.meta.availableOn { inherit system; } value
+            value != null && lib.isDerivation value && lib.meta.availableOn (lib.systems.elaborate system) value
           );
         in
         tried.success && tried.value;

@@ -1,4 +1,4 @@
-import { Console, Effect, Option, Path, Redacted, Schema } from "effect";
+import { Console, Effect, FileSystem, Option, Path, Redacted, Schema } from "effect";
 import { Prompt } from "effect/cli";
 import { Secrets } from "../adapters/secrets.ts";
 import { Ssh } from "../adapters/ssh.ts";
@@ -63,6 +63,8 @@ export const install = Effect.fn("install")(function* (
 	name: string,
 	options: InstallOptions,
 ) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
 	const engine = yield* Engine;
 	const fleet = yield* loadFleet(root);
 	const machine = yield* installable(fleet, name);
@@ -122,9 +124,29 @@ export const install = Effect.fn("install")(function* (
 	// Trusted before the build, so the machine is a recipient of the secrets it reads on first boot.
 	yield* trustHostKey(root, name, hostKey.publicKey);
 
-	// Erasing the disk erases the machine's tailnet identity and its initrd's: their nodes go, and
-	// it joins again with a new key.
-	if (recorded?.installed === true) yield* forgetTailnet(root, state, name);
+	// Erasing the disk erases the machine's tailnet identity and its initrd's, so the build is made
+	// to join again with a new key. Until the install succeeds, the old nodes stay, and a failure
+	// before it puts their records back.
+	const reinstalling = recorded?.installed === true;
+	const record = path.join(root, "state", name, "machine.json");
+
+	const before = (yield* fs.exists(record))
+		? Option.some(yield* fs.readFileString(record))
+		: Option.none();
+
+	if (reinstalling) {
+		yield* forgetRecord(root, name, [
+			"tailnet",
+			"tailnetName",
+			"node",
+			"unlock",
+			"tailscaleKeyExpires",
+		]);
+	}
+
+	const restore = Effect.forEach(Option.toArray(before), (content) =>
+		fs.writeFileString(record, content),
+	);
 
 	// Later runs read the disks from state and never derive them again.
 	// An existing record stays as it is, so `installed` survives a failed reinstall.
@@ -144,20 +166,27 @@ export const install = Effect.fn("install")(function* (
 		yield* updateRecord(root, name, chosen);
 	}
 
-	const { build } = yield* emit(root);
+	const guests = yield* Effect.gen(function* () {
+		const { build } = yield* emit(root);
 
-	// The machine's guests start on its first boot, so their host keys go on its disk too.
-	const guests = new Map(
-		yield* Effect.forEach(
-			guestsOf(fleet, name).filter((guest) => build.machines.includes(guest)),
-			(guest) =>
-				machineHostKey(root, guest, state.operator.ageKeys).pipe(
-					Effect.map((key) => [guest, key] as const),
-				),
-		),
-	);
+		// The machine's guests start on its first boot, so their host keys go on its disk too.
+		const keys = new Map(
+			yield* Effect.forEach(
+				guestsOf(fleet, name).filter((guest) => build.machines.includes(guest)),
+				(guest) =>
+					machineHostKey(root, guest, state.operator.ageKeys).pipe(
+						Effect.map((key) => [guest, key] as const),
+					),
+			),
+		);
 
-	yield* engine.install(build, name, connection, { hostKey, guests, passphrase });
+		yield* engine.install(build, name, connection, { hostKey, guests: keys, passphrase });
+
+		return keys;
+	}).pipe(Effect.onError(() => Effect.ignore(restore)));
+
+	if (reinstalling) yield* revokeOldNodes(root, state, name);
+
 	yield* updateRecord(root, name, { ...chosen, encrypted: machine.encrypted, installed: true });
 	yield* Effect.forEach(guests, ([guest, key]) => trustHostKey(root, guest, key.publicKey));
 	yield* Console.log(
@@ -170,8 +199,8 @@ export const install = Effect.fn("install")(function* (
 	return yield* Effect.ignore(connection.run("systemctl reboot"));
 }, Effect.scoped);
 
-// Removes a reinstalled machine's nodes from the tailnet, as far as aett can, and forgets them.
-const forgetTailnet = Effect.fn("forgetTailnet")(function* (
+// Removes a reinstalled machine's old nodes from the tailnet as `state` recorded them, as far as aett can.
+const revokeOldNodes = Effect.fn("revokeOldNodes")(function* (
 	root: string,
 	state: State,
 	name: string,
@@ -185,14 +214,6 @@ const forgetTailnet = Effect.fn("forgetTailnet")(function* (
 			`Remove ${name}'s old node from the tailnet in the admin console; it joins again as a new one.`,
 		);
 	}
-
-	yield* forgetRecord(root, name, [
-		"tailnet",
-		"tailnetName",
-		"node",
-		"unlock",
-		"tailscaleKeyExpires",
-	]);
 });
 
 // The bare-metal NixOS machine fleet.ts declares as `name`: what the installer can discover.

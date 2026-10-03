@@ -109,7 +109,7 @@ export const readHomes = Effect.fn("readHomes")(function* (root: string, fleet: 
 
 	const shipped = yield* Effect.forEach([...fleet.services.values()], ({ plugin }) =>
 		Effect.gen(function* () {
-			const tree = path.join(pluginDirectory(plugins, plugin), "home");
+			const tree = path.join(pluginDirectory(plugins, root, plugin), "home");
 
 			return (yield* fs.exists(tree)) ? [[plugin.name, yield* readTree(tree, "")] as const] : [];
 		}),

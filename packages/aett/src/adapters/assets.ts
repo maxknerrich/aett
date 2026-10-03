@@ -1,4 +1,5 @@
 import { Context, Layer } from "effect";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "../domain/plugin.ts";
 
@@ -13,10 +14,13 @@ export class Assets extends Context.Service<
 	static readonly layer = (plugins: string) => Layer.succeed(Assets, Assets.of({ plugins }));
 }
 
-/** A plugin's directory: the one it names, or else aett's own for a shipped plugin. */
-export const pluginDirectory = (plugins: string, plugin: Plugin) =>
+/**
+ * A plugin's directory: the one it names, a relative path from the fleet's
+ * `root`, or else aett's own for a shipped plugin.
+ */
+export const pluginDirectory = (plugins: string, root: string, plugin: Plugin) =>
 	plugin.directory === undefined
-		? `${plugins}/${plugin.name}`
+		? join(plugins, plugin.name)
 		: plugin.directory instanceof URL
 			? fileURLToPath(plugin.directory)
-			: plugin.directory;
+			: resolve(root, plugin.directory);

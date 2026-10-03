@@ -115,22 +115,19 @@ export const recordTailnet = Effect.fn("recordTailnet")(function* (
 
 	if (Option.isNone(status)) return;
 
-	const { ID, DNSName, TailscaleIPs } = status.value.Self;
+	const { ID, TailscaleIPs } = status.value.Self;
+	const tailnetName = status.value.Self.DNSName.replace(/\.$/, "");
 	const address = TailscaleIPs.find((ip) => isIP(ip) === 4);
 	const recorded = state.machines.get(name);
 
 	if (
 		address === undefined ||
-		DNSName === "" ||
-		(recorded?.tailnet === address && recorded.node === ID)
+		tailnetName === "" ||
+		(recorded?.tailnet === address && recorded.node === ID && recorded.tailnetName === tailnetName)
 	) {
 		return;
 	}
 
-	yield* updateRecord(root, name, {
-		tailnet: address,
-		tailnetName: DNSName.replace(/\.$/, ""),
-		node: ID,
-	});
-	yield* Console.log(`${name} is on the tailnet as ${DNSName.replace(/\.$/, "")} (${address}).`);
+	yield* updateRecord(root, name, { tailnet: address, tailnetName, node: ID });
+	yield* Console.log(`${name} is on the tailnet as ${tailnetName} (${address}).`);
 });
