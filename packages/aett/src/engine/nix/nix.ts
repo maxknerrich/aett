@@ -738,7 +738,8 @@ export const nixEngine = (flake: string, plugins: string) =>
 				const exitCode = yield* spawner
 					.exitCode(
 						// Attached to aett's terminal, where sudo asks for the password or Touch ID.
-						ChildProcess.make("/usr/bin/sudo", [...args], {
+						// -H: root's own home, not the operator's, for what runs as root.
+						ChildProcess.make("/usr/bin/sudo", ["-H", ...args], {
 							stdin: input === undefined ? "inherit" : Stream.make(new TextEncoder().encode(input)),
 							stdout: "inherit",
 							stderr: "inherit",
@@ -799,6 +800,13 @@ export const nixEngine = (flake: string, plugins: string) =>
 					"/nix/var/nix/profiles/system",
 					"--set",
 					system,
+				]);
+				// The Nix installer's own nix.custom.conf stands where darwin/machine.nix puts aett's, and
+				// nix-darwin refuses to replace a file it doesn't know. It is kept beside it.
+				yield* interactive([
+					"/bin/sh",
+					"-c",
+					`f=/etc/nix/nix.custom.conf; if [ -e ${shellQuote(`${system}/etc/nix/nix.custom.conf`)} ] && [ -f "$f" ] && [ ! -L "$f" ]; then mv "$f" "$f.before-nix-darwin" && echo "Moved $f to $f.before-nix-darwin; aett writes Nix's settings there now." >&2; fi`,
 				]);
 				yield* interactive([`${system}/activate`]);
 			});
