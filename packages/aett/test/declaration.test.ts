@@ -195,6 +195,27 @@ describe("decodeFleet", () => {
 			plugins: [plugin({ name: "backup" })],
 		});
 
+		const users = plugin({ name: "users", secrets: { mkn: { generate: "password" } } });
+
+		const collision = fleet({
+			user: "mkn",
+			machines: { web: server() },
+			plugins: [users],
+			services: { users: "web" },
+		});
+
+		const escaping = fleet({
+			user: "mkn",
+			machines: { web: server() },
+			plugins: [
+				plugin({ name: "hello", secrets: { "../../users/mkn": { generate: "password" } } }),
+			],
+		});
+
+		expect(problems(collision)).toBe(
+			"services: users/mkn is the name of two secrets; rename the plugin or its secret",
+		);
+		expect(problems(escaping)).toContain("plugins.0.secrets");
 		expect(problems(unknown)).toBe('services.tools.on: There is no machine named "nope"');
 		expect(problems(tailscale)).toBe(
 			"services.tailscale: tailscale is on every machine already and takes no entry",

@@ -1,6 +1,7 @@
 import { Match, Option, Predicate, Result, Schema, SchemaIssue } from "effect";
 import { Package, type Release, splitPackages } from "./packages.ts";
 import type { Plugin, Role as PluginRole } from "./plugin.ts";
+import { machineSecrets } from "./secrets.ts";
 import { shippedPlugins as shipped } from "./shipped.ts";
 
 export const MachineName = Schema.String.check(
@@ -173,7 +174,12 @@ const PluginMetadata = Schema.Struct({
 	),
 	secrets: Schema.optionalKey(
 		Schema.Record(
-			Schema.String,
+			// One component of a path and of the name sops-nix gives it.
+			Schema.String.check(
+				Schema.isPattern(/^[a-z0-9][a-z0-9-]*$/, {
+					expected: "a secret's name: a-z, 0-9 and dashes",
+				}),
+			),
 			Schema.Union([
 				Schema.Struct({
 					generate: Schema.Literals(["password", "certificate"]),
@@ -605,12 +611,31 @@ export const decodeFleet = (declaration: Declaration): Result.Result<Fleet, stri
 
 	const services = placeServices(successes(placed), decoded);
 
-	return Result.succeed({
+	const fleet: Fleet = {
 		user: Option.fromUndefinedOr(top.success.user),
 		machines: decoded.map((machine) => toMachine(machine, successes(placed), services)),
 		services,
 		plugins: own,
-	});
+	};
+
+	// A plugin's secret named like aett's own, such as a plugin users with a secret named after the
+	// user, would take the other's place on the machines.
+	const secretNames = machineSecrets(fleet).map(({ name }) => name);
+
+	const taken = [
+		...new Set(secretNames.filter((name, index) => secretNames.indexOf(name) !== index)),
+	];
+
+	return taken.length > 0
+		? Result.fail(
+				taken
+					.map(
+						(name) =>
+							`services: ${name} is the name of two secrets; rename the plugin or its secret`,
+					)
+					.join("\n"),
+			)
+		: Result.succeed(fleet);
 };
 
 /** An entry and the machines it is on. */

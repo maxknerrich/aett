@@ -17,7 +17,14 @@ describe("wpaSupplicant", () => {
 			'psk=pa\\\\ss"word',
 		]);
 
-		const cafe = keyfile(["[connection]", "type=wifi", "[wifi]", "ssid=99;97;102;101;"]);
+		const cafe = keyfile([
+			"[connection]",
+			"type=wifi",
+			"[wifi]",
+			"ssid=99;97;102;101;",
+			"hidden=true",
+		]);
+
 		const wired = keyfile(["[connection]", "type=ethernet"]);
 
 		const office = keyfile([
@@ -35,7 +42,7 @@ describe("wpaSupplicant", () => {
 		expect(wpaSupplicant([home, cafe, wired, office])).toBe(
 			[
 				`network={\n\tssid=${ssid.toString("hex")}\n\tpsk=${psk}\n\tkey_mgmt=WPA-PSK\n}\n`,
-				`network={\n\tssid=${Buffer.from("cafe").toString("hex")}\n\tkey_mgmt=NONE\n}\n`,
+				`network={\n\tssid=${Buffer.from("cafe").toString("hex")}\n\tscan_ssid=1\n\tkey_mgmt=NONE\n}\n`,
 			].join(""),
 		);
 	});

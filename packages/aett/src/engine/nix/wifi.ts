@@ -59,9 +59,10 @@ export const wpaSupplicant = (keyfiles: ReadonlyArray<string>) =>
 			const management = values.get("wifi-security.key-mgmt");
 			const passphrase = values.get("wifi-security.psk");
 
-			if (management === undefined) {
-				return [`network={\n\tssid=${bytes.toString("hex")}\n\tkey_mgmt=NONE\n}\n`];
-			}
+			// A hidden network answers only when asked for by name.
+			const network = `ssid=${bytes.toString("hex")}${values.get("wifi.hidden") === "true" ? "\n\tscan_ssid=1" : ""}`;
+
+			if (management === undefined) return [`network={\n\t${network}\n\tkey_mgmt=NONE\n}\n`];
 
 			if (!["wpa-psk", "sae"].includes(management) || passphrase === undefined) return [];
 
@@ -71,6 +72,6 @@ export const wpaSupplicant = (keyfiles: ReadonlyArray<string>) =>
 				? raw.toLowerCase()
 				: pbkdf2Sync(raw, bytes, 4096, 32, "sha1").toString("hex");
 
-			return [`network={\n\tssid=${bytes.toString("hex")}\n\tpsk=${psk}\n\tkey_mgmt=WPA-PSK\n}\n`];
+			return [`network={\n\t${network}\n\tpsk=${psk}\n\tkey_mgmt=WPA-PSK\n}\n`];
 		})
 		.join("");

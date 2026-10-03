@@ -305,17 +305,22 @@ const reconcileApps = Effect.fn("reconcileApps")(function* (brewfile: string, za
 	if (zap) yield* brewOnTerminal(["bundle", "cleanup", `--file=${file}`, "--force", "--zap"]);
 }, Effect.scoped);
 
-/** Upgrades the Mac's Homebrew apps, which aett leaves unpinned. */
-export const upgradeApps = Effect.fn("upgradeApps")(function* (machine: Machine) {
-	if (machine.apps.length === 0) return yield* Effect.void;
+/**
+ * Upgrades everything the Mac's Brewfile lists, its own apps and those its
+ * plugins bring, which aett leaves unpinned.
+ */
+export const upgradeApps = Effect.fn("upgradeApps")(function* (name: string, brewfile: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const file = `${yield* fs.makeTempDirectoryScoped({ prefix: "aett-" })}/Brewfile`;
 
-	yield* Console.log(`Upgrading ${machine.name}'s apps…`);
+	yield* fs.writeFileString(file, brewfile);
+	yield* Console.log(`Upgrading ${name}'s apps…`);
 
 	// Fresh metadata first; an app's installer may ask for sudo on the terminal.
 	yield* brewOnTerminal(["update"]);
 
-	return yield* brewOnTerminal(["upgrade", "--cask", ...machine.apps]);
-});
+	return yield* brewOnTerminal(["bundle", "install", `--file=${file}`, "--upgrade"]);
+}, Effect.scoped);
 
 /** The casks Homebrew has on this Mac, which aett create adopts as its apps. */
 export const installedApps = runBrew(["list", "--cask", "-1"]).pipe(

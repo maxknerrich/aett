@@ -14,6 +14,7 @@ import type { Release, Source } from "../domain/packages.ts";
 import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { loadFleet, readState } from "./load.ts";
+import { emitAsIs } from "./compile.ts";
 import { thisMac, upgradeApps } from "./mac.ts";
 
 export class PinsError extends Schema.TaggedError<PinsError>()("PinsError", {
@@ -393,8 +394,21 @@ export const update = Effect.fn("update")(function* (root: string, names: Readon
 			: `${changes.join("\n")}\nApply to build the machines from the new pins.`,
 	);
 
-	// Apps come unpinned; updating the Mac aett runs on upgrades them.
+	// Apps come unpinned; updating the Mac aett runs on upgrades them, once it was applied.
 	const mac = yield* thisMac(fleet, Option.none(), false);
 
-	return yield* Effect.forEach(Option.toArray(mac), upgradeApps, { discard: true });
+	return yield* Effect.forEach(
+		Option.toArray(mac),
+		({ name }) =>
+			Effect.gen(function* () {
+				const { build } = yield* emitAsIs(root);
+
+				if (!build.macs.includes(name)) {
+					return yield* Console.log(`Apply ${name} once before aett update upgrades its apps.`);
+				}
+
+				return yield* upgradeApps(name, yield* engine.brewfile(build, name));
+			}),
+		{ discard: true },
+	);
 });

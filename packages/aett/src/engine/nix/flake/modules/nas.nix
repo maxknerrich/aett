@@ -126,7 +126,8 @@ in
       };
     };
 
-    # Mounted by label, so no single disk of a pool decides whether it mounts.
+    # Mounted by label. Every disk must be there to boot: with one gone, mount the pool with
+    # -o degraded from the console and replace the disk.
     fileSystems."/nix".device = lib.mkForce "/dev/disk/by-label/aett-root";
     fileSystems."/persist" = {
       device = lib.mkForce "/dev/disk/by-label/aett-root";
