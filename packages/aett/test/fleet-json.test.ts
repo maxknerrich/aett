@@ -119,8 +119,8 @@ describe("fleetJson", () => {
 			tailnet: { address: "100.64.0.2", name: "web.example.ts.net" },
 			secrets: [
 				{ name: "users/mkn", file: "secrets/users/mkn.json" },
-				{ name: "backup/repository/web", file: "secrets/backup/repository/web.json" },
-				{ name: "backup/tls/web", file: "secrets/backup/tls/web.json" },
+				{ name: "backup/repository/web", file: "secrets/services/backup/repository/web.json" },
+				{ name: "backup/tls/web", file: "secrets/services/backup/tls/web.json" },
 			],
 			services: {
 				backup: {

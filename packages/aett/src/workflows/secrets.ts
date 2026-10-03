@@ -4,7 +4,7 @@ import { Prompt } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Secrets, SecretsError } from "../adapters/secrets.ts";
 import { type Fleet, UserName } from "../domain/fleet.ts";
-import { type MachineSecret, machineSecrets, secretFile } from "../domain/secrets.ts";
+import { type MachineSecret, machineSecrets } from "../domain/secrets.ts";
 import { buildable } from "../domain/build.ts";
 import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
@@ -131,12 +131,7 @@ const store = Effect.fn("store")(function* (root: string, state: State, secret: 
 		Match.orElse(() => ask(secret)),
 	);
 
-	yield* secrets.write(
-		root,
-		secretFile(secret.name),
-		yield* recipientsOf(root, state, secret),
-		value,
-	);
+	yield* secrets.write(root, secret.file, yield* recipientsOf(root, state, secret), value);
 
 	yield* Effect.forEach(Option.toArray(secret.certificate), (file) =>
 		fs
@@ -172,7 +167,7 @@ export const shareSecrets = Effect.fn("shareSecrets")(function* (
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const secrets = yield* Secrets;
-	const exists = (secret: MachineSecret) => fs.exists(path.join(root, secretFile(secret.name)));
+	const exists = (secret: MachineSecret) => fs.exists(path.join(root, secret.file));
 
 	const missing = yield* Effect.filter(wantedBy(fleet, buildable(fleet, state)), (secret) =>
 		Effect.map(exists(secret), (found) => !found),
@@ -184,7 +179,7 @@ export const shareSecrets = Effect.fn("shareSecrets")(function* (
 			: secret.kind === "tailscale"
 				? Effect.void
 				: Console.log(
-						`${secretFile(secret.name)} is missing, so machines go without it until you run aett secret set ${secret.name}.`,
+						`${secret.file} is missing, so machines go without it until you run aett secret set ${secret.name}.`,
 					),
 	);
 
@@ -192,10 +187,10 @@ export const shareSecrets = Effect.fn("shareSecrets")(function* (
 
 	yield* Effect.forEach(present, (secret) =>
 		recipientsOf(root, state, secret).pipe(
-			Effect.flatMap((recipients) => secrets.share(root, secretFile(secret.name), recipients)),
+			Effect.flatMap((recipients) => secrets.share(root, secret.file, recipients)),
 			Effect.flatMap((changed) =>
 				changed
-					? Console.log(`Encrypted ${secretFile(secret.name)} to the machines that read it now.`)
+					? Console.log(`Encrypted ${secret.file} to the machines that read it now.`)
 					: Effect.void,
 			),
 		),
@@ -213,7 +208,7 @@ export const existingSecrets = Effect.fn("existingSecrets")(function* (root: str
 	const path = yield* Path.Path;
 
 	const present = yield* Effect.filter(machineSecrets(fleet), (secret) =>
-		fs.exists(path.join(root, secretFile(secret.name))),
+		fs.exists(path.join(root, secret.file)),
 	);
 
 	return {
@@ -261,7 +256,7 @@ export const pendingSecrets = Effect.fn("pendingSecrets")(function* (
 
 	const pending = yield* Effect.forEach(machineSecrets(fleet), (secret) =>
 		Effect.gen(function* () {
-			const file = secretFile(secret.name);
+			const { file } = secret;
 
 			if (!(yield* fs.exists(path.join(root, file)))) {
 				return secret.required ? [{ secret, reason: "isn't set yet" }] : [];

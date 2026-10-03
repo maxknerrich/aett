@@ -11,14 +11,16 @@ let
   nas = cfg.role == "nas";
   bulk = lib.filter (dir: nas && dir.bulk) cfg.state;
 
-  # State outside what persist.nix keeps anyway.
+  # State outside what persist.nix keeps anyway; /home only on a machine with the fleet's user.
   kept =
     dir:
-    lib.any (root: dir.path == root || lib.hasPrefix "${root}/" dir.path) [
-      "/var/lib"
-      "/var/log"
-      "/home"
-    ];
+    lib.any (root: dir.path == root || lib.hasPrefix "${root}/" dir.path) (
+      [
+        "/var/lib"
+        "/var/log"
+      ]
+      ++ lib.optional (cfg.user != null) "/home"
+    );
 in
 {
   aett.persist = map (dir: dir.path) (lib.filter (dir: !(nas && dir.bulk) && !kept dir) cfg.state);

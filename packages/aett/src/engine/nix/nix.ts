@@ -17,6 +17,7 @@ import { type Connection, shellQuote } from "../../adapters/ssh.ts";
 import type { Channel, Fleet } from "../../domain/fleet.ts";
 import { Source } from "../../domain/packages.ts";
 import { InputsLock, type Pins, Platform } from "../../domain/pins.ts";
+import { machineSecrets } from "../../domain/secrets.ts";
 import type { State } from "../../domain/state.ts";
 import {
 	type Build,
@@ -470,13 +471,13 @@ export const nixEngine = (flake: string, plugins: string) =>
 				);
 
 				// sops-nix on each machine decrypts these; secrets.nix lists them for it.
-				yield* Effect.forEach(extras.secrets, (secret) => {
-					const file = path.join("secrets", `${secret}.json`);
-
-					return fs
-						.makeDirectory(path.dirname(path.join(directory, file)), { recursive: true })
-						.pipe(Effect.andThen(fs.copyFile(path.join(root, file), path.join(directory, file))));
-				});
+				yield* Effect.forEach(
+					machineSecrets(fleet).filter(({ name }) => extras.secrets.includes(name)),
+					({ file }) =>
+						fs
+							.makeDirectory(path.dirname(path.join(directory, file)), { recursive: true })
+							.pipe(Effect.andThen(fs.copyFile(path.join(root, file), path.join(directory, file)))),
+				);
 
 				const macs = fleet.machines.flatMap(({ name, kind }) =>
 					kind === "macos" && machines.includes(name) ? [name] : [],

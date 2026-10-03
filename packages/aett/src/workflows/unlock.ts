@@ -7,8 +7,8 @@ export class UnlockError extends Schema.TaggedError<UnlockError>()("UnlockError"
 	message: Schema.String,
 }) {}
 
-/** The name aett knows an encrypted machine's initrd by, on the tailnet and in its known hosts. */
-export const unlockName = (machine: string) => `${machine}-unlock`;
+/** The name aett knows an encrypted machine's initrd by in its known hosts, which no machine can have. */
+export const unlockName = (machine: string) => `${machine}.unlock`;
 
 /**
  * Opens an encrypted machine that waits at boot for its disk passphrase: logs

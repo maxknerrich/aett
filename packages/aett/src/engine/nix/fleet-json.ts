@@ -4,7 +4,7 @@ import { buildable } from "../../domain/build.ts";
 import { bridgeAddress, guestInterface } from "../../domain/network.ts";
 import type { Source } from "../../domain/packages.ts";
 import type { Pins } from "../../domain/pins.ts";
-import { machineSecrets, secretFile } from "../../domain/secrets.ts";
+import { machineSecrets } from "../../domain/secrets.ts";
 import type { State } from "../../domain/state.ts";
 
 /** What a build carries besides fleet.ts and state: the secrets that exist and each certificate's fingerprint by secret. */
@@ -83,7 +83,7 @@ const base = (fleet: Fleet, machine: Machine, state: State, extras: Extras, pins
 			Option.map((name) => ({ name, password: extras.secrets.includes(`users/${name}`) })),
 			Option.getOrNull,
 		),
-		secrets: secrets.map(({ name }) => ({ name, file: secretFile(name) })),
+		secrets: secrets.map(({ name, file }) => ({ name, file })),
 		services: Object.fromEntries(
 			services.map(({ name, instance, service }) => [
 				name,

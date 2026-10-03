@@ -2,12 +2,16 @@ import { Option } from "effect";
 import type { Fleet } from "./fleet.ts";
 
 /**
- * A secret machines read at runtime. It lives in `secrets/<name>.json`,
- * encrypted to the operators and to every machine in `readers`, and sops-nix
- * puts it at /run/secrets/<name> on them.
+ * A secret machines read at runtime. It lives in `file`, encrypted to the
+ * operators and to every machine in `readers`, and sops-nix puts it at
+ * /run/secrets/<name> on them. Plugins' secrets live apart, under
+ * secrets/services/, so no plugin's can take a path aett's own use.
  */
 export interface MachineSecret {
+	/** What sops-nix calls it on the machines: /run/secrets/<name>. */
 	readonly name: string;
+	/** Where it lives in the fleet. */
+	readonly file: string;
 	/** The machines that read it. */
 	readonly readers: ReadonlyArray<string>;
 	/**
@@ -54,6 +58,7 @@ const pluginSecrets = (fleet: Fleet): ReadonlyArray<MachineSecret> =>
 				owner: string,
 			): MachineSecret => ({
 				name,
+				file: `secrets/services/${name}.json`,
 				readers,
 				kind,
 				prompt,
@@ -83,6 +88,7 @@ export const tailscaleKey = (machine: string) => `${machine}/tailscale-key`;
 export const machineSecrets = (fleet: Fleet): ReadonlyArray<MachineSecret> => [
 	...fleet.machines.map(({ name }): MachineSecret => ({
 		name: tailscaleKey(name),
+		file: secretFile(tailscaleKey(name)),
 		readers: [name],
 		kind: "tailscale",
 		prompt: "",
@@ -93,6 +99,7 @@ export const machineSecrets = (fleet: Fleet): ReadonlyArray<MachineSecret> => [
 	...Option.toArray(
 		Option.map(fleet.user, (user): MachineSecret => ({
 			name: `users/${user}`,
+			file: secretFile(`users/${user}`),
 			readers: fleet.machines.filter((machine) => machine.user).map(({ name }) => name),
 			kind: "password",
 			prompt: `Password for ${user}, which sudo asks for on every machine with a home`,

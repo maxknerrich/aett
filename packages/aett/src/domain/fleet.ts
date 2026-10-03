@@ -7,6 +7,12 @@ export const MachineName = Schema.String.check(
 	Schema.isPattern(/^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/, {
 		expected: "a lowercase hostname label (a-z, 0-9 and inner hyphens, at most 63 characters)",
 	}),
+	// A machine keeps its secrets in secrets/<name>/, next to the user's and the plugins'.
+	Schema.makeFilter(
+		(name: string) =>
+			!["users", "services"].includes(name) ||
+			`Expected another name: aett keeps the fleet's ${name} secrets in secrets/${name}/`,
+	),
 );
 
 /** hypervisor: an appliance that only runs VMs; nas: storage that runs services and VMs; server: headless, reached over SSH; computer: graphical, used in person. */
