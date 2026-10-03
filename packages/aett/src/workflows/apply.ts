@@ -1,3 +1,4 @@
+import { userInfo } from "node:os";
 import { Console, Effect, Option, Schema } from "effect";
 import { Prompt } from "effect/cli";
 import type { Connection } from "../adapters/ssh.ts";
@@ -50,6 +51,15 @@ export const apply = Effect.fn("apply")(function* (
 	const engine = yield* Engine;
 	const declared = yield* loadFleet(root);
 	const local = Option.map(yield* thisMac(declared, name, options.yes), ({ name: mac }) => mac);
+
+	// The Mac's home is synced as the one running aett, which must be the fleet's user.
+	const running = userInfo().username;
+
+	if (Option.isSome(local) && !Option.contains(declared.user, running)) {
+		return yield* new ApplyError({
+			message: `aett applies ${local.value} as ${Option.getOrElse(declared.user, () => "the fleet's user")}, the fleet's user, but runs as ${running}. Run it as that user, without sudo.`,
+		});
+	}
 
 	yield* Effect.forEach(Option.toArray(local), (mac) =>
 		Effect.flatMap(readState(root, declared), (recorded) => prepareMac(root, recorded, mac)),

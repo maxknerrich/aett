@@ -18,7 +18,8 @@ import { Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
 import { machineHostKey, trustHostKey } from "./identity.ts";
 import { forgetRecord, loadFleet, readState, updateRecord } from "./load.ts";
-import { removeFromTailnet } from "./tailscale.ts";
+import { secretFile, tailscaleKey } from "../domain/secrets.ts";
+import { oauthClient, removeFromTailnet } from "./tailscale.ts";
 
 export class InstallError extends Schema.TaggedError<InstallError>()("InstallError", {
 	message: Schema.String,
@@ -83,6 +84,13 @@ export const install = Effect.fn("install")(function* (
 		});
 	}
 
+	// The installed machine is reached only over the tailnet, which it joins with a key aett mints.
+	if (Option.isNone(yield* oauthClient(root))) {
+		return yield* new InstallError({
+			message: `${name} would join no tailnet after install, and aett reaches machines only there. Run aett tailscale setup first.`,
+		});
+	}
+
 	const connection = yield* connect(options);
 	const { disks, uefi } = yield* engine.discover(root, name, connection);
 
@@ -130,7 +138,13 @@ export const install = Effect.fn("install")(function* (
 	const reinstalling = recorded?.installed === true;
 
 	// Its guests' identities live on its disk too.
-	const erased = [name, ...guestsOf(fleet, name)];
+	const erased = [
+		...new Set([
+			name,
+			...guestsOf(fleet, name),
+			...[...state.machines].flatMap(([guest, { host }]) => (host === name ? [guest] : [])),
+		]),
+	];
 
 	const before = yield* Effect.forEach(erased, (machineName) =>
 		Effect.gen(function* () {
@@ -178,6 +192,12 @@ export const install = Effect.fn("install")(function* (
 
 	const guests = yield* Effect.gen(function* () {
 		const { build } = yield* emit(root);
+
+		if (!(yield* fs.exists(path.join(root, secretFile(tailscaleKey(name)))))) {
+			return yield* new InstallError({
+				message: `aett couldn't mint ${name}'s key to join the tailnet, so nothing was erased.`,
+			});
+		}
 
 		// The machine's guests start on its first boot, so their host keys go on its disk too.
 		const keys = new Map(

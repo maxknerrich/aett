@@ -145,7 +145,7 @@ in
       wantedBy = [ "initrd-fs.target" ];
       serviceConfig.Type = "oneshot";
       script = lib.concatMapStrings (dir: ''
-        mkdir -p /sysroot/persist${dir}
+        mkdir -p ${lib.escapeShellArg "/sysroot/persist${dir}"}
       '') config.aett.persist;
     };
 

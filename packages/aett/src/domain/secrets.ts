@@ -52,10 +52,11 @@ const pluginSecrets = (fleet: Fleet): ReadonlyArray<MachineSecret> =>
 
 			const prompt = "prompt" in spec ? spec.prompt : "";
 
+			// `owner` is the machine whose state keeps a certificate's public half; a fleet's is the plugin's.
 			const make = (
 				name: string,
 				readers: ReadonlyArray<string>,
-				owner: string,
+				owner: string | undefined,
 			): MachineSecret => ({
 				name,
 				file: `secrets/services/${name}.json`,
@@ -66,7 +67,11 @@ const pluginSecrets = (fleet: Fleet): ReadonlyArray<MachineSecret> =>
 				invalid: anything,
 				certificate:
 					kind === "certificate"
-						? Option.some(`state/${owner}/${service}.${secret}.pem`)
+						? Option.some(
+								owner === undefined
+									? `state/services/${service}/${secret}.pem`
+									: `state/${owner}/${service}.${secret}.pem`,
+							)
 						: Option.none(),
 			});
 
@@ -76,7 +81,7 @@ const pluginSecrets = (fleet: Fleet): ReadonlyArray<MachineSecret> =>
 				case "client":
 					return clients.map((client) => make(`${base}/${client}`, [client, ...instances], client));
 				default:
-					return [make(base, configured, service)];
+					return [make(base, configured, undefined)];
 			}
 		}),
 	);

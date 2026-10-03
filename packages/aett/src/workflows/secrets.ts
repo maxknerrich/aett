@@ -121,8 +121,6 @@ const ask = (secret: MachineSecret) => {
 // Makes a secret aett generates, or asks for one it can't, and stores it encrypted to the operators
 // and the machines that read it. A certificate's public half goes next to the machine's state too.
 const store = Effect.fn("store")(function* (root: string, state: State, secret: MachineSecret) {
-	const fs = yield* FileSystem.FileSystem;
-	const path = yield* Path.Path;
 	const secrets = yield* Secrets;
 
 	const value = yield* Match.value(secret.kind).pipe(
@@ -132,6 +130,17 @@ const store = Effect.fn("store")(function* (root: string, state: State, secret: 
 	);
 
 	yield* secrets.write(root, secret.file, yield* recipientsOf(root, state, secret), value);
+	yield* keepCertificate(root, secret, value);
+});
+
+// Keeps the public half of a certificate secret where peers' fingerprints are read from.
+const keepCertificate = Effect.fn("keepCertificate")(function* (
+	root: string,
+	secret: MachineSecret,
+	pem: string,
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
 
 	yield* Effect.forEach(Option.toArray(secret.certificate), (file) =>
 		fs
@@ -140,7 +149,7 @@ const store = Effect.fn("store")(function* (root: string, state: State, secret: 
 				Effect.andThen(
 					fs.writeFileString(
 						path.join(root, file),
-						value.slice(0, value.indexOf("-----END CERTIFICATE-----") + 26),
+						pem.slice(0, pem.indexOf("-----END CERTIFICATE-----") + 26),
 					),
 				),
 			),
@@ -184,6 +193,17 @@ export const shareSecrets = Effect.fn("shareSecrets")(function* (
 	);
 
 	const present = yield* Effect.filter(machineSecrets(fleet), exists);
+
+	// A certificate whose public half went missing, say with a destroyed machine's state, has it again.
+	yield* Effect.forEach(present, (secret) =>
+		Effect.forEach(Option.toArray(secret.certificate), (file) =>
+			Effect.gen(function* () {
+				if (yield* fs.exists(path.join(root, file))) return;
+
+				yield* keepCertificate(root, secret, yield* secrets.read(root, secret.file));
+			}),
+		),
+	);
 
 	yield* Effect.forEach(present, (secret) =>
 		recipientsOf(root, state, secret).pipe(

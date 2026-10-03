@@ -54,7 +54,7 @@ in
       RemainAfterExit = true;
     };
     script = lib.concatMapStrings (dir: ''
-      mkdir -p /tank${dir.path}
+      mkdir -p ${lib.escapeShellArg "/tank${dir.path}"}
     '') bulk;
   };
 }
