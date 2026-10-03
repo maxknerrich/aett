@@ -47,7 +47,12 @@
 		"build": "vp pack"
 	},
 	"dependencies": {
-		"@effect/platform-node": "catalog:",
+		"@effect/platform-node": "catalog:"
+	},
+	"devDependencies": {
+		"effect": "catalog:"
+	},
+	"peerDependencies": {
 		"effect": "catalog:"
 	},
 	"engines": {
