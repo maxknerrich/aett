@@ -16,14 +16,15 @@ describe("isPassphrase", () => {
 	);
 });
 
-describe("poolProblem", () => {
-	const disk = (id: string) => ({
-		model: "QEMU",
-		byId: `/dev/disk/by-id/${id}`,
-		bytes: 1e10,
-		names: [`/dev/disk/by-id/${id}`, `/dev/${id}`],
-	});
+// A disk the installer reports, known by its by-id path and a short name.
+const disk = (id: string) => ({
+	model: "QEMU",
+	byId: `/dev/disk/by-id/${id}`,
+	bytes: 1e10,
+	names: [`/dev/disk/by-id/${id}`, `/dev/${id}`],
+});
 
+describe("poolProblem", () => {
 	it("wants two disks per pool and no disk twice, under any of its names", () => {
 		const [a, b, c, d] = [disk("a"), disk("b"), disk("c"), disk("d")];
 
