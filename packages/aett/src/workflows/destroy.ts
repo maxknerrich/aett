@@ -69,6 +69,9 @@ export const destroy = Effect.fn("destroy")(function* (
 		});
 	}
 
+	// First, so a failure leaves the record that names the node and destroy can run again.
+	const removed = yield* removeFromTailnet(root, state, name);
+
 	yield* engine.removeGuest(connection, name);
 	// Only the guest's own key: secrets/<name>/ may also hold fleet secrets that share the name.
 	const secrets = path.join(root, "secrets", name);
@@ -87,8 +90,6 @@ export const destroy = Effect.fn("destroy")(function* (
 			forgetHost(yield* fs.readFileString(knownHostsFile), name),
 		);
 	}
-
-	const removed = yield* removeFromTailnet(root, state, name);
 
 	return yield* Console.log(
 		removed

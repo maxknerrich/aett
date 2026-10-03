@@ -1,6 +1,11 @@
 # Where the plugins' state lives: on a NAS, bulk state on the tank pool; everything else on /persist,
 # like /var/lib already is.
-{ config, lib, ... }:
+{
+  config,
+  lib,
+  utils,
+  ...
+}:
 let
   cfg = config.aett;
   nas = cfg.role == "nas";
@@ -16,9 +21,7 @@ let
     ];
 in
 {
-  aett.persist = map (dir: dir.path) (
-    lib.filter (dir: !(nas && dir.bulk) && !kept dir) cfg.state
-  );
+  aett.persist = map (dir: dir.path) (lib.filter (dir: !(nas && dir.bulk) && !kept dir) cfg.state);
 
   fileSystems = lib.listToAttrs (
     map (dir: {
@@ -28,11 +31,28 @@ in
         fsType = "none";
         options = [
           "bind"
-          "x-systemd.requires-mounts-for=/tank"
+          "x-systemd.requires=aett-tank.service"
+          "x-systemd.after=aett-tank.service"
         ];
       };
     }) bulk
   );
 
-  systemd.tmpfiles.rules = map (dir: "d /tank${dir.path} 0755 root root -") bulk;
+  # A fresh tank is empty, so the bind sources are made once it is mounted and before the binds.
+  systemd.services.aett-tank = lib.mkIf (bulk != [ ]) {
+    description = "Create the directories bind-mounted from /tank";
+    unitConfig = {
+      DefaultDependencies = false;
+      RequiresMountsFor = [ "/tank" ];
+    };
+    before = map (dir: "${utils.escapeSystemdPath dir.path}.mount") bulk ++ [ "local-fs.target" ];
+    wantedBy = [ "local-fs.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = lib.concatMapStrings (dir: ''
+      mkdir -p /tank${dir.path}
+    '') bulk;
+  };
 }

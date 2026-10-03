@@ -1,4 +1,4 @@
-import { Console, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Console, Effect, FileSystem, Match, Option, Path, Schema } from "effect";
 import { GitHub } from "../adapters/github.ts";
 import type { Fleet } from "../domain/fleet.ts";
 import {
@@ -104,12 +104,20 @@ const resolveRelease = Effect.fn("resolveRelease")(function* (release: Release, 
 	} satisfies ReleasePin;
 });
 
-// The flake input each package source is.
-const sourceInputs: Record<Source, string> = {
-	"llm-agents": "llm-agents",
-	nixpkgs: "nixpkgs",
-	unstable: "nixpkgs-unstable",
-};
+// The flake inputs a package comes from: its source's, and for nixpkgs that of each channel the
+// machines listing it are on.
+const inputsOf = (fleet: Fleet, name: string, source: Source) =>
+	Match.value(source).pipe(
+		Match.when("llm-agents", () => ["llm-agents"]),
+		Match.when("unstable", () => ["nixpkgs-unstable"]),
+		Match.orElse(() => [
+			...new Set(
+				fleet.machines.flatMap(({ packages, channel }) =>
+					packages.includes(name) ? [channel === "stable" ? "nixpkgs" : "nixpkgs-unstable"] : [],
+				),
+			),
+		]),
+	);
 
 /**
  * Picks a source for each package name `pinned` lacks, on the platform of a
@@ -120,28 +128,35 @@ const sourceInputs: Record<Source, string> = {
 const pickSources = Effect.fn("pickSources")(function* (fleet: Fleet, state: State, pins: Pins) {
 	const engine = yield* Engine;
 
-	const wanted = fleet.machines.flatMap(({ name, packages }) => {
+	const wanted = fleet.machines.flatMap(({ name, packages, channel }) => {
 		const platform = state.machines.get(name)?.platform;
 
 		return platform === undefined
 			? []
-			: packages
-					.filter((pkg) => pins.packages[pkg] === undefined)
-					.map((pkg) => ({ pkg, platform }));
+			: packages.flatMap((pkg) =>
+					pins.packages[pkg] === undefined ? [{ pkg, platform, channel }] : [],
+				);
 	});
 
-	const byPlatform = Map.groupBy(
+	// Looked up once per name, for the first machine that lists it, in one evaluation per platform and channel.
+	const byTarget = Map.groupBy(
 		[...new Map(wanted.map((want) => [want.pkg, want])).values()],
-		({ platform }) => platform,
+		({ platform, channel }) => `${platform} ${channel}`,
 	);
 
-	const found = yield* Effect.forEach(byPlatform, ([platform, names]) =>
-		engine
-			.packageSources(
-				pins.inputs,
+	const groups = [...byTarget.values()].flatMap((names) =>
+		Option.toArray(
+			Option.map(Option.fromUndefinedOr(names[0]), ({ platform, channel }) => ({
 				platform,
-				names.map(({ pkg }) => pkg),
-			)
+				channel,
+				names: names.map(({ pkg }) => pkg),
+			})),
+		),
+	);
+
+	const found = yield* Effect.forEach(groups, ({ platform, channel, names }) =>
+		engine
+			.packageSources(pins.inputs, platform, channel, names)
 			.pipe(Effect.map((sources) => ({ platform, sources: [...sources] }))),
 	);
 
@@ -306,17 +321,18 @@ export const update = Effect.fn("update")(function* (root: string, names: Readon
 	const declared = declaredReleases(fleet);
 	const pins = yield* completePins(root, fleet, yield* readState(root, fleet));
 
-	// A package moves with the input of its source.
-	const inputOf = (name: string) =>
-		inputs.includes(name)
-			? name
-			: Option.getOrUndefined(
-					Option.map(Option.fromUndefinedOr(pins.packages[name]), (source) => sourceInputs[source]),
-				);
+	// A package moves with the inputs it comes from.
+	const inputsFor = (name: string): ReadonlyArray<string> => {
+		const source = pins.packages[name];
+
+		if (inputs.includes(name)) return [name];
+
+		return source === undefined ? [] : inputsOf(fleet, name, source);
+	};
 
 	const unknown = names.filter(
 		(name) =>
-			inputOf(name) === undefined &&
+			inputsFor(name).length === 0 &&
 			!declared.some(({ github, bin }) => name === github || name === bin),
 	);
 
@@ -328,9 +344,7 @@ export const update = Effect.fn("update")(function* (root: string, names: Readon
 
 	const everything = names.length === 0;
 
-	const movedInputs = everything
-		? inputs
-		: [...new Set(names.flatMap((name) => Option.toArray(Option.fromUndefinedOr(inputOf(name)))))];
+	const movedInputs = everything ? inputs : [...new Set(names.flatMap(inputsFor))];
 
 	const moved = declared.filter(
 		({ github, bin }) => everything || names.includes(github) || names.includes(bin),

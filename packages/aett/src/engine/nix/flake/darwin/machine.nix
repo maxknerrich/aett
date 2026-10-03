@@ -8,6 +8,19 @@
 }:
 let
   cfg = config.aett;
+
+  settings = {
+    experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
+    trusted-users = [
+      "root"
+      cfg.user.name
+    ];
+    extra-substituters = [ "https://cache.numtide.com" ];
+    extra-trusted-public-keys = [ "niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=" ];
+  };
 in
 {
   # Whether the operator agreed to remove the apps fleet.ts doesn't list. aett asks once.
@@ -22,16 +35,16 @@ in
 
     system.primaryUser = cfg.user.name;
 
-    # The Nix installer's daemon keeps running Nix and nix-darwin leaves it alone, so Determinate Nix
-    # and an upstream install both work. Its nix.conf includes this file, where aett trusts the user
-    # and llm-agents.nix's cache.
-    nix.enable = false;
-    environment.etc."nix/nix.custom.conf".text = ''
-      experimental-features = nix-command flakes
-      trusted-users = root ${cfg.user.name}
-      extra-substituters = https://cache.numtide.com
-      extra-trusted-public-keys = niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g=
-    '';
+    # Determinate Nix keeps its daemon and reads aett's settings from nix.custom.conf; on an upstream
+    # install nix-darwin runs Nix with them. Either way the user is trusted and llm-agents.nix's cache
+    # is used.
+    nix.enable = !cfg.darwin.determinate;
+    nix.settings = lib.mkIf (!cfg.darwin.determinate) settings;
+    environment.etc."nix/nix.custom.conf" = lib.mkIf cfg.darwin.determinate {
+      text = lib.concatStrings (
+        lib.mapAttrsToList (key: value: "${key} = ${lib.concatStringsSep " " value}\n") settings
+      );
+    };
 
     # A Mac decrypts its secrets with the age key aett placed for it.
     sops.age.keyFile = "/var/lib/sops-nix/key.txt";

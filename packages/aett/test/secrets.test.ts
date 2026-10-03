@@ -2,6 +2,7 @@ import { Option, Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
 import { machineSecrets } from "../src/domain/secrets.ts";
+import type { State } from "../src/domain/state.ts";
 import { grantsFor } from "../src/domain/tailnet.ts";
 import { computer, fleet, hypervisor, nas, server } from "../src/index.ts";
 
@@ -47,7 +48,7 @@ describe("machineSecrets", () => {
 });
 
 describe("grantsFor", () => {
-	it("lets each plugin's machines reach its instances' endpoints, by tag, Macs being their owner's", () => {
+	it("lets each plugin's machines reach its instances' endpoints, by tag; a Mac on the Tailscale app has none", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
@@ -56,13 +57,22 @@ describe("grantsFor", () => {
 					hades: server({ host: "kronos" }),
 					vault: nas(),
 					fawkes: computer({ os: "macos" }),
+					mini: computer({ os: "macos" }),
 				},
 				services: { backup: "hades" },
 			}),
 		);
 
-		expect(grantsFor(declared)).toEqual([
-			{ src: ["tag:nas", "tag:server"], dst: ["tag:server"], ip: ["tcp:51515"] },
+		const state: State = {
+			operator: {
+				sshKeys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOperatorKey operator@mac"],
+				ageKeys: ["age1gejw6jhjj3pdapugaevecrtsla2kcjhrdzykaznyh5xv4fjukuqq42qv3d"],
+			},
+			machines: new Map([["fawkes", { facts: false, tailscaleApp: true }]]),
+		};
+
+		expect(grantsFor(declared, state)).toEqual([
+			{ src: ["tag:computer", "tag:nas", "tag:server"], dst: ["tag:server"], ip: ["tcp:51515"] },
 		]);
 	});
 });

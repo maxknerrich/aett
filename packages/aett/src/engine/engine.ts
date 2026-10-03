@@ -8,7 +8,7 @@ import {
 } from "effect";
 import type { Connection, SshError } from "../adapters/ssh.ts";
 import type { Disk } from "../domain/disk.ts";
-import type { Fleet } from "../domain/fleet.ts";
+import type { Channel, Fleet } from "../domain/fleet.ts";
 import type { Source } from "../domain/packages.ts";
 import type { InputsLock, Pins, Platform } from "../domain/pins.ts";
 import type { Extras } from "./nix/fleet-json.ts";
@@ -100,13 +100,15 @@ export class Engine extends Context.Service<
 			names: ReadonlyArray<string>,
 		) => Effect.Effect<InputsLock, EngineError | PlatformError.PlatformError>;
 		/**
-		 * Which source has each package name on `platform` at the revisions
-		 * `inputs` pins, looked up in order: llm-agents.nix, nixpkgs, nixpkgs
-		 * unstable. None for a name no source has.
+		 * Which source has each package name on `platform` for a machine on
+		 * `channel`, at the revisions `inputs` pins, looked up in order:
+		 * llm-agents.nix, nixpkgs on that channel, nixpkgs unstable. None for a
+		 * name no source has.
 		 */
 		readonly packageSources: (
 			inputs: InputsLock,
 			platform: Platform,
+			channel: Channel,
 			names: ReadonlyArray<string>,
 		) => Effect.Effect<
 			ReadonlyMap<string, Option.Option<Source>>,
@@ -186,8 +188,14 @@ export class Engine extends Context.Service<
 			name: string,
 			authKey: Redacted.Redacted,
 		) => Effect.Effect<Enrolled, EngineError | SshError>;
-		/** Hands the Wi-Fi networks `target` knows to its initrd, so it reaches the tailnet without a cable. */
-		readonly unlockWifi: (target: Connection) => Effect.Effect<void, SshError>;
+		/**
+		 * Hands the Wi-Fi networks `target` knows to its initrd, so it reaches the
+		 * tailnet without a cable. Returns whether they changed, which the boot
+		 * loader then has to put into the initrd.
+		 */
+		readonly unlockWifi: (target: Connection) => Effect.Effect<boolean, SshError>;
+		/** Installs `target`'s boot loader again for the system it runs, with its initrd's secrets as they are now. */
+		readonly refreshBoot: (target: Connection) => Effect.Effect<void, SshError>;
 		/** Builds the Mac `name`'s nix-darwin system on the Mac aett runs on. Returns the system. */
 		readonly buildDarwin: (build: Build, name: string) => Effect.Effect<string, EngineError>;
 		/** The Brewfile the Mac `name`'s system installs its apps from. */

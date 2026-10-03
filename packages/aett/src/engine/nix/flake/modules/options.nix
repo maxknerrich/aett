@@ -154,9 +154,16 @@ in
       default = [ ];
     };
 
-    darwin.system = mkOption {
-      type = types.nullOr types.str;
-      default = null;
+    darwin = {
+      system = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+      };
+      # Whether Determinate Nix runs the Mac, which keeps nix-darwin off its daemon.
+      determinate = mkOption {
+        type = types.bool;
+        default = false;
+      };
     };
   };
 }

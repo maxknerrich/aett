@@ -104,8 +104,17 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -eEuo pipefail
+          # A tag is released once; rerunning it must not touch the published release.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "$RELEASE_TAG is released already." >&2
+            exit 1
+          fi
+
+          # Only the draft this run makes is removed when publishing fails.
           cleanup() {
-            gh release delete "$RELEASE_TAG" --yes >/dev/null 2>&1 || true
+            if [ "$(gh release view "$RELEASE_TAG" --json isDraft -q .isDraft 2>/dev/null)" = true ]; then
+              gh release delete "$RELEASE_TAG" --yes >/dev/null 2>&1 || true
+            fi
           }
           trap cleanup ERR
           trap 'cleanup; exit 1' INT TERM

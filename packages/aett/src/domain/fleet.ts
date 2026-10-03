@@ -561,16 +561,20 @@ export const decodeFleet = (declaration: Declaration): Result.Result<Fleet, stri
 	const declared = successes(entries);
 
 	// Plugins that are on every machine without an entry, such as tailscale.
-	const always = shipped
-		.filter(({ always: everywhere }) => everywhere === true)
-		.map((plugin): Entry => ({
-			name: plugin.name,
-			plugin: Option.some(plugin),
-			on: Option.none(),
-			packages: [],
-			apps: [],
-			options: {},
-		}));
+	const always = [...plugins.values()].flatMap((plugin): ReadonlyArray<Entry> =>
+		plugin.always === true
+			? [
+					{
+						name: plugin.name,
+						plugin: Option.some(plugin),
+						on: Option.none(),
+						packages: [],
+						apps: [],
+						options: {},
+					},
+				]
+			: [],
+	);
 
 	const placed = [...always, ...declared].map((entry) =>
 		placeEntry(entry, decoded).pipe(Result.map((on) => ({ entry, on }))),

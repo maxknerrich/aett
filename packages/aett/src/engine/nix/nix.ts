@@ -14,7 +14,7 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { type Connection, shellQuote } from "../../adapters/ssh.ts";
-import type { Fleet } from "../../domain/fleet.ts";
+import type { Channel, Fleet } from "../../domain/fleet.ts";
 import { Source } from "../../domain/packages.ts";
 import { InputsLock, type Pins, Platform } from "../../domain/pins.ts";
 import type { State } from "../../domain/state.ts";
@@ -29,6 +29,7 @@ import {
 import { FacterReport, installFacts } from "./facter.ts";
 import { pluginDirectory } from "../../adapters/assets.ts";
 import { type Extras, fleetJson } from "./fleet-json.ts";
+import { wpaSupplicant } from "./wifi.ts";
 
 // A local directory as a flake reference; nix parses it as a URL, so spaces and the like are percent-encoded.
 const flakeAt = (directory: string) => `path:${pathToFileURL(directory).pathname}`;
@@ -226,32 +227,27 @@ echo
 cat "$dir/ssh_host_ed25519_key.pub"
 `;
 
-// Run as root on the machine: writes the Wi-Fi networks NetworkManager knows as wpa_supplicant's
-// configuration for the initrd, which joins one of them to reach the tailnet.
-const wifiScript = `set -eu
-umask 077
-out=${unlockDirectory}/wpa_supplicant.conf
-: > "$out.new"
-for file in /etc/NetworkManager/system-connections/*.nmconnection; do
-	[ -f "$file" ] || continue
-	awk -F= '
-		/^[[]/ { section = $0; next }
-		section == "[wifi]" && $1 == "ssid" { ssid = substr($0, index($0, "=") + 1) }
-		section == "[wifi-security]" && $1 == "psk" { psk = substr($0, index($0, "=") + 1) }
-		END {
-			if (ssid == "") exit
-			printf "network={\\n\\tssid=\\"%s\\"\\n", ssid
-			if (psk != "") printf "\\tpsk=\\"%s\\"\\n\\tkey_mgmt=WPA-PSK SAE\\n\\tieee80211w=1\\n", psk
-			else printf "\\tkey_mgmt=NONE\\n"
-			printf "}\\n"
-		}
-	' "$file" >> "$out.new"
-done
-mv -f "$out.new" "$out"
-`;
+// Hands the Wi-Fi networks NetworkManager knows to the initrd as wpa_supplicant's configuration,
+// which only root can read. Says whether it changed.
+const unlockWifi = Effect.fn("NixEngine.unlockWifi")(function* (target: Connection) {
+	const separator = "\n--- aett ---\n";
 
-const unlockWifi = (target: Connection) =>
-	target.run(`sh -c ${shellQuote(wifiScript)}`).pipe(Effect.asVoid);
+	const keyfiles = yield* target.run(
+		`for file in /etc/NetworkManager/system-connections/*.nmconnection; do [ -f "$file" ] && cat "$file" && printf ${shellQuote(separator)}; done; true`,
+	);
+
+	const said = yield* target.run(
+		`umask 077 && next=$(mktemp) && cat > "$next" && if cmp -s "$next" ${unlockDirectory}/wpa_supplicant.conf; then rm -f "$next"; echo same; else mv -f "$next" ${unlockDirectory}/wpa_supplicant.conf; echo changed; fi`,
+		wpaSupplicant(keyfiles.split(separator)),
+	);
+
+	return said.trim() === "changed";
+});
+
+// Installs the boot loader again for the system the machine runs, which appends the initrd's
+// secrets as they are now.
+const refreshBoot = (target: Connection) =>
+	target.stream("/run/current-system/bin/switch-to-configuration boot >&2").pipe(Effect.asVoid);
 
 // What tailscale status --json says about a node itself.
 const EnrolledStatus = Schema.fromJsonString(
@@ -662,6 +658,7 @@ export const nixEngine = (flake: string, plugins: string) =>
 			const packageSources = Effect.fn("NixEngine.packageSources")(function* (
 				inputs: InputsLock,
 				platform: Platform,
+				channel: Channel,
 				names: ReadonlyArray<string>,
 			) {
 				if (names.length === 0) return new Map<string, Option.Option<Source>>();
@@ -679,7 +676,7 @@ export const nixEngine = (flake: string, plugins: string) =>
 					"--json",
 					`${flakeAt(directory)}#lib`,
 					"--apply",
-					`lib: lib.sources ${JSON.stringify(platform)} [ ${names.map((name) => JSON.stringify(name)).join(" ")} ]`,
+					`lib: lib.sources ${JSON.stringify(platform)} ${JSON.stringify(channel)} [ ${names.map((name) => JSON.stringify(name)).join(" ")} ]`,
 				]);
 
 				const found = yield* Schema.decodeUnknownEffect(Sources)(output).pipe(
@@ -842,6 +839,7 @@ export const nixEngine = (flake: string, plugins: string) =>
 				placeGuestKey,
 				enrollUnlock,
 				unlockWifi,
+				refreshBoot,
 				buildDarwin,
 				brewfile,
 				activateDarwin,

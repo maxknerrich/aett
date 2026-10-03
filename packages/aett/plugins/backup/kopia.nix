@@ -52,13 +52,17 @@ rec {
     export KOPIA_CHECK_FOR_UPDATES=false
     kc() { ${kopia} --config-file=${clientDirectory}/repository.config --no-persist-credentials "$@"; }
 
-    if [ ! -f ${clientDirectory}/repository.config ]; then
+    # Connects again when the server moved or has a new certificate.
+    server="https://${server.tailnet.address}:${toString port} ${server.fingerprints.tls}"
+    if [ ! -f ${clientDirectory}/repository.config ] || [ "$(cat ${clientDirectory}/server 2>/dev/null)" != "$server" ]; then
       mkdir -p ${clientDirectory}
+      kc repository disconnect 2>/dev/null || rm -f ${clientDirectory}/repository.config
       kc repository connect server \
         --url=https://${server.tailnet.address}:${toString port} \
         --server-cert-fingerprint=${server.fingerprints.tls} \
         --override-username=aett --override-hostname=${cfg.name} \
         --cache-directory=${clientDirectory}/cache
+      printf '%s' "$server" > ${clientDirectory}/server
     fi
 
     ${lib.concatMapStrings (source: ''

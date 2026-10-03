@@ -42,7 +42,7 @@ export const setupTailscale = Effect.fn("setupTailscale")(function* (root: strin
 	const secrets = yield* Secrets;
 	const state = yield* readState(root, fleet);
 
-	const grants = grantsFor(fleet);
+	const grants = grantsFor(fleet, state);
 
 	const tags = [
 		...new Set([

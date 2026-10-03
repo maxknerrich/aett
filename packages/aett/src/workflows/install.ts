@@ -12,11 +12,13 @@ import {
 	poolProblem,
 } from "../domain/disk.ts";
 import { type Fleet, guestsOf } from "../domain/fleet.ts";
+import type { State } from "../domain/state.ts";
 import { formatHost, type Host } from "../domain/host.ts";
 import { Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
 import { machineHostKey, trustHostKey } from "./identity.ts";
-import { loadFleet, readState, updateRecord } from "./load.ts";
+import { forgetRecord, loadFleet, readState, updateRecord } from "./load.ts";
+import { removeFromTailnet } from "./tailscale.ts";
 
 export class InstallError extends Schema.TaggedError<InstallError>()("InstallError", {
 	message: Schema.String,
@@ -120,6 +122,10 @@ export const install = Effect.fn("install")(function* (
 	// Trusted before the build, so the machine is a recipient of the secrets it reads on first boot.
 	yield* trustHostKey(root, name, hostKey.publicKey);
 
+	// Erasing the disk erases the machine's tailnet identity and its initrd's: their nodes go, and
+	// it joins again with a new key.
+	if (recorded?.installed === true) yield* forgetTailnet(root, state, name);
+
 	// Later runs read the disks from state and never derive them again.
 	// An existing record stays as it is, so `installed` survives a failed reinstall.
 	const chosen =
@@ -161,6 +167,31 @@ export const install = Effect.fn("install")(function* (
 	// The reboot drops the connection, which may fail the command; that is expected.
 	return yield* Effect.ignore(connection.run("systemctl reboot"));
 }, Effect.scoped);
+
+// Removes a reinstalled machine's nodes from the tailnet, as far as aett can, and forgets them.
+const forgetTailnet = Effect.fn("forgetTailnet")(function* (
+	root: string,
+	state: State,
+	name: string,
+) {
+	const removed = yield* removeFromTailnet(root, state, name).pipe(
+		Effect.catchTag("TailscaleError", (error) => Console.log(error.message).pipe(Effect.as(false))),
+	);
+
+	if (!removed) {
+		yield* Console.log(
+			`Remove ${name}'s old node from the tailnet in the admin console; it joins again as a new one.`,
+		);
+	}
+
+	yield* forgetRecord(root, name, [
+		"tailnet",
+		"tailnetName",
+		"node",
+		"unlock",
+		"tailscaleKeyExpires",
+	]);
+});
 
 // The bare-metal NixOS machine fleet.ts declares as `name`: what the installer can discover.
 const discoverable = (fleet: Fleet, name: string) =>

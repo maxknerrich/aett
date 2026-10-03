@@ -10,12 +10,16 @@
     casks = [ "karabiner-elements" ];
   };
 
+  # Rift runs ~/.config/rift/register.sh, which calls jq and sketchybar.
   launchd.user.agents.rift.serviceConfig = {
     ProgramArguments = [ "${config.homebrew.prefix}/bin/rift" ];
+    EnvironmentVariables.PATH = "${config.environment.systemPath}:${config.homebrew.prefix}/bin";
     RunAtLoad = true;
     KeepAlive = true;
     ProcessType = "Interactive";
   };
+
+  environment.systemPackages = [ pkgs.jq ];
 
   # Reads ~/.config/sketchybar/sketchybarrc, which the home tree brings.
   services.sketchybar = {

@@ -71,6 +71,8 @@ export const MachineRecord = Schema.Struct({
 	),
 	// A Mac: the public half of the age key aett made for it, which its secrets are encrypted to.
 	age: Schema.optionalKey(AgePublicKey),
+	// A Mac: whether Determinate Nix runs it, whose settings nix-darwin leaves to a file of their own.
+	determinate: Schema.optionalKey(Schema.Boolean),
 	// A Mac: whether it runs the Tailscale app, which aett leaves to it.
 	tailscaleApp: Schema.optionalKey(Schema.Boolean),
 	// A Mac: whether the operator agreed to remove the Homebrew apps fleet.ts doesn't list.

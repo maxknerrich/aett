@@ -201,7 +201,10 @@ export const fleetJson = (fleet: Fleet, state: State, extras: Extras, pins: Pins
 						machine.name,
 						{
 							...base(fleet, machine, state, extras, pins),
-							darwin: { system: state.machines.get(machine.name)?.platform ?? "aarch64-darwin" },
+							darwin: {
+								system: state.machines.get(machine.name)?.platform ?? "aarch64-darwin",
+								determinate: state.machines.get(machine.name)?.determinate === true,
+							},
 							homebrew: { zap: state.machines.get(machine.name)?.zap === true },
 						},
 					] as const,

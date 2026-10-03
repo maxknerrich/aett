@@ -295,11 +295,17 @@ export const pendingSecrets = Effect.fn("pendingSecrets")(function* (
 	return pending.flat();
 });
 
-/** Asks for a machine secret, or makes it again, and stores it encrypted to the operators and the machines that read it. */
+/**
+ * Asks for a machine secret and stores it encrypted to the operators and the
+ * machines that read it. Only secrets someone types can be set; the ones aett
+ * makes, such as a repository's password, stay as they are, since the data
+ * they protect depends on them.
+ */
 export const setSecret = Effect.fn("setSecret")(function* (root: string, name: string) {
 	const fleet = yield* loadFleet(root);
-	const known = machineSecrets(fleet).filter(({ kind }) => kind !== "tailscale");
-	const secret = known.find((candidate) => candidate.name === name);
+	const all = machineSecrets(fleet);
+	const typed = all.filter(({ kind }) => kind === "password" || kind === "token");
+	const secret = all.find((candidate) => candidate.name === name);
 
 	if (secret === undefined) {
 		// A user's password exists once fleet.ts names the user.
@@ -311,7 +317,13 @@ export const setSecret = Effect.fn("setSecret")(function* (root: string, name: s
 				: "";
 
 		return yield* new SecretsError({
-			message: `aett knows no secret named ${name}. It knows ${known.map((candidate) => candidate.name).join(", ")}.${hint}`,
+			message: `aett knows no secret named ${name}. It knows ${typed.map((candidate) => candidate.name).join(", ")}.${hint}`,
+		});
+	}
+
+	if (!typed.includes(secret)) {
+		return yield* new SecretsError({
+			message: `aett makes ${name} itself, and what it protects depends on it, so it isn't set by hand.`,
 		});
 	}
 

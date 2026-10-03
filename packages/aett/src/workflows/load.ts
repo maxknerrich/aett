@@ -186,6 +186,39 @@ export const readState = Effect.fn("readState")(function* (root: string, fleet: 
 	return { operator, machines: new Map(machines) } satisfies State;
 });
 
+/** Removes `keys` from state/<name>/machine.json, keeping the rest. */
+export const forgetRecord = Effect.fn("forgetRecord")(function* (
+	root: string,
+	name: string,
+	keys: ReadonlyArray<keyof typeof MachineRecord.Type>,
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const file = path.join(root, "state", name, "machine.json");
+
+	if (!(yield* fs.exists(file))) return;
+
+	const recorded = yield* fs.readFileString(file).pipe(
+		Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(MachineRecord))),
+		Effect.catchTag("SchemaError", (error) =>
+			Effect.fail(
+				new FleetError({ message: `state/${name}/machine.json is invalid: ${error.message}` }),
+			),
+		),
+	);
+
+	yield* fs.writeFileString(
+		file,
+		`${JSON.stringify(
+			Object.fromEntries(
+				Object.entries(recorded).filter(([key]) => !keys.some((forgotten) => forgotten === key)),
+			),
+			null,
+			"\t",
+		)}\n`,
+	);
+});
+
 /** Adds `changes` to state/<name>/machine.json, keeping what it records already. */
 export const updateRecord = Effect.fn("updateRecord")(function* (
 	root: string,

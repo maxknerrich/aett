@@ -198,12 +198,18 @@ const applyMachine = Effect.fn("applyMachine")(function* (run: Run, name: string
 	yield* placeGuestKeys(run.root, connection, guests, run.state.operator.ageKeys);
 
 	// The boot loader puts the Wi-Fi networks the machine knows now into its initrd.
-	if (run.state.machines.get(name)?.unlock !== undefined) yield* engine.unlockWifi(connection);
+	const wifi =
+		run.state.machines.get(name)?.unlock !== undefined && (yield* engine.unlockWifi(connection));
 
 	const system = yield* engine.buildSystem(run.build, name, connection);
 	const current = yield* engine.currentSystem(connection);
 
 	if (system === current) {
+		if (wifi) {
+			yield* Console.log(`Putting ${name}'s Wi-Fi networks into its initrd…`);
+			yield* engine.refreshBoot(connection);
+		}
+
 		yield* Console.log(`${name} is up to date.`);
 		yield* settle(run, name, connection);
 

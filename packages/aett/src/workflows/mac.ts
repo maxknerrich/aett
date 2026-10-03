@@ -65,8 +65,8 @@ export const thisMac = Effect.fn("thisMac")(function* (
 
 /**
  * Records what aett needs to build the Mac it runs on before its first apply:
- * its platform, whether it runs the Tailscale app, and an age key of its own
- * for its secrets, kept encrypted to the operators.
+ * its platform, whether it runs the Tailscale app and Determinate Nix, and an
+ * age key of its own for its secrets, kept encrypted to the operators.
  */
 export const prepareMac = Effect.fn("prepareMac")(function* (
 	root: string,
@@ -81,9 +81,14 @@ export const prepareMac = Effect.fn("prepareMac")(function* (
 
 	const system = arch() === "arm64" ? "aarch64-darwin" : "x86_64-darwin";
 	const app = yield* fs.exists("/Applications/Tailscale.app");
+	const determinate = yield* fs.exists("/usr/local/bin/determinate-nixd");
 
-	if (recorded?.system !== system || recorded.tailscaleApp !== app) {
-		yield* updateRecord(root, name, { system, tailscaleApp: app });
+	if (
+		recorded?.system !== system ||
+		recorded.tailscaleApp !== app ||
+		recorded.determinate !== determinate
+	) {
+		yield* updateRecord(root, name, { system, tailscaleApp: app, determinate });
 	}
 
 	if (recorded?.age !== undefined && (yield* fs.exists(path.join(root, ageKeyFile(name))))) {

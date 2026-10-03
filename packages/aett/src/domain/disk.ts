@@ -38,19 +38,24 @@ export interface Pools {
 
 /**
  * Why the disks chosen for a NAS's pools can't be them, if they can't: each
- * pool mirrors at least two disks, and no disk is in both.
+ * pool mirrors at least two disks, and no disk is chosen twice, under any of
+ * its names.
  */
 export const poolProblem = ({ root, tank }: Pools) => {
+	const disks = [...root, ...tank];
+
+	const repeated = disks.find(
+		({ names }, index) =>
+			disks.findIndex((other) => other.names.some((name) => names.includes(name))) < index,
+	);
+
+	if (repeated !== undefined) return Option.some(`${repeated.byId} is chosen twice.`);
+
 	if (root.length < 2) return Option.some("The root pool mirrors at least two disks.");
 
-	if (tank.length < 2) return Option.some("The tank pool mirrors at least two disks.");
-
-	const shared = root.find(({ byId }) => tank.some((disk) => disk.byId === byId));
-
-	return Option.map(
-		Option.fromUndefinedOr(shared),
-		({ byId }) => `${byId} can't be in both pools.`,
-	);
+	return tank.length < 2
+		? Option.some("The tank pool mirrors at least two disks.")
+		: Option.none<string>();
 };
 
 /** The read-only preview install shows for a NAS before it asks to erase the disks; it mirrors nas.nix. */

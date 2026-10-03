@@ -205,15 +205,16 @@
       darwinConfigurations = lib.mapAttrs darwin (lib.filterAttrs isDarwin fleet.machines);
 
       lib = {
-        # The source of each package name on `system`, first come first served: llm-agents.nix, nixpkgs,
-        # nixpkgs unstable. aett pins the answer in the fleet's state/pins.json.
+        # The source of each package name on `system` for a machine on `channel`, first come first
+        # served: llm-agents.nix, nixpkgs on that channel, nixpkgs unstable. aett pins the answer in the
+        # fleet's state/pins.json.
         sources =
-          system: names:
+          system: channel: names:
           lib.genAttrs names (
             name:
             if provides system (llm-agents.packages.${system} or { }) name then
               "llm-agents"
-            else if provides system nixpkgs.legacyPackages.${system} name then
+            else if provides system channels.${channel}.legacyPackages.${system} name then
               "nixpkgs"
             else if provides system nixpkgs-unstable.legacyPackages.${system} name then
               "unstable"
