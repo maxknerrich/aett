@@ -82,6 +82,12 @@ export class Tailscale extends Context.Service<
 			client: OAuthClient,
 			node: string,
 		) => Effect.Effect<void, TailscaleError>;
+		/** Replaces a device's tags. */
+		readonly setTags: (
+			client: OAuthClient,
+			node: string,
+			tags: ReadonlyArray<string>,
+		) => Effect.Effect<void, TailscaleError>;
 	}
 >()("aett/adapters/Tailscale") {
 	static readonly layer = Layer.effect(
@@ -204,7 +210,21 @@ export class Tailscale extends Context.Service<
 				return yield* Effect.void;
 			});
 
-			return Tailscale.of({ check, mintKey, devices, removeDevice });
+			const setTags = Effect.fn("Tailscale.setTags")(function* (
+				client: OAuthClient,
+				node: string,
+				tags: ReadonlyArray<string>,
+			) {
+				const api = yield* authorized(client);
+
+				yield* HttpClientRequest.post(`/device/${encodeURIComponent(node)}/tags`).pipe(
+					HttpClientRequest.bodyJson({ tags }),
+					Effect.flatMap(api.execute),
+					Effect.mapError(failure(`tag the device ${node} ${tags.join(", ")}`)),
+				);
+			});
+
+			return Tailscale.of({ check, mintKey, devices, removeDevice, setTags });
 		}),
 	).pipe(Layer.provide(FetchHttpClient.layer));
 }

@@ -65,6 +65,8 @@ export const MachineRecord = Schema.Struct({
 	tailnet: Schema.optionalKey(Schema.String),
 	tailnetName: Schema.optionalKey(Schema.String),
 	node: Schema.optionalKey(Schema.String),
+	// The tag aett last gave its node, its role's, which aett changes with the role.
+	tag: Schema.optionalKey(Schema.String),
 	// An encrypted machine's initrd on the tailnet, which aett machine unlock reaches.
 	unlock: Schema.optionalKey(
 		Schema.Struct({ tailnet: Schema.String, tailnetName: Schema.String, node: Schema.String }),

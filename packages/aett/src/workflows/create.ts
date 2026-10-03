@@ -431,8 +431,17 @@ const installDependencies = Effect.fn("installDependencies")(
 
 		yield* Console.log(`Installing aett with ${manager}…`);
 
+		// npm gives each address 250 ms to connect, which a slow link misses for every one of them.
 		const handle = yield* spawner.spawn(
-			ChildProcess.make(manager, ["install"], { cwd: root, stdin: "ignore" }),
+			ChildProcess.make(manager, ["install"], {
+				cwd: root,
+				stdin: "ignore",
+				env: {
+					NODE_OPTIONS:
+						`${process.env["NODE_OPTIONS"] ?? ""} --network-family-autoselection-attempt-timeout=1000`.trim(),
+				},
+				extendEnv: true,
+			}),
 		);
 
 		const [output, exitCode] = yield* Effect.all(

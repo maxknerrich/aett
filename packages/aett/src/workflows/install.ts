@@ -164,6 +164,7 @@ export const install = Effect.fn("install")(function* (
 				"node",
 				"unlock",
 				"tailscaleKeyExpires",
+				"tag",
 			]),
 		);
 	}

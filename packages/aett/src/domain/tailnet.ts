@@ -5,6 +5,9 @@ import type { State } from "./state.ts";
 /** The tag a machine joins the tailnet with: its role's. */
 export const tagOf = (role: string) => `tag:${role}`;
 
+/** The OAuth client's tag, which owns every tag aett gives machines, so the client may mint them one at a time. */
+export const ownerTag = "tag:aett";
+
 /** The tag an encrypted machine's initrd joins the tailnet with, which the policy should grant nothing. */
 export const unlockTag = "tag:unlock";
 

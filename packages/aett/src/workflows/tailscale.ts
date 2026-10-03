@@ -3,7 +3,7 @@ import { Prompt } from "effect/cli";
 import { Secrets } from "../adapters/secrets.ts";
 import { joinedAs, OAuthClient, Tailscale } from "../adapters/tailscale.ts";
 import type { Fleet } from "../domain/fleet.ts";
-import { grantsFor, tagOf, unlockTag } from "../domain/tailnet.ts";
+import { grantsFor, ownerTag, tagOf, unlockTag } from "../domain/tailnet.ts";
 import { secretFile, tailscaleKey } from "../domain/secrets.ts";
 import type { State } from "../domain/state.ts";
 import { machineAgeKeys } from "./identity.ts";
@@ -56,9 +56,10 @@ export const setupTailscale = Effect.fn("setupTailscale")(function* (root: strin
 			"aett reaches every machine over your tailnet. Each machine joins once with a key aett mints",
 			"for it through an OAuth client, tagged with its role. Your policy stays yours.",
 			"",
-			"1. In the tailnet policy file (https://login.tailscale.com/admin/acls/file), add the tags:",
+			"1. In the tailnet policy file (https://login.tailscale.com/admin/acls/file), add the tags, each",
+			`   owned by ${ownerTag}, the OAuth client's own tag, so it can mint keys with any one of them:`,
 			"",
-			`   "tagOwners": { ${tags.map((tag) => `"${tag}": ["autogroup:admin"]`).join(", ")} },`,
+			`   "tagOwners": { "${ownerTag}": ["autogroup:admin"], ${tags.map((tag) => `"${tag}": ["autogroup:admin", "${ownerTag}"]`).join(", ")} },`,
 			"",
 			"   and let this computer reach them on port 22. Give tag:unlock no access of its own: an",
 			"   encrypted machine's initrd joins with it, and its key sits unencrypted on the boot disk.",
@@ -74,8 +75,8 @@ export const setupTailscale = Effect.fn("setupTailscale")(function* (root: strin
 			"2. Under Settings → OAuth clients (https://login.tailscale.com/admin/settings/oauth),",
 			"   generate a client with these scopes:",
 			"",
-			`   Auth Keys: Write, with the tags ${tags.join(", ")}`,
-			"   Devices Core: Write",
+			`   Auth Keys: Write, with the tag ${ownerTag}`,
+			`   Devices Core: Write, with the tag ${ownerTag}`,
 			"",
 		].join("\n"),
 	);
@@ -192,13 +193,43 @@ export const nameOnTailnet = Effect.fn("nameOnTailnet")(function* (
 		);
 	});
 
-	if (missing.length === 0) return;
+	// A machine whose role changed still has its old role's tag, which keys only set when it joined.
+	const retagged = fleet.machines.filter(({ name, role }) => {
+		const recorded = state.machines.get(name);
+
+		return (
+			machines.has(name) &&
+			recorded?.node !== undefined &&
+			recorded.tailscaleApp !== true &&
+			recorded.tag !== tagOf(role)
+		);
+	});
+
+	if (missing.length === 0 && retagged.length === 0) return;
 
 	const client = yield* oauthClient(root);
 
 	if (Option.isNone(client)) return;
 
-	const devices = yield* (yield* Tailscale).devices(client.value);
+	const tailscale = yield* Tailscale;
+	const devices = yield* tailscale.devices(client.value);
+
+	yield* Effect.forEach(retagged, ({ name, role }) =>
+		Effect.forEach(
+			Option.toArray(
+				Option.fromUndefinedOr(devices.find(({ node }) => node === state.machines.get(name)?.node)),
+			),
+			(device) =>
+				Effect.gen(function* () {
+					if (!(device.tags.length === 1 && device.tags[0] === tagOf(role))) {
+						yield* tailscale.setTags(client.value, device.node, [tagOf(role)]);
+						yield* Console.log(`Tagged ${name} ${tagOf(role)} on the tailnet.`);
+					}
+
+					yield* updateRecord(root, name, { tag: tagOf(role) });
+				}),
+		),
+	);
 
 	yield* Effect.forEach(missing, ({ name, role }) => {
 		const recorded = state.machines.get(name);
@@ -220,6 +251,7 @@ export const nameOnTailnet = Effect.fn("nameOnTailnet")(function* (
 				tailnet: found.address,
 				tailnetName: found.name,
 				node: found.node,
+				tag: tagOf(role),
 			}),
 		);
 	});
