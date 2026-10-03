@@ -104,7 +104,7 @@ export const setupTailscale = Effect.fn("setupTailscale")(function* (root: strin
 
 	const client: OAuthClient = { id: id.trim(), secret: Redacted.value(secret).trim() };
 
-	yield* tailscale.check(client);
+	yield* tailscale.check(client, tags);
 	yield* secrets.write(root, clientFile, state.operator.ageKeys, JSON.stringify(client));
 
 	return yield* Console.log(

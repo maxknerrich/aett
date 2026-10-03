@@ -1,6 +1,12 @@
 import { isIP } from "node:net";
-import { Context, Effect, Layer, Redacted, Schema } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { Context, Effect, Layer, Option, Redacted, Schema } from "effect";
+import {
+	FetchHttpClient,
+	HttpClient,
+	HttpClientError,
+	HttpClientRequest,
+	HttpClientResponse,
+} from "effect/http";
 
 export class TailscaleError extends Schema.TaggedError<TailscaleError>()("TailscaleError", {
 	message: Schema.String,
@@ -40,14 +46,55 @@ const Token = Schema.Struct({
 	scope: Schema.optionalKey(Schema.String),
 });
 
-// What a failed call says, with the API's own message where it gave one.
+// What the API says about a call it refused.
+const Refusal = Schema.Struct({ message: Schema.String });
+
+// Fails with what a failed call says, with the API's own message where it gave one.
 const failure = (doing: string) => (cause: { readonly message: string }) =>
-	new TailscaleError({ message: `Could not ${doing} through Tailscale's API: ${cause.message}` });
+	Effect.flatMap(
+		HttpClientError.isHttpClientError(cause) && cause.response !== undefined
+			? cause.response.json.pipe(
+					Effect.map(Schema.decodeUnknownOption(Refusal)),
+					Effect.orElseSucceed(() => Option.none()),
+				)
+			: Effect.succeed(Option.none()),
+		(refusal) =>
+			Effect.fail(
+				new TailscaleError({
+					message: `Could not ${doing} through Tailscale's API: ${Option.match(refusal, {
+						onNone: () => cause.message,
+						onSome: ({ message }) => message,
+					})}`,
+				}),
+			),
+	);
 
 /** The scopes aett's OAuth client needs: minting keys, and finding and removing devices. */
 export const scopes = ["auth_keys", "devices:core"] as const;
 
-const Key = Schema.Struct({ key: Schema.String, expires: Schema.String });
+const Key = Schema.Struct({ id: Schema.String, key: Schema.String, expires: Schema.String });
+
+// A preauthorized, non-reusable key with `tags`, good for `lifetime` milliseconds.
+const mint = (
+	api: HttpClient.HttpClient,
+	tags: ReadonlyArray<string>,
+	lifetime: number,
+	description: string,
+) =>
+	HttpClientRequest.post("/tailnet/-/keys").pipe(
+		HttpClientRequest.bodyJson({
+			capabilities: {
+				devices: {
+					create: { reusable: false, ephemeral: false, preauthorized: true, tags },
+				},
+			},
+			expirySeconds: lifetime / 1000,
+			description,
+		}),
+		Effect.flatMap(api.execute),
+		Effect.flatMap(HttpClientResponse.schemaBodyJson(Key)),
+		Effect.catch(failure(`mint a key tagged ${tags.join(", ")}`)),
+	);
 
 const Devices = Schema.Struct({
 	devices: Schema.Array(
@@ -70,8 +117,15 @@ const Devices = Schema.Struct({
 export class Tailscale extends Context.Service<
 	Tailscale,
 	{
-		/** Checks that `client` signs in with the scopes aett needs, before aett keeps it. */
-		readonly check: (client: OAuthClient) => Effect.Effect<void, TailscaleError>;
+		/**
+		 * Checks that `client` signs in with the scopes aett needs and mints keys
+		 * with each of `tags` alone, before aett keeps it. The keys it tries are
+		 * deleted again.
+		 */
+		readonly check: (
+			client: OAuthClient,
+			tags: ReadonlyArray<string>,
+		) => Effect.Effect<void, TailscaleError>;
 		/** A preauthorized, non-reusable key for one machine with `tags`, valid for a day. */
 		readonly mintKey: (
 			client: OAuthClient,
@@ -112,7 +166,7 @@ export class Tailscale extends Context.Service<
 					)
 					.pipe(
 						Effect.flatMap(HttpClientResponse.schemaBodyJson(Token)),
-						Effect.mapError(failure("sign in with the OAuth client")),
+						Effect.catch(failure("sign in with the OAuth client")),
 					);
 
 			// A client authorized with the OAuth client's access token.
@@ -130,22 +184,7 @@ export class Tailscale extends Context.Service<
 				client: OAuthClient,
 				tags: ReadonlyArray<string>,
 			) {
-				const api = yield* authorized(client);
-
-				const minted = yield* HttpClientRequest.post("/tailnet/-/keys").pipe(
-					HttpClientRequest.bodyJson({
-						capabilities: {
-							devices: {
-								create: { reusable: false, ephemeral: false, preauthorized: true, tags },
-							},
-						},
-						expirySeconds: keyLifetime / 1000,
-						description: "aett",
-					}),
-					Effect.flatMap(api.execute),
-					Effect.flatMap(HttpClientResponse.schemaBodyJson(Key)),
-					Effect.mapError(failure(`mint a key for ${tags.join(", ")}`)),
-				);
+				const minted = yield* mint(yield* authorized(client), tags, keyLifetime, "aett");
 
 				return {
 					key: Redacted.make(minted.key),
@@ -160,7 +199,7 @@ export class Tailscale extends Context.Service<
 					.get("/tailnet/-/devices")
 					.pipe(
 						Effect.flatMap(HttpClientResponse.schemaBodyJson(Devices)),
-						Effect.mapError(failure("list the tailnet's devices")),
+						Effect.catch(failure("list the tailnet's devices")),
 					);
 
 				return listed.devices.flatMap((device) => {
@@ -193,11 +232,14 @@ export class Tailscale extends Context.Service<
 						(error) => "response" in error && error.response?.status === 404,
 						() => Effect.void,
 					),
-					Effect.mapError(failure(`remove the device ${node}`)),
+					Effect.catch(failure(`remove the device ${node}`)),
 				);
 			});
 
-			const check = Effect.fn("Tailscale.check")(function* (client: OAuthClient) {
+			const check = Effect.fn("Tailscale.check")(function* (
+				client: OAuthClient,
+				tags: ReadonlyArray<string>,
+			) {
 				const granted = new Set((yield* token(client)).scope?.split(" ") ?? []);
 				const missing = scopes.filter((scope) => !granted.has(scope));
 
@@ -207,7 +249,28 @@ export class Tailscale extends Context.Service<
 					});
 				}
 
-				return yield* Effect.void;
+				const api = yield* authorized(client);
+
+				// aett mints each machine's key with its role's tag alone, which the policy has to allow.
+				return yield* Effect.forEach(
+					tags,
+					(tag) =>
+						Effect.gen(function* () {
+							const { id } = yield* mint(api, [tag], 60_000, "aett check").pipe(
+								Effect.mapError(
+									(error) =>
+										new TailscaleError({
+											message: `${error.message}. The policy has to let the OAuth client's tag own ${tag} in tagOwners.`,
+										}),
+								),
+							);
+
+							yield* api
+								.del(`/tailnet/-/keys/${encodeURIComponent(id)}`)
+								.pipe(Effect.catch(failure(`delete the key ${id} it minted to check ${tag}`)));
+						}),
+					{ discard: true },
+				);
 			});
 
 			const setTags = Effect.fn("Tailscale.setTags")(function* (
@@ -220,7 +283,7 @@ export class Tailscale extends Context.Service<
 				yield* HttpClientRequest.post(`/device/${encodeURIComponent(node)}/tags`).pipe(
 					HttpClientRequest.bodyJson({ tags }),
 					Effect.flatMap(api.execute),
-					Effect.mapError(failure(`tag the device ${node} ${tags.join(", ")}`)),
+					Effect.catch(failure(`tag the device ${node} ${tags.join(", ")}`)),
 				);
 			});
 
