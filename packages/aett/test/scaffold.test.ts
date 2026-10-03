@@ -45,33 +45,55 @@ describe("parseMachineFlag", () => {
 });
 
 describe("fleetSource", () => {
-	it("declares no machines with only fleet() imported", () => {
-		expect(fleetSource([])).toBe(
-			'import { fleet } from "aett"\n\nexport default fleet({\n\tmachines: {},\n})\n',
+	it("declares the user and no machines with only fleet() imported", () => {
+		expect(fleetSource("mkn", [], Option.none())).toBe(
+			'import { fleet } from "aett"\n\nexport default fleet({\n\tuser: "mkn",\n\tmachines: {},\n})\n',
 		);
 	});
 
-	it("declares each machine by its role, importing only the roles it uses", () => {
+	it("declares each machine by its role and the Mac's apps in a pack named after it", () => {
 		expect(
-			fleetSource([
-				newMachine("kronos", "hypervisor", { encrypted: true }),
-				newMachine("web-1", "server"),
-				newMachine("fawkes", "computer", { mac: true }),
-			]),
+			fleetSource(
+				"mkn",
+				[
+					newMachine("kronos", "hypervisor", { encrypted: true }),
+					newMachine("vault", "nas", { encrypted: true }),
+					newMachine("web-1", "server"),
+					newMachine("fawkes", "computer", { mac: true }),
+				],
+				Option.some({ mac: "fawkes", apps: ["ghostty", "raycast"] }),
+			),
 		).toBe(
 			[
-				'import { computer, fleet, hypervisor, server } from "aett"',
+				'import { computer, fleet, hypervisor, nas, server } from "aett"',
 				"",
 				"export default fleet({",
+				'\tuser: "mkn",',
 				"\tmachines: {",
 				"\t\tkronos: hypervisor({ system: { encrypted: true } }),",
+				"\t\tvault: nas(),",
 				'\t\t"web-1": server(),',
 				'\t\tfawkes: computer({ os: "macos" }),',
+				"\t},",
+				"\tservices: {",
+				'\t\tfawkes: { on: "fawkes", apps: ["ghostty", "raycast"] },',
 				"\t},",
 				"})",
 				"",
 			].join("\n"),
 		);
+	});
+});
+
+describe("fleetSource adopting a Mac named like one of aett's entries", () => {
+	it("puts its apps in a pack named apps instead", () => {
+		expect(
+			fleetSource(
+				"mkn",
+				[newMachine("backup", "computer", { mac: true })],
+				Option.some({ mac: "backup", apps: ["ghostty"] }),
+			),
+		).toContain('\t\tapps: { on: "backup", apps: ["ghostty"] },');
 	});
 });
 

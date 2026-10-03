@@ -1,0 +1,334 @@
+import { arch, platform } from "node:os";
+import { Console, Effect, FileSystem, Option, Path, Redacted, Schema, Stream } from "effect";
+import { Prompt } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { localConnection } from "../adapters/local.ts";
+import { Secrets } from "../adapters/secrets.ts";
+import type { Fleet, Machine } from "../domain/fleet.ts";
+import type { Entry } from "../domain/home.ts";
+import { ageKeyPair } from "../domain/state.ts";
+import type { State } from "../domain/state.ts";
+import { type Build, Engine } from "../engine/engine.ts";
+import { applyHome, planHome } from "./home.ts";
+import { updateRecord } from "./load.ts";
+import { recordTailnet } from "./reach.ts";
+
+export class MacError extends Schema.TaggedError<MacError>()("MacError", {
+	message: Schema.String,
+}) {}
+
+// Where a Mac's own age key lives in the fleet, encrypted to the operators.
+const ageKeyFile = (name: string) => `secrets/${name}/age-key.json`;
+
+/** Whether this run should go on: the operator agreed, or `yes` answers for them. */
+const agree = (yes: boolean, message: string) =>
+	yes ? Effect.succeed(true) : Prompt.Confirm({ message });
+
+/** Homebrew's binary on this Mac, wherever it was installed. */
+const brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"];
+
+/**
+ * The Mac in `fleet` that aett runs on: the one whose local host name it
+ * has, or the one named. A Mac named under another name is only this Mac
+ * once the operator says so, which `yes` does for them: its first apply
+ * gives it that name. None off macOS.
+ */
+export const thisMac = Effect.fn("thisMac")(function* (
+	fleet: Fleet,
+	named: Option.Option<string>,
+	yes: boolean,
+) {
+	if (platform() !== "darwin") return Option.none<Machine>();
+
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+	const local = (yield* spawner
+		.string(ChildProcess.make("/usr/sbin/scutil", ["--get", "LocalHostName"], { stdin: "ignore" }))
+		.pipe(Effect.orElseSucceed(() => "")))
+		.trim()
+		.toLowerCase();
+
+	const wanted = Option.getOrElse(named, () => local);
+
+	const mac = Option.fromUndefinedOr(
+		fleet.machines.find((machine) => machine.kind === "macos" && machine.name === wanted),
+	);
+
+	if (Option.isNone(mac) || wanted === local) return mac;
+
+	return (yield* agree(
+		yes,
+		`This Mac is ${local}, not ${wanted}. Apply ${wanted} to it, renaming it ${wanted}?`,
+	))
+		? mac
+		: Option.none<Machine>();
+});
+
+/**
+ * Records what aett needs to build the Mac it runs on before its first apply:
+ * its platform, whether it runs the Tailscale app and Determinate Nix, and an
+ * age key of its own for its secrets, kept encrypted to the operators.
+ */
+export const prepareMac = Effect.fn("prepareMac")(function* (
+	root: string,
+	state: State,
+	name: string,
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const secrets = yield* Secrets;
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const recorded = state.machines.get(name);
+
+	const system = arch() === "arm64" ? "aarch64-darwin" : "x86_64-darwin";
+	const app = yield* fs.exists("/Applications/Tailscale.app");
+	const determinate = yield* fs.exists("/usr/local/bin/determinate-nixd");
+
+	if (
+		recorded?.system !== system ||
+		recorded.tailscaleApp !== app ||
+		recorded.determinate !== determinate
+	) {
+		yield* updateRecord(root, name, { system, tailscaleApp: app, determinate });
+	}
+
+	// A Mac already on the tailnet, through the app or an earlier apply, is known there by its node.
+	yield* recordTailnet(root, state, name, yield* localConnection);
+
+	if (recorded?.age !== undefined && (yield* fs.exists(path.join(root, ageKeyFile(name))))) {
+		return;
+	}
+
+	const keygen = path.join(yield* (yield* Engine).tools, "age-keygen");
+	const generated = yield* spawner.string(ChildProcess.make(keygen, [], { stdin: "ignore" }));
+
+	const pair = yield* Effect.fromOption(
+		ageKeyPair(generated),
+		() => new MacError({ message: "age-keygen printed no key pair." }),
+	);
+
+	yield* secrets.write(root, ageKeyFile(name), state.operator.ageKeys, pair.secretKey);
+	yield* updateRecord(root, name, { age: pair.publicKey });
+	yield* Console.log(`Made ${name}'s age key, which its secrets are encrypted to.`);
+});
+
+// Runs Homebrew as the operator without asking anything; returns what it printed and its exit code.
+const runBrew = Effect.fn("runBrew")(function* (args: ReadonlyArray<string>) {
+	const fs = yield* FileSystem.FileSystem;
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const [binary] = yield* Effect.filter(brew, (candidate) => fs.exists(candidate));
+
+	if (binary === undefined) {
+		return yield* new MacError({
+			message:
+				"Homebrew isn't installed, and a Mac's apps come through it. Install it first: /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"",
+		});
+	}
+
+	return yield* Effect.scoped(
+		Effect.gen(function* () {
+			const handle = yield* spawner.spawn(
+				ChildProcess.make(binary, [...args], {
+					env: { HOMEBREW_NO_AUTO_UPDATE: "1" },
+					extendEnv: true,
+					stdin: "ignore",
+					stderr: "inherit",
+				}),
+			);
+
+			const [stdout, exitCode] = yield* Effect.all(
+				[Stream.mkString(Stream.decodeText(handle.stdout)), handle.exitCode],
+				{ concurrency: "unbounded" },
+			);
+
+			return { stdout, exitCode };
+		}),
+	).pipe(
+		Effect.mapError((error) => new MacError({ message: `Could not run brew: ${error.message}` })),
+	);
+});
+
+/**
+ * The apps and formulae Homebrew has on this Mac that `brewfile` doesn't
+ * list: what applying with zap removes. brew bundle cleanup lists them
+ * without --force and fails when it finds any.
+ */
+const undeclared = Effect.fn("undeclared")(function* (brewfile: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const directory = yield* fs.makeTempDirectoryScoped({ prefix: "aett-" });
+	const file = `${directory}/Brewfile`;
+
+	yield* fs.writeFileString(file, brewfile);
+
+	const { stdout } = yield* runBrew(["bundle", "cleanup", `--file=${file}`]);
+
+	// It prints a heading per kind, such as "Would uninstall casks:", then a name per line.
+	return stdout
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line !== "" && !/^(Would|Run) /.test(line));
+}, Effect.scoped);
+
+/**
+ * Applies the Mac aett runs on: builds its nix-darwin system here, shows what
+ * changes, and once the operator agrees, switches to it through sudo and
+ * syncs the home. The first time, it lists the Homebrew apps fleet.ts doesn't
+ * name and asks once whether apply may remove them, now and from then on.
+ * Returns whether the build has to be made again because that answer changed
+ * it.
+ */
+export const applyMac = Effect.fn("applyMac")(function* (
+	root: string,
+	build: Build,
+	state: State,
+	machine: Machine,
+	user: string,
+	home: Option.Option<ReadonlyArray<Entry>>,
+	yes: boolean,
+) {
+	const engine = yield* Engine;
+	const secrets = yield* Secrets;
+	const connection = yield* localConnection;
+	const recorded = state.machines.get(machine.name);
+
+	if (recorded?.zap === undefined) {
+		const extra = yield* undeclared(yield* engine.brewfile(build, machine.name));
+
+		const zap = yield* Prompt.Confirm({
+			message: [
+				extra.length === 0
+					? `Homebrew has nothing on ${machine.name} that fleet.ts doesn't list.`
+					: [
+							`Homebrew has these on ${machine.name}, and fleet.ts doesn't list them:`,
+							...extra.map((line) => `  ${line}`),
+						].join("\n"),
+				`Remove ${extra.length === 0 ? "" : "them now, and "}whatever fleet.ts drops from now on? (aett asks only this once)`,
+			].join("\n"),
+			initial: false,
+		});
+
+		yield* updateRecord(root, machine.name, { zap });
+
+		// The build so far keeps everything; zapping is part of the system.
+		if (zap) return true;
+	}
+
+	const system = yield* engine.buildDarwin(build, machine.name);
+
+	const current = (yield* connection
+		.run("readlink /run/current-system || true")
+		.pipe(Effect.orElseSucceed(() => ""))).trim();
+
+	if (current === system) {
+		// The system holds, but apps may have come or gone by hand since.
+		yield* reconcileApps(yield* engine.brewfile(build, machine.name), recorded?.zap === true);
+		yield* Console.log(`${machine.name} is up to date.`);
+	} else {
+		const changes =
+			current === ""
+				? "nix-darwin takes over this Mac."
+				: (yield* connection.run(`nix store diff-closures ${current} ${system}`)).trim();
+
+		yield* Console.log(
+			changes === ""
+				? `${machine.name}'s new system changes no package versions.`
+				: `Changes on ${machine.name}:\n${changes}`,
+		);
+
+		if (!(yield* agree(yes, `Switch ${machine.name} to the new system?`))) {
+			yield* Console.log(`Left ${machine.name} as it is.`);
+
+			return false;
+		}
+
+		yield* Console.log(`Switching ${machine.name}; sudo asks for your password or Touch ID…`);
+		yield* engine.activateDarwin(
+			system,
+			Redacted.make(yield* secrets.read(root, ageKeyFile(machine.name))),
+		);
+		yield* Console.log(`Switched ${machine.name} to ${system}.`);
+	}
+
+	yield* Effect.forEach(Option.toArray(home), (entries) =>
+		planHome(connection, machine.name, user, entries).pipe(
+			Effect.flatMap((sync) =>
+				sync.plan.changes
+					? agree(yes, `Sync ${user}'s home on ${machine.name}?`).pipe(
+							Effect.flatMap((sure) => (sure ? applyHome(connection, sync) : Effect.void)),
+						)
+					: applyHome(connection, sync),
+			),
+		),
+	);
+
+	return false;
+});
+
+// Runs Homebrew as the operator on aett's terminal, where an app's installer may ask for sudo.
+const brewOnTerminal = Effect.fn("brewOnTerminal")(function* (args: ReadonlyArray<string>) {
+	const fs = yield* FileSystem.FileSystem;
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+	const [binary] = yield* Effect.filter(brew, (candidate) => fs.exists(candidate));
+
+	if (binary === undefined) return yield* new MacError({ message: "Homebrew isn't installed." });
+
+	const exitCode = yield* spawner
+		.exitCode(
+			ChildProcess.make(binary, [...args], {
+				stdin: "inherit",
+				stdout: "inherit",
+				stderr: "inherit",
+				detached: false,
+			}),
+		)
+		.pipe(
+			Effect.mapError((error) => new MacError({ message: `Could not run brew: ${error.message}` })),
+		);
+
+	return yield* exitCode === 0
+		? Effect.void
+		: new MacError({ message: `brew ${args.join(" ")} failed with exit code ${exitCode}.` });
+});
+
+/**
+ * Brings Homebrew to the Mac's Brewfile without switching the system, as its
+ * activation would: installs what is missing and, once the operator agreed,
+ * zaps what fleet.ts doesn't list.
+ */
+const reconcileApps = Effect.fn("reconcileApps")(function* (brewfile: string, zap: boolean) {
+	const fs = yield* FileSystem.FileSystem;
+	const file = `${yield* fs.makeTempDirectoryScoped({ prefix: "aett-" })}/Brewfile`;
+
+	yield* fs.writeFileString(file, brewfile);
+	yield* brewOnTerminal(["bundle", "install", `--file=${file}`, "--no-upgrade"]);
+
+	if (zap) yield* brewOnTerminal(["bundle", "cleanup", `--file=${file}`, "--force", "--zap"]);
+}, Effect.scoped);
+
+/**
+ * Upgrades everything the Mac's Brewfile lists, its own apps and those its
+ * plugins bring, which aett leaves unpinned.
+ */
+export const upgradeApps = Effect.fn("upgradeApps")(function* (name: string, brewfile: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const file = `${yield* fs.makeTempDirectoryScoped({ prefix: "aett-" })}/Brewfile`;
+
+	yield* fs.writeFileString(file, brewfile);
+	yield* Console.log(`Upgrading ${name}'s apps…`);
+
+	// Fresh metadata first; an app's installer may ask for sudo on the terminal.
+	yield* brewOnTerminal(["update"]);
+
+	return yield* brewOnTerminal(["bundle", "install", `--file=${file}`, "--upgrade"]);
+}, Effect.scoped);
+
+/** The casks Homebrew has on this Mac, which aett create adopts as its apps. */
+export const installedApps = runBrew(["list", "--cask", "-1"]).pipe(
+	Effect.map(({ stdout }) =>
+		stdout
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line !== ""),
+	),
+	Effect.orElseSucceed((): ReadonlyArray<string> => []),
+);

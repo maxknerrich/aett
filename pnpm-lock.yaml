@@ -203,6 +203,7 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.118(effect@4.0.0-rc.118)
+    devDependencies:
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.118
@@ -210,7 +211,7 @@ importers:
   packages/create-aett:
     dependencies:
       aett:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../aett
 
 packages:

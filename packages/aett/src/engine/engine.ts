@@ -1,24 +1,42 @@
-import { Context, type Effect, type Option, type PlatformError, Schema } from "effect";
+import {
+	Context,
+	type Effect,
+	type Option,
+	type PlatformError,
+	type Redacted,
+	Schema,
+} from "effect";
 import type { Connection, SshError } from "../adapters/ssh.ts";
 import type { Disk } from "../domain/disk.ts";
-import type { Fleet } from "../domain/fleet.ts";
-import type { InputsLock, Pins } from "../domain/pins.ts";
+import type { Channel, Fleet } from "../domain/fleet.ts";
+import type { Source } from "../domain/packages.ts";
+import type { InputsLock, Pins, Platform } from "../domain/pins.ts";
+import type { Extras } from "./nix/fleet-json.ts";
 import type { State } from "../domain/state.ts";
 
 export class EngineError extends Schema.TaggedError<EngineError>()("EngineError", {
 	message: Schema.String,
 }) {}
 
-/** A fleet's build: where the engine wrote it and the machines it can build. */
+/** A fleet's build: where the engine wrote it, the machines it can build and which of them are Macs. */
 export interface Build {
 	readonly directory: string;
 	readonly machines: ReadonlyArray<string>;
+	readonly macs: ReadonlyArray<string>;
 }
 
 /** What the hardware probe tells install: the internal disks, and whether the installer booted via UEFI. */
 export interface Discovered {
 	readonly disks: ReadonlyArray<Disk>;
 	readonly uefi: boolean;
+}
+
+/** An initrd on the tailnet: its address, name and node, and its sshd's public key. */
+export interface Enrolled {
+	readonly tailnet: string;
+	readonly tailnetName: string;
+	readonly node: string;
+	readonly hostKey: string;
 }
 
 /** A guest as its host sees it: not installed there yet, installed but not running, or running. */
@@ -56,24 +74,24 @@ export class Engine extends Context.Service<
 			name: string,
 			target: Connection,
 		) => Effect.Effect<Discovered, EngineError | SshError | PlatformError.PlatformError>;
-		/** Whether discover has saved the machine's hardware report in `<root>/state/<name>/`. */
+		/** The platform the hardware report discover saved in `<root>/state/<name>/` names; none without a report. */
 		readonly discovered: (
 			root: string,
 			name: string,
-		) => Effect.Effect<boolean, PlatformError.PlatformError>;
+		) => Effect.Effect<Option.Option<Platform>, EngineError | PlatformError.PlatformError>;
 		/** The pins of the engine's inputs that aett is tested with, which a fleet starts from. */
 		readonly defaultInputs: Effect.Effect<InputsLock, EngineError | PlatformError.PlatformError>;
 		/**
 		 * Writes the build for `fleet` to `<root>/.aett/build/`, locked to the
-		 * fleet's `pins`. It covers the machines aett can build and carries
-		 * `secrets`, the machine secrets the fleet has, for the machines that
-		 * read them.
+		 * fleet's `pins`, with every plugin's modules. It covers the machines aett
+		 * can build and carries the machine secrets the fleet has, for the
+		 * machines that read them, and the fingerprints of its certificates.
 		 */
 		readonly emit: (
 			root: string,
 			fleet: Fleet,
 			state: State,
-			secrets: ReadonlyArray<string>,
+			extras: Extras,
 			pins: Pins,
 		) => Effect.Effect<Build, PlatformError.PlatformError>;
 		/** Moves the named inputs, or all of them when none are named, from `inputs` to their latest revisions. Returns the new pins. */
@@ -81,6 +99,21 @@ export class Engine extends Context.Service<
 			inputs: InputsLock,
 			names: ReadonlyArray<string>,
 		) => Effect.Effect<InputsLock, EngineError | PlatformError.PlatformError>;
+		/**
+		 * Which source has each package name on `platform` for a machine on
+		 * `channel`, at the revisions `inputs` pins, looked up in order:
+		 * llm-agents.nix, nixpkgs on that channel, nixpkgs unstable. None for a
+		 * name no source has.
+		 */
+		readonly packageSources: (
+			inputs: InputsLock,
+			platform: Platform,
+			channel: Channel,
+			names: ReadonlyArray<string>,
+		) => Effect.Effect<
+			ReadonlyMap<string, Option.Option<Source>>,
+			EngineError | PlatformError.PlatformError
+		>;
 		/** Downloads a file on the controller and returns the hash a build pins it by. */
 		readonly prefetch: (url: string) => Effect.Effect<string, EngineError>;
 		/** Checks a machine's system on the controller, before any machine is contacted. Returns what it evaluated. */
@@ -144,6 +177,37 @@ export class Engine extends Context.Service<
 			guest: string,
 			hostKey: HostKey,
 		) => Effect.Effect<void, SshError>;
+		/**
+		 * Makes `name`'s initrd its own node on the tailnet: joins it once with
+		 * `authKey` from the running machine and keeps its identity, with a host
+		 * key for the initrd's sshd, where the next boot loader install puts them
+		 * into the initrd.
+		 */
+		readonly enrollUnlock: (
+			target: Connection,
+			name: string,
+			authKey: Redacted.Redacted,
+		) => Effect.Effect<Enrolled, EngineError | SshError>;
+		/**
+		 * Hands the Wi-Fi networks `target` knows to its initrd, so it reaches the
+		 * tailnet without a cable. Returns whether they changed, which the boot
+		 * loader then has to put into the initrd.
+		 */
+		readonly unlockWifi: (target: Connection) => Effect.Effect<boolean, SshError>;
+		/** Installs `target`'s boot loader again for the system it runs, with its initrd's secrets as they are now. */
+		readonly refreshBoot: (target: Connection) => Effect.Effect<void, SshError>;
+		/** Builds the Mac `name`'s nix-darwin system on the Mac aett runs on. Returns the system. */
+		readonly buildDarwin: (build: Build, name: string) => Effect.Effect<string, EngineError>;
+		/** The Brewfile the Mac `name`'s system installs its apps from. */
+		readonly brewfile: (build: Build, name: string) => Effect.Effect<string, EngineError>;
+		/**
+		 * Makes `system` what the Mac aett runs on runs, through sudo, which asks
+		 * on the terminal. Its age key goes where sops-nix reads it first.
+		 */
+		readonly activateDarwin: (
+			system: string,
+			ageKey: Redacted.Redacted,
+		) => Effect.Effect<void, EngineError>;
 		/** From an installer: builds the machine there, erases and formats its disk, places `secrets` and installs the system. */
 		readonly install: (
 			build: Build,

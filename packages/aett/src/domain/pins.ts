@@ -1,5 +1,5 @@
-import { DateTime, Option, Predicate, Schema } from "effect";
-import type { Release } from "./stacks.ts";
+import { DateTime, Effect, Option, Predicate, Schema } from "effect";
+import { type Release, Source } from "./packages.ts";
 
 // A value in a lock node's `locked` or `original`.
 const LockValue = Schema.Union([Schema.String, Schema.Number, Schema.Boolean]);
@@ -36,18 +36,30 @@ export const ReleasePin = Schema.Struct({
 export interface ReleasePin extends Schema.Schema.Type<typeof ReleasePin> {}
 
 /**
- * state/pins.json: the fleet's own pins. `inputs` locks the engine's inputs;
- * `releases` pins each release source by its repository.
+ * state/pins.json: the fleet's own pins. `inputs` locks the engine's inputs,
+ * `releases` pins each release source by its repository, and `packages`
+ * records which source each package name comes from, picked the first time
+ * aett saw it.
  */
 export const Pins = Schema.Struct({
 	inputs: InputsLock,
 	releases: Schema.Record(Schema.String, ReleasePin),
+	packages: Schema.Record(Schema.String, Source).pipe(
+		Schema.withDecodingDefaultKey(Effect.succeed({})),
+	),
 });
 
 export interface Pins extends Schema.Schema.Type<typeof Pins> {}
 
-/** The platforms aett resolves release assets for. */
-export const platforms = ["x86_64-linux", "aarch64-linux"] as const;
+/** The platforms aett builds machines for, and resolves release assets for. */
+export const platforms = [
+	"x86_64-linux",
+	"aarch64-linux",
+	"aarch64-darwin",
+	"x86_64-darwin",
+] as const;
+
+export const Platform = Schema.Literals(platforms);
 
 export type Platform = (typeof platforms)[number];
 
@@ -55,6 +67,8 @@ export type Platform = (typeof platforms)[number];
 const targets: Record<Platform, ReadonlyArray<string>> = {
 	"x86_64-linux": ["x86_64-unknown-linux-musl", "x86_64-unknown-linux-gnu"],
 	"aarch64-linux": ["aarch64-unknown-linux-musl", "aarch64-unknown-linux-gnu"],
+	"aarch64-darwin": ["aarch64-apple-darwin"],
+	"x86_64-darwin": ["x86_64-apple-darwin"],
 };
 
 /**

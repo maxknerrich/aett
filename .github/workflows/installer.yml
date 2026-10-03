@@ -11,6 +11,9 @@ on:
     paths:
       - packages/aett/src/engine/nix/flake/**
       - .github/workflows/installer.yml
+    # A version tag, such as v0.1.0, publishes a release with the installers.
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -47,14 +50,18 @@ jobs:
             --out-link result \
             ./packages/aett/src/engine/nix/flake#packages.${{ matrix.system }}.installer
 
+      # Named after aett's version, and the commit too unless a version tag built it.
       - name: Prepare assets
-        env:
-          ISO: aett-installer-${{ matrix.system }}.iso
         run: |
           set -euo pipefail
+          version=$(jq -r .version packages/aett/package.json)
+          case "$GITHUB_REF" in
+            refs/tags/v*) name=aett-installer-$version-${{ matrix.system }}.iso ;;
+            *) name=aett-installer-$version-${GITHUB_SHA::7}-${{ matrix.system }}.iso ;;
+          esac
           mkdir -p dist
-          cp "result/iso/$ISO" "dist/$ISO"
-          (cd dist && sha256sum "$ISO" >"$ISO.sha256")
+          cp "result/iso/aett-installer-${{ matrix.system }}.iso" "dist/$name"
+          (cd dist && sha256sum "$name" >"$name.sha256")
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -64,10 +71,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Releases are made by hand from main until the first real version: run this workflow on main.
+  # A version tag publishes its installers as the release of that tag.
   publish:
     name: Publish release
-    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -94,19 +101,28 @@ jobs:
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: installer-${{ github.run_id }}-${{ github.run_attempt }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -eEuo pipefail
+          # A tag is released once; rerunning it must not touch the published release.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "$RELEASE_TAG is released already." >&2
+            exit 1
+          fi
+
+          # Only the draft this run makes is removed when publishing fails.
           cleanup() {
-            gh release delete "$RELEASE_TAG" --cleanup-tag --yes >/dev/null 2>&1 || true
+            if [ "$(gh release view "$RELEASE_TAG" --json isDraft -q .isDraft 2>/dev/null)" = true ]; then
+              gh release delete "$RELEASE_TAG" --yes >/dev/null 2>&1 || true
+            fi
           }
           trap cleanup ERR
           trap 'cleanup; exit 1' INT TERM
 
           gh release create "$RELEASE_TAG" dist/* \
-            --target "$GITHUB_SHA" \
-            --title "aett installer" \
-            --notes "Installer images for x86_64 and aarch64." \
+            --verify-tag \
+            --title "aett $RELEASE_TAG" \
+            --notes "Installer images for x86_64 and aarch64. Flash one to a USB stick and boot the machine from it." \
             --draft
           gh release edit "$RELEASE_TAG" --draft=false --latest
           trap - ERR INT TERM

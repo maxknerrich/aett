@@ -1,5 +1,10 @@
 # The aett installer image: a minimal NixOS live system that `aett machine install` drives over SSH.
-{ lib, pkgs, ... }:
+{
+  lib,
+  pkgs,
+  revision,
+  ...
+}:
 {
   networking.hostName = "aett-installer";
 
@@ -33,7 +38,7 @@
       (( ''${#code} == 8 ))
       echo "root:$code" | chpasswd
       mkdir -p /run/issue.d
-      printf '\n  aett installer code: \e[1m%s\e[0m\n\n' "$code" > /run/issue.d/aett.issue
+      printf '\n  aett installer ${revision}, code: \e[1m%s\e[0m\n\n' "$code" > /run/issue.d/aett.issue
     '';
   };
 
