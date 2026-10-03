@@ -108,6 +108,17 @@ export const create = Effect.fn("create")(function* (
 		});
 	}
 
+	// aett finds a fleet's age key in the keychain by its name alone, so two fleets can't share one.
+	if (
+		process.platform === "darwin" &&
+		options.keychain &&
+		(yield* keychainHolds(keychainService(name)))
+	) {
+		return yield* new CreateError({
+			message: `The login keychain already holds ${keychainService(name)}, the age key of another fleet named ${name}. Name this one differently, or pass --no-keychain.`,
+		});
+	}
+
 	const key = yield* Option.match(options.sshKey, {
 		onNone: () => agentKey,
 		onSome: (value) =>
@@ -323,8 +334,24 @@ const keepAgeKey = Effect.fn("keepAgeKey")(function* (
 	}
 });
 
-// Adds a generic password to the login keychain, the value fed to security on stdin rather than
-// on its command line, where ps would show it. Returns whether it worked.
+// Whether the login keychain holds a generic password for service.
+const keychainHolds = Effect.fn("keychainHolds")(function* (service: string) {
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+	const exitCode = yield* spawner
+		.exitCode(
+			ChildProcess.make("/usr/bin/security", ["find-generic-password", "-s", service], {
+				stdout: "ignore",
+				stderr: "ignore",
+			}),
+		)
+		.pipe(Effect.orElseSucceed(() => -1));
+
+	return exitCode === 0;
+});
+
+// Adds a generic password to the login keychain, never replacing one, the value fed to security on
+// stdin rather than on its command line, where ps would show it. Returns whether it worked.
 const storeInKeychain = Effect.fn("storeInKeychain")(function* (service: string, key: string) {
 	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -333,7 +360,7 @@ const storeInKeychain = Effect.fn("storeInKeychain")(function* (service: string,
 			ChildProcess.make("/usr/bin/security", ["-i"], {
 				stdin: Stream.make(
 					new TextEncoder().encode(
-						`add-generic-password -U -a ${JSON.stringify(process.env["USER"] ?? "aett")} -s ${JSON.stringify(service)} -w ${JSON.stringify(key)}\n`,
+						`add-generic-password -a ${JSON.stringify(process.env["USER"] ?? "aett")} -s ${JSON.stringify(service)} -w ${JSON.stringify(key)}\n`,
 					),
 				),
 				stdout: "ignore",

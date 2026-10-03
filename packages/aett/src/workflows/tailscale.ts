@@ -1,11 +1,11 @@
 import { Console, Effect, FileSystem, Option, Path, Redacted, Schema } from "effect";
 import { Prompt } from "effect/cli";
 import { Secrets } from "../adapters/secrets.ts";
-import { joinedAs, OAuthClient, Tailscale } from "../adapters/tailscale.ts";
+import { type Device, joinedAs, OAuthClient, Tailscale } from "../adapters/tailscale.ts";
 import type { Fleet } from "../domain/fleet.ts";
 import { grantsFor, ownerTag, tagOf, unlockTag } from "../domain/tailnet.ts";
 import { secretFile, tailscaleKey } from "../domain/secrets.ts";
-import type { State } from "../domain/state.ts";
+import type { MachineRecord, State } from "../domain/state.ts";
 import { machineAgeKeys } from "./identity.ts";
 import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
 
@@ -224,16 +224,8 @@ export const nameOnTailnet = Effect.fn("nameOnTailnet")(function* (
 	yield* Effect.forEach(unsettled, ({ name, role }) => {
 		const recorded = state.machines.get(name);
 
-		// One known only by its key joined after aett minted it; keys are good for a day.
 		const device = Option.fromUndefinedOr(
-			recorded?.tailnet === undefined
-				? joinedAs(
-						devices,
-						name,
-						recorded?.tag ?? tagOf(role),
-						new Date(Date.parse(recorded?.tailscaleKeyExpires ?? "") - 86_400_000),
-					)
-				: devices.find(({ address }) => address === recorded.tailnet),
+			recordedNode(devices, name, recorded, recorded?.tag ?? tagOf(role)),
 		);
 
 		return Effect.forEach(Option.toArray(device), (found) =>
@@ -279,20 +271,21 @@ export const findOnTailnet = Effect.fn("findOnTailnet")(function* (
 	const tailscale = yield* Tailscale;
 	const client = yield* oauthClient(root);
 	const machine = fleet.machines.find((declared) => declared.name === name);
-	const expires = state.machines.get(name)?.tailscaleKeyExpires;
+	const recorded = state.machines.get(name);
 
-	if (Option.isNone(client) || machine === undefined || expires === undefined) {
+	if (
+		Option.isNone(client) ||
+		machine === undefined ||
+		recorded?.tailscaleKeyExpires === undefined
+	) {
 		return Option.none<string>();
 	}
 
-	// Keys are good for a day; the machine joined after aett minted its key.
-	const minted = new Date(Date.parse(expires) - 86_400_000);
-
-	const device = joinedAs(
+	const device = recordedNode(
 		yield* tailscale.devices(client.value),
 		name,
-		state.machines.get(name)?.tag ?? tagOf(machine.role),
-		minted,
+		recorded,
+		recorded.tag ?? tagOf(machine.role),
 	);
 
 	if (device === undefined) return Option.none<string>();
@@ -318,15 +311,46 @@ export const removeFromTailnet = Effect.fn("removeFromTailnet")(function* (
 	const client = yield* oauthClient(root);
 	const recorded = state.machines.get(name);
 
-	const nodes = [recorded?.node, recorded?.unlock?.node].flatMap((node) =>
-		Option.toArray(Option.fromUndefinedOr(node)),
-	);
+	// One that joined before aett recorded its node, such as a guest whose host alone was applied.
+	const unnamed =
+		recorded?.node === undefined &&
+		(recorded?.tailnet !== undefined || recorded?.tailscaleKeyExpires !== undefined);
 
-	if (nodes.length === 0) return true;
+	if (recorded?.node === undefined && recorded?.unlock === undefined && !unnamed) return true;
 
 	if (Option.isNone(client)) return false;
+
+	const found = unnamed
+		? recordedNode(yield* tailscale.devices(client.value), name, recorded, recorded?.tag)?.node
+		: undefined;
+
+	const nodes = [recorded?.node ?? found, recorded?.unlock?.node].flatMap((node) =>
+		Option.toArray(Option.fromUndefinedOr(node)),
+	);
 
 	yield* Effect.forEach(nodes, (node) => tailscale.removeDevice(client.value, node));
 
 	return true;
 });
+
+/**
+ * The node a machine joined as, by its record: the one at its address, or,
+ * known only by the key aett minted for it with `tag`, the newest named
+ * after it with that tag since; keys are good for a day.
+ */
+const recordedNode = (
+	devices: ReadonlyArray<Device>,
+	name: string,
+	recorded: MachineRecord | undefined,
+	tag: string | undefined,
+) =>
+	recorded?.tailnet === undefined
+		? recorded?.tailscaleKeyExpires === undefined || tag === undefined
+			? undefined
+			: joinedAs(
+					devices,
+					name,
+					tag,
+					new Date(Date.parse(recorded.tailscaleKeyExpires) - 86_400_000),
+				)
+		: devices.find(({ address }) => address === recorded.tailnet);
