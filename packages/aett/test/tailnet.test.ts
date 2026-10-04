@@ -13,7 +13,7 @@ const needs = {
 };
 
 describe("policyNeeds", () => {
-	it("tags NixOS machines by role, adds tag:unlock for encrypted ones, and grants plugins' endpoints by tag; Macs have no tag", () => {
+	it("tags NixOS machines by role, adds tag:unlock for encrypted ones, and grants plugins' endpoints by tag, and Macs as members", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
@@ -29,7 +29,13 @@ describe("policyNeeds", () => {
 
 		expect(policyNeeds(declared)).toEqual({
 			tags: ["tag:hypervisor", "tag:nas", "tag:server", "tag:unlock"],
-			grants: [{ src: ["tag:nas", "tag:server"], dst: ["tag:server"], ip: ["tcp:51515"] }],
+			grants: [
+				{
+					src: ["tag:nas", "tag:server", "autogroup:member"],
+					dst: ["tag:server"],
+					ip: ["tcp:51515"],
+				},
+			],
 		});
 	});
 });

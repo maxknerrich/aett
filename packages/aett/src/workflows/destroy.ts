@@ -91,8 +91,6 @@ export const destroy = Effect.fn("destroy")(function* (
 	}
 
 	return yield* Console.log(
-		node === undefined
-			? `Destroyed ${name}.`
-			: `Destroyed ${name}. Remove ${node} from the tailnet at https://login.tailscale.com/admin/machines too, so a new ${name} gets its name.`,
+		`Destroyed ${name}. Remove ${node ?? name} from the tailnet at https://login.tailscale.com/admin/machines too, if it joined, so a new ${name} gets its name.`,
 	);
 }, Effect.scoped);

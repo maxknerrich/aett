@@ -117,7 +117,7 @@ const machine = Command.make("machine").pipe(
 			({ name, yes }) => Effect.flatMap(fleet, (root) => destroy(root, name, { yes })),
 		).pipe(
 			Command.withDescription(
-				"Delete a VM that fleet.ts no longer declares: its volume on its host, its node on the tailnet, its secrets and its state.",
+				"Delete a VM that fleet.ts no longer declares: its volume on its host, its secrets and its state. You remove its node in the Tailscale admin console.",
 			),
 		),
 	]),

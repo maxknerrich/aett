@@ -53,16 +53,24 @@ const tagsOf = (fleet: Fleet, names: ReadonlyArray<string>) =>
 		),
 	].toSorted();
 
+// How a grant names the named machines: by tag, and Macs, the owner's devices, as autogroup:member.
+const selectorsOf = (fleet: Fleet, names: ReadonlyArray<string>) => [
+	...tagsOf(fleet, names),
+	...(fleet.machines.some(({ name, kind }) => names.includes(name) && kind === "macos")
+		? ["autogroup:member"]
+		: []),
+];
+
 /**
  * The grants the tailnet's policy needs so each plugin's clients and
- * instances reach its instances' endpoints, by tag: one per plugin that has
+ * instances reach its instances' endpoints: one per plugin that has
  * endpoints.
  */
 export const grantsFor = (fleet: Fleet): ReadonlyArray<Grant> =>
 	[...fleet.services.values()].flatMap(({ plugin, instances, clients }) => {
 		const ip = Object.values(plugin.endpoints ?? {}).map(({ port }) => `tcp:${port}`);
-		const src = tagsOf(fleet, [...instances, ...clients]);
-		const dst = tagsOf(fleet, instances);
+		const src = selectorsOf(fleet, [...instances, ...clients]);
+		const dst = selectorsOf(fleet, instances);
 
 		return ip.length === 0 || src.length === 0 || dst.length === 0 ? [] : [{ src, dst, ip }];
 	});
