@@ -43,14 +43,14 @@ interface Run {
  * encrypted machines' initrds join the tailnet, so aett machine unlock
  * reaches them, and a guest joins once it runs. Everything is evaluated
  * before any machine is contacted, and the first machine that fails stops
- * the run.
+ * the run. A machine that joined during the run was built without its
+ * address, as were its peers, so the run goes once more.
  */
 export const apply = Effect.fn("apply")(function* (
 	root: string,
 	name: Option.Option<string>,
 	options: ApplyOptions,
 ) {
-	const engine = yield* Engine;
 	const declared = yield* loadFleet(root);
 	const local = Option.map(yield* thisMac(declared, name, options.yes), ({ name: mac }) => mac);
 
@@ -76,16 +76,45 @@ export const apply = Effect.fn("apply")(function* (
 	yield* syncPolicy(root, first.fleet);
 
 	const enrolled = yield* enrollUnlocks(root, first.state, first.fleet, targets);
-	const { build, fleet, state } = enrolled ? yield* emit(root) : first;
+	const built = enrolled ? yield* emit(root) : first;
+
+	yield* Effect.forEach(skipped, ({ name: machine, reason }) =>
+		Console.log(`${machine} ${reason}, skipping it.`),
+	);
+
+	yield* applyBuild(root, built, targets, local, options.yes);
+
+	const after = yield* readState(root, built.fleet);
+
+	const joined = targets.filter(
+		(machine) =>
+			built.state.machines.get(machine)?.tailnet === undefined &&
+			after.machines.get(machine)?.tailnet !== undefined,
+	);
+
+	if (joined.length === 0) return yield* Effect.void;
+
+	yield* Console.log(
+		`${joined.join(", ")} joined the tailnet, so aett builds again with where${Option.isSome(name) ? ". Apply the fleet's other machines too, so its peers know" : ""}.`,
+	);
+
+	return yield* applyBuild(root, yield* emit(root), targets, local, options.yes);
+});
+
+// Evaluates the targets from one build, then applies them in order.
+const applyBuild = Effect.fn("applyBuild")(function* (
+	root: string,
+	{ build, fleet, state }: { readonly build: Build; readonly fleet: Fleet; readonly state: State },
+	targets: ReadonlyArray<string>,
+	local: Option.Option<string>,
+	yes: boolean,
+) {
+	const engine = yield* Engine;
 
 	const hosts = new Map(
 		fleet.machines.flatMap(({ name: machine, vm }) =>
 			Option.toArray(Option.map(vm, ({ host }) => [machine, host] as const)),
 		),
-	);
-
-	yield* Effect.forEach(skipped, ({ name: machine, reason }) =>
-		Console.log(`${machine} ${reason}, skipping it.`),
 	);
 
 	yield* Effect.forEach(
@@ -109,7 +138,7 @@ export const apply = Effect.fn("apply")(function* (
 		),
 	);
 
-	const run: Run = { root, build, fleet, state, homes, yes: options.yes };
+	const run: Run = { root, build, fleet, state, homes, yes };
 
 	return yield* Effect.forEach(
 		targets,

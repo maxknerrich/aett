@@ -231,9 +231,13 @@ export const mergePolicy = (
 /** The policy lines for the operator to add by hand: the tags, owned by the admins, and the grants. */
 export const policySnippet = (needs: PolicyNeeds) =>
 	[
-		`"tagOwners": {`,
-		...needs.tags.map((tag) => `\t${JSON.stringify(tag)}: ${inline(owners)},`),
-		`},`,
+		...(needs.tags.length === 0
+			? []
+			: [
+					`"tagOwners": {`,
+					...needs.tags.map((tag) => `\t${JSON.stringify(tag)}: ${inline(owners)},`),
+					`},`,
+				]),
 		...(needs.grants.length === 0
 			? []
 			: [`"grants": [`, ...needs.grants.map((grant) => `\t${inline(grant)},`), `],`]),

@@ -111,7 +111,7 @@ export const setupTailscale = Effect.fn("setupTailscale")(function* (root: strin
 export const syncPolicy = Effect.fn("syncPolicy")(function* (root: string, fleet: Fleet) {
 	const needs = policyNeeds(fleet);
 
-	if (needs.tags.length === 0) return;
+	if (needs.tags.length === 0 && needs.grants.length === 0) return;
 
 	const client = yield* oauthClient(root);
 
