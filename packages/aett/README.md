@@ -24,13 +24,15 @@ export default fleet({
 
 ## Start
 
-You need Node 24.11 or newer, Nix, and a [Tailscale](https://tailscale.com) tailnet.
+You need Node 24.11 or newer, Nix, and a [Tailscale](https://tailscale.com) tailnet with the Tailscale app on your Mac.
 
 ```sh
 npm create aett            # or: pnpm create aett, vp create aett
 cd <fleet>
-aett tailscale setup       # once: the OAuth client machines join the tailnet through
+aett tailscale setup       # once: whether aett keeps your tailnet's policy for you
 ```
+
+Each NixOS machine joins the tailnet once, when aett installs it or a VM first starts: aett opens a login page in your browser and you approve it. It joins tagged with its role, such as `tag:server`. Your tailnet's policy has to list those tags, and grants let the fleet's machines reach each other's services. Give `aett tailscale setup` an OAuth client with Policy File: Write and aett adds them itself; without one, it shows you what to add. Macs are your own devices on the Tailscale app.
 
 On a Mac, `create` offers to add the Mac itself and adopts the apps Homebrew has on it. It keeps your new age key, which decrypts the fleet's secrets, in the login keychain. It also puts the key on the clipboard so you can save it in your password manager.
 
@@ -65,13 +67,13 @@ Dotfiles live in `home/`. `home/default/` goes to every machine with your user, 
 | `aett status` | Asks every machine whether it runs what fleet.ts builds, and how its services are. |
 | `aett update [name]` | Moves pins forward. On a Mac in the fleet, it also upgrades its apps. |
 | `aett machine unlock <name>` | Opens an encrypted machine waiting at boot, over the tailnet. |
-| `aett machine destroy <name>` | Deletes a VM that fleet.ts dropped, and its node on the tailnet. |
+| `aett machine destroy <name>` | Deletes a VM that fleet.ts dropped. You remove its node in the Tailscale admin console. |
 | `aett secret set <name>` | Sets a secret machines read. |
-| `aett tailscale setup` | Stores the OAuth client and says what your tailnet policy needs. |
+| `aett tailscale setup` | Says what your tailnet's policy needs, or keeps the OAuth client that adds it. |
 
 ## Services
 
-A web endpoint is served by Caddy with the machine's ts.net certificate, at `https://<machine>.<tailnet>.ts.net:<port>`. It needs MagicDNS and HTTPS Certificates turned on under DNS in the Tailscale admin console. Your tailnet policy decides who reaches it, and `aett tailscale setup` prints the grants the fleet's machines need.
+A web endpoint is served by Caddy with the machine's ts.net certificate, at `https://<machine>.<tailnet>.ts.net:<port>`. It needs MagicDNS and HTTPS Certificates turned on under DNS in the Tailscale admin console. Your tailnet's policy decides who reaches it; aett adds or shows the grants the fleet's machines need.
 
 `backup: "<machine>"` makes that machine the Kopia repository server. Every other machine with your user or service state backs up its home and that state to it hourly. A built-in ignore list and `.kopiaignore` files leave things out. Restore is manual: `kopia` is on every machine.
 

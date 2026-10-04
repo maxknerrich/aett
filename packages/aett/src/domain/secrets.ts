@@ -16,18 +16,13 @@ export interface MachineSecret {
 	readonly readers: ReadonlyArray<string>;
 	/**
 	 * How it comes about: asked for as a password, stored as its hash; asked
-	 * for as a token; made by aett as a random password or a self-signed TLS
-	 * certificate with its key; or a machine's one-time Tailscale key, which
-	 * aett mints for it.
+	 * for as a token; or made by aett as a random password or a self-signed TLS
+	 * certificate with its key.
 	 */
-	readonly kind: "password" | "token" | "random" | "certificate" | "tailscale";
+	readonly kind: "password" | "token" | "random" | "certificate";
 	/** What aett asks for a password or token. */
 	readonly prompt: string;
-	/**
-	 * Whether aett makes or asks for it the first time a build needs it. A
-	 * machine's Tailscale key is minted when it joins instead, and the others
-	 * wait for aett secret set.
-	 */
+	/** Whether aett makes or asks for it the first time a build needs it; the others wait for aett secret set. */
 	readonly required: boolean;
 	/** Why a value can't be this secret, if it can't. */
 	readonly invalid: (value: string) => Option.Option<string>;
@@ -86,21 +81,8 @@ const pluginSecrets = (fleet: Fleet): ReadonlyArray<MachineSecret> =>
 		}),
 	);
 
-/** Where a machine's one-time Tailscale key lives, under its own secrets. */
-export const tailscaleKey = (machine: string) => `${machine}/tailscale-key`;
-
-/** The secrets the fleet's machines read: the user's password, each machine's Tailscale key and each plugin's. */
+/** The secrets the fleet's machines read: the user's password and each plugin's. */
 export const machineSecrets = (fleet: Fleet): ReadonlyArray<MachineSecret> => [
-	...fleet.machines.map(({ name }): MachineSecret => ({
-		name: tailscaleKey(name),
-		file: secretFile(tailscaleKey(name)),
-		readers: [name],
-		kind: "tailscale",
-		prompt: "",
-		required: false,
-		invalid: anything,
-		certificate: Option.none(),
-	})),
 	// A Mac's account keeps its own password, so a fleet of Macs has none.
 	...Option.toArray(
 		Option.map(fleet.user, (user): MachineSecret => ({

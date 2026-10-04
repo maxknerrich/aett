@@ -31,13 +31,20 @@ export interface Discovered {
 	readonly uefi: boolean;
 }
 
-/** An initrd on the tailnet: its address, name and node, and its sshd's public key. */
-export interface Enrolled {
+/** A node on the tailnet, as it says itself: its IPv4 address, its name there and its tags. */
+export interface Joined {
 	readonly tailnet: string;
 	readonly tailnetName: string;
-	readonly node: string;
+	readonly tags: ReadonlyArray<string>;
+}
+
+/** An initrd on the tailnet, with its sshd's public key. */
+export interface Enrolled extends Joined {
 	readonly hostKey: string;
 }
+
+/** Shows the operator the URL a machine joining the tailnet waits at until they approve it. */
+export type Approve = (url: string) => Effect.Effect<void>;
 
 /** A guest as its host sees it: not installed there yet, installed but not running, or running. */
 export type GuestState = "absent" | "stopped" | "running";
@@ -178,15 +185,26 @@ export class Engine extends Context.Service<
 			hostKey: HostKey,
 		) => Effect.Effect<void, SshError>;
 		/**
-		 * Makes `name`'s initrd its own node on the tailnet: joins it once with
-		 * `authKey` from the running machine and keeps its identity, with a host
-		 * key for the initrd's sshd, where the next boot loader install puts them
-		 * into the initrd.
+		 * Joins the system `target` runs to the tailnet as `hostname` with `tag`,
+		 * once the operator approved it at the URL `approve` gets, unless it is on
+		 * the tailnet already.
+		 */
+		readonly join: (
+			target: Connection,
+			hostname: string,
+			tag: string,
+			approve: Approve,
+		) => Effect.Effect<Joined, EngineError | SshError>;
+		/**
+		 * Makes `name`'s initrd its own node on the tailnet: joins it once from
+		 * the running machine, once the operator approved it, and keeps its
+		 * identity, with a host key for the initrd's sshd, where the next boot
+		 * loader install puts them into the initrd.
 		 */
 		readonly enrollUnlock: (
 			target: Connection,
 			name: string,
-			authKey: Redacted.Redacted,
+			approve: Approve,
 		) => Effect.Effect<Enrolled, EngineError | SshError>;
 		/**
 		 * Hands the Wi-Fi networks `target` knows to its initrd, so it reaches the
@@ -208,12 +226,19 @@ export class Engine extends Context.Service<
 			system: string,
 			ageKey: Redacted.Redacted,
 		) => Effect.Effect<void, EngineError>;
-		/** From an installer: builds the machine there, erases and formats its disk, places `secrets` and installs the system. */
+		/**
+		 * From an installer: builds the machine there, joins it to the tailnet
+		 * with `tag` once the operator approved it, then erases and formats its
+		 * disk, places `secrets` and its tailnet identity and installs the system.
+		 * Returns the node it boots as.
+		 */
 		readonly install: (
 			build: Build,
 			name: string,
 			target: Connection,
 			secrets: InstallSecrets,
-		) => Effect.Effect<void, EngineError | SshError>;
+			tag: string,
+			approve: Approve,
+		) => Effect.Effect<Joined, EngineError | SshError>;
 	}
 >()("aett/engine/Engine") {}

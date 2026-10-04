@@ -73,10 +73,6 @@ const base = (fleet: Fleet, machine: Machine, state: State, extras: Extras, pins
 			),
 		),
 		apps: machine.apps,
-		tailscale: {
-			tag: `tag:${machine.role}`,
-			app: state.machines.get(machine.name)?.tailscaleApp === true,
-		},
 		tailnet: tailnetOf(state, machine.name),
 		user: fleet.user.pipe(
 			Option.filter(() => machine.user),

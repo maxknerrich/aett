@@ -2,7 +2,11 @@ import { type Plugin, plugin } from "./plugin.ts";
 
 // The plugins aett ships. Their modules and home trees live in the package's plugins/<name>/.
 
-/** Tailscale on every machine: aett reaches machines over the tailnet and nowhere else. */
+/**
+ * Tailscale on every machine: aett reaches machines over the tailnet and
+ * nowhere else. A NixOS machine joins once the operator approves it; a Mac
+ * runs the Tailscale app.
+ */
 export const tailscale = plugin({
 	name: "tailscale",
 	always: true,

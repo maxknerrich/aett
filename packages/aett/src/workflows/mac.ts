@@ -11,7 +11,7 @@ import type { State } from "../domain/state.ts";
 import { type Build, Engine } from "../engine/engine.ts";
 import { applyHome, planHome } from "./home.ts";
 import { updateRecord } from "./load.ts";
-import { recordTailnet } from "./reach.ts";
+import { recordTailnet, tailnetStatus } from "./reach.ts";
 
 export class MacError extends Schema.TaggedError<MacError>()("MacError", {
 	message: Schema.String,
@@ -66,8 +66,9 @@ export const thisMac = Effect.fn("thisMac")(function* (
 
 /**
  * Records what aett needs to build the Mac it runs on before its first apply:
- * its platform, whether it runs the Tailscale app and Determinate Nix, and an
- * age key of its own for its secrets, kept encrypted to the operators.
+ * its platform, whether Determinate Nix runs it, where it is on the tailnet
+ * through the Tailscale app, and an age key of its own for its secrets, kept
+ * encrypted to the operators.
  */
 export const prepareMac = Effect.fn("prepareMac")(function* (
 	root: string,
@@ -81,19 +82,20 @@ export const prepareMac = Effect.fn("prepareMac")(function* (
 	const recorded = state.machines.get(name);
 
 	const system = arch() === "arm64" ? "aarch64-darwin" : "x86_64-darwin";
-	const app = yield* fs.exists("/Applications/Tailscale.app");
 	const determinate = yield* fs.exists("/usr/local/bin/determinate-nixd");
 
-	if (
-		recorded?.system !== system ||
-		recorded.tailscaleApp !== app ||
-		recorded.determinate !== determinate
-	) {
-		yield* updateRecord(root, name, { system, tailscaleApp: app, determinate });
+	if (recorded?.system !== system || recorded.determinate !== determinate) {
+		yield* updateRecord(root, name, { system, determinate });
 	}
 
-	// A Mac already on the tailnet, through the app or an earlier apply, is known there by its node.
-	yield* recordTailnet(root, state, name, yield* localConnection);
+	// A Mac is on the tailnet through the Tailscale app, as its owner's device.
+	yield* Option.match(yield* tailnetStatus(yield* localConnection), {
+		onSome: (joined) => recordTailnet(root, state, name, joined),
+		onNone: () =>
+			Console.log(
+				`${name} isn't on the tailnet. Install the Tailscale app (https://tailscale.com/download/mac) and sign in, so it reaches the fleet's machines and they reach it.`,
+			),
+	});
 
 	if (recorded?.age !== undefined && (yield* fs.exists(path.join(root, ageKeyFile(name))))) {
 		return;

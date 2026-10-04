@@ -61,26 +61,17 @@ export const MachineRecord = Schema.Struct({
 	forwards: Schema.optionalKey(
 		Schema.Struct({ ssh: Schema.Int, mosh: Schema.Tuple([Schema.Int, Schema.Int]) }),
 	),
-	// The machine on the tailnet, once it joined: its IPv4 address, its name there and its node id.
+	// The machine on the tailnet, once it joined: its IPv4 address and its name there.
 	tailnet: Schema.optionalKey(Schema.String),
 	tailnetName: Schema.optionalKey(Schema.String),
-	node: Schema.optionalKey(Schema.String),
-	// The tag aett last gave its node or the key it joins with, its role's, which aett changes with the role.
-	tag: Schema.optionalKey(Schema.String),
 	// An encrypted machine's initrd on the tailnet, which aett machine unlock reaches.
-	unlock: Schema.optionalKey(
-		Schema.Struct({ tailnet: Schema.String, tailnetName: Schema.String, node: Schema.String }),
-	),
+	unlock: Schema.optionalKey(Schema.Struct({ tailnet: Schema.String, tailnetName: Schema.String })),
 	// A Mac: the public half of the age key aett made for it, which its secrets are encrypted to.
 	age: Schema.optionalKey(AgePublicKey),
 	// A Mac: whether Determinate Nix runs it, whose settings nix-darwin leaves to a file of their own.
 	determinate: Schema.optionalKey(Schema.Boolean),
-	// A Mac: whether it runs the Tailscale app, which aett leaves to it.
-	tailscaleApp: Schema.optionalKey(Schema.Boolean),
 	// A Mac: whether the operator agreed to remove the Homebrew apps fleet.ts doesn't list.
 	zap: Schema.optionalKey(Schema.Boolean),
-	// When the one-time Tailscale key aett minted for the machine stops working, if it hasn't joined yet.
-	tailscaleKeyExpires: Schema.optionalKey(Schema.String),
 });
 
 export interface MachineRecord extends Schema.Schema.Type<typeof MachineRecord> {}

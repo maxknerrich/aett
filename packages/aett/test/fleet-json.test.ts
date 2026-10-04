@@ -92,7 +92,7 @@ describe("fleetJson", () => {
 			declared,
 			state,
 			{
-				secrets: ["users/mkn", "backup/repository/web", "backup/tls/web", "box/tailscale-key"],
+				secrets: ["users/mkn", "backup/repository/web", "backup/tls/web"],
 				fingerprints: new Map([["backup/tls/web", "ab12"]]),
 			},
 			pins,
@@ -100,9 +100,8 @@ describe("fleetJson", () => {
 
 		expect(emitted.machines["box"]).toMatchObject({
 			role: "hypervisor",
-			tailscale: { tag: "tag:hypervisor", app: false },
 			user: null,
-			secrets: [{ name: "box/tailscale-key", file: "secrets/box/tailscale-key.json" }],
+			secrets: [],
 			disk: { device: disk, encrypted: true },
 			unlock: true,
 		});
@@ -158,7 +157,7 @@ describe("fleetJson", () => {
 			operator,
 			machines: new Map([
 				["vault", { facts: true, pools }],
-				["fawkes", { facts: false, system: "aarch64-darwin", zap: true, tailscaleApp: true }],
+				["fawkes", { facts: false, system: "aarch64-darwin", zap: true }],
 			]),
 		};
 
@@ -167,7 +166,6 @@ describe("fleetJson", () => {
 		expect(machines["vault"]).toMatchObject({ role: "nas", pools, unlock: false });
 		expect(machines["fawkes"]).toMatchObject({
 			apps: ["ghostty"],
-			tailscale: { tag: "tag:computer", app: true },
 			darwin: { system: "aarch64-darwin" },
 			homebrew: { zap: true },
 		});

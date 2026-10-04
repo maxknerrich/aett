@@ -128,7 +128,7 @@ const tailscale = Command.make("tailscale").pipe(
 	Command.withSubcommands([
 		Command.make("setup", {}, () => Effect.flatMap(fleet, setupTailscale)).pipe(
 			Command.withDescription(
-				"Store the OAuth client aett mints each machine's key to join the tailnet with.",
+				"Say what the tailnet's policy needs, or store the OAuth client that lets aett add it.",
 			),
 		),
 	]),
@@ -141,7 +141,7 @@ const secret = Command.make("secret").pipe(
 			"set",
 			{
 				name: Argument.String("name").pipe(
-					Argument.withDescription("The secret, such as tailscale/auth-key."),
+					Argument.withDescription("The secret, such as users/<name>."),
 				),
 			},
 			({ name }) => Effect.flatMap(fleet, (root) => setSecret(root, name)),

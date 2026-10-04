@@ -185,11 +185,9 @@ export const shareSecrets = Effect.fn("shareSecrets")(function* (
 	yield* Effect.forEach(missing, (secret) =>
 		secret.required
 			? store(root, state, secret)
-			: secret.kind === "tailscale"
-				? Effect.void
-				: Console.log(
-						`${secret.file} is missing, so machines go without it until you run aett secret set ${secret.name}.`,
-					),
+			: Console.log(
+					`${secret.file} is missing, so machines go without it until you run aett secret set ${secret.name}.`,
+				),
 	);
 
 	const present = yield* Effect.filter(machineSecrets(fleet), exists);

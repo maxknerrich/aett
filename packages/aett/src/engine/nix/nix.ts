@@ -1,4 +1,3 @@
-import { isIP } from "node:net";
 import { pathToFileURL } from "node:url";
 import {
 	Config,
@@ -19,7 +18,9 @@ import { Source } from "../../domain/packages.ts";
 import { InputsLock, type Pins, Platform } from "../../domain/pins.ts";
 import { machineSecrets } from "../../domain/secrets.ts";
 import type { State } from "../../domain/state.ts";
+import { joinedFrom, unlockTag } from "../../domain/tailnet.ts";
 import {
+	type Approve,
 	type Build,
 	Engine,
 	EngineError,
@@ -206,29 +207,119 @@ const guestKeyDirectory = (root: string, guest: string) =>
 const placeGuestKey = (host: Connection, guest: string, hostKey: HostKey) =>
 	writeHostKey(host, guestKeyDirectory("", guest), hostKey);
 
+// Where an installer keeps the tailnet identity the machine joined with until the install copies it.
+const joinDirectory = "/run/aett-join";
+
 // Where unlock.nix takes the initrd's tailnet identity, sshd key and Wi-Fi networks from.
 const unlockDirectory = "/persist/aett/unlock";
 
-// Run as root on the machine with the auth key on stdin: joins the tailnet as <name>-unlock with a
-// tailscaled of its own in userspace, which leaves the machine's own node alone, keeps that identity
-// for the initrd and makes the initrd's sshd key. Prints the node's status, then the key.
-const enrollScript = (name: string) => `set -eu
-dir=${unlockDirectory}
-install -d -m 0700 "$dir"
-umask 077
-key=$(mktemp)
-cat > "$key"
-socket=/run/aett-unlock-enroll.sock
-tailscaled --statedir="$dir" --state="$dir/tailscaled.state" --socket="$socket" --tun=userspace-networking --port=0 >/dev/null 2>&1 &
-daemon=$!
-trap 'kill "$daemon" 2>/dev/null || true; wait "$daemon" 2>/dev/null || true; rm -f "$key"' EXIT
-for _ in $(seq 30); do [ -S "$socket" ] && break; sleep 1; done
-tailscale --socket="$socket" up --auth-key="file:$key" --hostname=${shellQuote(`${name}-unlock`)} --advertise-tags=tag:unlock --accept-dns=false --accept-routes=false --netfilter-mode=off --timeout=60s >&2
-tailscale --socket="$socket" status --json --peers=false | tr -d '\n'
-echo
-[ -f "$dir/ssh_host_ed25519_key" ] || ssh-keygen -q -t ed25519 -N "" -C ${shellQuote(`root@${name}-unlock`)} -f "$dir/ssh_host_ed25519_key"
-cat "$dir/ssh_host_ed25519_key.pub"
+// How a node joins the tailnet: as `hostname`, with `flags` for tailscale up, through the system's
+// tailscaled, or with `directory`, through one of its own in userspace that keeps the node's identity
+// there and leaves the system's node alone. `bin` is where tailscale and tailscaled are, if not on PATH.
+interface Joiner {
+	readonly hostname: string;
+	readonly flags: string;
+	readonly bin: string;
+	readonly directory: Option.Option<string>;
+}
+
+// The joining node's files: tailscale up's output and process, and its own tailscaled's socket and process.
+const joinFiles = (joiner: Joiner) => `/run/aett-join-${joiner.hostname}`;
+
+// The shell functions both halves of joining use: ts runs the CLI against the node's tailscaled,
+// running says whether the node is on the tailnet, and stop ends a tailscaled of its own.
+const joinHelpers = (joiner: Joiner) => {
+	const files = joinFiles(joiner);
+	const socket = Option.isSome(joiner.directory) ? ` --socket=${files}.sock` : "";
+
+	return `files=${files}
+ts() { ${joiner.bin}tailscale${socket} "$@"; }
+running() { ts status --json --peers=false 2>/dev/null | grep -q '"BackendState": *"Running"'; }
+stop() { [ -f "$files.daemon" ] || return 0; kill "$(cat "$files.daemon")" 2>/dev/null || true; for _ in $(seq 20); do kill -0 "$(cat "$files.daemon")" 2>/dev/null || break; sleep 0.5; done; rm -f "$files.daemon" "$files.sock"; }
 `;
+};
+
+// Run as root: starts the node joining and prints the URL the operator approves it at, or nothing when
+// it is on the tailnet already. tailscale up keeps waiting for the approval after this returns.
+const startJoining = (joiner: Joiner) => `set -eu
+${joinHelpers(joiner)}${Option.match(joiner.directory, {
+	onNone: () => "",
+	onSome: (directory) => `install -d -m 0700 ${shellQuote(directory)}
+if [ ! -S "$files.sock" ]; then
+  nohup ${joiner.bin}tailscaled --statedir=${shellQuote(directory)} --state=${shellQuote(`${directory}/tailscaled.state`)} --socket="$files.sock" --tun=userspace-networking --port=0 </dev/null >/dev/null 2>&1 &
+  echo $! > "$files.daemon"
+  for _ in $(seq 30); do [ -S "$files.sock" ] && break; sleep 1; done
+fi
+`,
+})}if running; then exit 0; fi
+nohup ${joiner.bin}tailscale${Option.isSome(joiner.directory) ? ' --socket="$files.sock"' : ""} up --reset --hostname=${shellQuote(joiner.hostname)} ${joiner.flags} --timeout=15m </dev/null >"$files.log" 2>&1 &
+up=$!
+echo "$up" > "$files.pid"
+for _ in $(seq 60); do
+  url=$(grep -o 'https://[^[:space:]]*' "$files.log" | head -n 1 || true)
+  if [ -n "$url" ]; then echo "$url"; exit 0; fi
+  kill -0 "$up" 2>/dev/null || break
+  sleep 1
+done
+if wait "$up" && running; then exit 0; fi
+cat "$files.log" >&2
+stop
+exit 1
+`;
+
+// Run as root after startJoining: waits up to 15 minutes for the approval, then prints the node's
+// status and stops a tailscaled of its own, whose identity stays in its directory.
+const finishJoining = (joiner: Joiner) => `set -eu
+${joinHelpers(joiner)}for _ in $(seq 900); do
+  if running; then
+    ts status --json --peers=false | tr -d '\n'
+    echo
+    stop
+    exit 0
+  fi
+  if [ -f "$files.pid" ] && ! kill -0 "$(cat "$files.pid")" 2>/dev/null; then
+    sleep 2
+    running && continue
+    cat "$files.log" >&2
+    stop
+    exit 1
+  fi
+  sleep 1
+done
+echo "Nobody approved ${joiner.hostname} within 15 minutes." >&2
+stop
+exit 1
+`;
+
+// Joins the node `joiner` describes, showing the operator the URL to approve it at unless it is on
+// the tailnet already. Returns what it says about itself.
+const joinWith = Effect.fn("NixEngine.joinWith")(function* (
+	target: Connection,
+	joiner: Joiner,
+	approve: Approve,
+) {
+	const url = (yield* target.run(`sh -c ${shellQuote(startJoining(joiner))}`)).trim();
+
+	if (url !== "") yield* approve(url);
+
+	const printed = yield* target.run(`sh -c ${shellQuote(finishJoining(joiner))}`);
+
+	return yield* Effect.fromOption(
+		joinedFrom(printed),
+		() =>
+			new EngineError({
+				message: `${joiner.hostname} joined the tailnet without an IPv4 address or a name:\n${printed}`,
+			}),
+	);
+});
+
+// Joins the system's own node, through its tailscaled.
+const join = (target: Connection, hostname: string, tag: string, approve: Approve) =>
+	joinWith(
+		target,
+		{ hostname, flags: `--advertise-tags=${tag}`, bin: "", directory: Option.none() },
+		approve,
+	);
 
 // Marks Wi-Fi networks the boot loader has yet to put into the initrd, until a boot loader install does.
 const wifiPending = `${unlockDirectory}/wifi-pending`;
@@ -256,17 +347,6 @@ const refreshBoot = (target: Connection) =>
 	target
 		.stream(`/run/current-system/bin/switch-to-configuration boot >&2 && rm -f ${wifiPending}`)
 		.pipe(Effect.asVoid);
-
-// What tailscale status --json says about a node itself.
-const EnrolledStatus = Schema.fromJsonString(
-	Schema.Struct({
-		Self: Schema.Struct({
-			ID: Schema.String,
-			DNSName: Schema.String,
-			TailscaleIPs: Schema.Array(Schema.String),
-		}),
-	}),
-);
 
 // Runs `format` with the passphrase, if there is one, in passphraseFile on the target.
 // The file is removed afterwards, also when writing it or formatting fails.
@@ -616,6 +696,8 @@ export const nixEngine = (flake: string, plugins: string) =>
 				name: string,
 				target: Connection,
 				secrets: InstallSecrets,
+				tag: string,
+				approve: Approve,
 			) {
 				const source = yield* ship(build, target);
 
@@ -627,6 +709,19 @@ export const nixEngine = (flake: string, plugins: string) =>
 					name,
 					["system.build.toplevel", "system.build.destroyFormatMount", "system.build.aettInstall"],
 					InstallOutputs,
+				);
+
+				// The machine joins from the installer before anything is erased, through a tailscaled of its
+				// own whose identity the installed system boots with.
+				const joined = yield* joinWith(
+					target,
+					{
+						hostname: name,
+						flags: `--advertise-tags=${tag}`,
+						bin: `${toplevel}/sw/bin/`,
+						directory: Option.some(joinDirectory),
+					},
+					approve,
 				);
 
 				yield* Console.log("Erasing the disk…");
@@ -643,10 +738,16 @@ export const nixEngine = (flake: string, plugins: string) =>
 				yield* Effect.forEach(secrets.guests, ([guest, hostKey]) =>
 					writeHostKey(target, guestKeyDirectory("/mnt", guest), hostKey),
 				);
+				// Where persist.nix keeps /var/lib, the system's tailscaled's state directory among it.
+				yield* target.run(
+					`install -d -m 0700 /mnt/persist/var/lib/tailscale && cp -a ${joinDirectory}/. /mnt/persist/var/lib/tailscale/`,
+				);
 				yield* Console.log("Installing…");
 				yield* target.run(
 					`nixos-install --root /mnt --system ${shellQuote(toplevel)} --no-root-passwd --no-channel-copy`,
 				);
+
+				return joined;
 			});
 
 			// Locks a scratch copy of the flake, which lists no machines, so nothing but the inputs is read.
@@ -706,35 +807,32 @@ export const nixEngine = (flake: string, plugins: string) =>
 			const enrollUnlock = Effect.fn("NixEngine.enrollUnlock")(function* (
 				target: Connection,
 				name: string,
-				authKey: Redacted.Redacted,
+				approve: Approve,
 			) {
-				const [printed = "", hostKey = ""] = (yield* target.run(
-					`sh -c ${shellQuote(enrollScript(name))}`,
-					`${Redacted.value(authKey)}\n`,
-				)).split("\n");
-
-				const { Self } = yield* Schema.decodeUnknownEffect(EnrolledStatus)(printed).pipe(
-					Effect.catchTag("SchemaError", () =>
-						Effect.fail(
-							new EngineError({ message: `${name}'s initrd didn't join the tailnet:\n${printed}` }),
-						),
-					),
+				const joined = yield* joinWith(
+					target,
+					{
+						hostname: `${name}-unlock`,
+						flags: `--advertise-tags=${unlockTag} --accept-dns=false --accept-routes=false --netfilter-mode=off`,
+						bin: "",
+						directory: Option.some(unlockDirectory),
+					},
+					approve,
 				);
 
-				const tailnet = Self.TailscaleIPs.find((ip) => isIP(ip) === 4);
+				const key = `${unlockDirectory}/ssh_host_ed25519_key`;
 
-				if (tailnet === undefined || !hostKey.startsWith("ssh-ed25519 ")) {
+				const hostKey = (yield* target.run(
+					`[ -f ${key} ] || ssh-keygen -q -t ed25519 -N "" -C ${shellQuote(`root@${name}-unlock`)} -f ${key}; cat ${key}.pub`,
+				)).trim();
+
+				if (!hostKey.startsWith("ssh-ed25519 ")) {
 					return yield* new EngineError({
-						message: `${name}'s initrd joined the tailnet without an IPv4 address or an SSH key.`,
+						message: `${name}'s initrd joined the tailnet, but its SSH key is missing.`,
 					});
 				}
 
-				return {
-					tailnet,
-					tailnetName: Self.DNSName.replace(/\.$/, ""),
-					node: Self.ID,
-					hostKey: hostKey.trim(),
-				} satisfies Enrolled;
+				return { ...joined, hostKey } satisfies Enrolled;
 			});
 
 			// The pinned tools and the operator's terminal for a command that may ask for sudo's password.
@@ -858,6 +956,7 @@ export const nixEngine = (flake: string, plugins: string) =>
 				controlGuest,
 				removeGuest,
 				placeGuestKey,
+				join,
 				enrollUnlock,
 				unlockWifi,
 				refreshBoot,

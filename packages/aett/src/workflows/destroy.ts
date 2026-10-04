@@ -4,7 +4,6 @@ import { forgetHost } from "../domain/host.ts";
 import { Engine } from "../engine/engine.ts";
 import { loadFleet, readState } from "./load.ts";
 import { connectMachine } from "./reach.ts";
-import { removeFromTailnet } from "./tailscale.ts";
 
 export class DestroyError extends Schema.TaggedError<DestroyError>()("DestroyError", {
 	message: Schema.String,
@@ -14,7 +13,8 @@ export class DestroyError extends Schema.TaggedError<DestroyError>()("DestroyErr
  * Deletes a VM that fleet.ts no longer declares and that its host has
  * stopped: its state volume and identity on the host, then its host key, its
  * state and its known_hosts entry in the fleet. Asks for the name first
- * unless `yes`.
+ * unless `yes`. Its node stays on the tailnet until the operator removes it
+ * in the admin console.
  */
 export const destroy = Effect.fn("destroy")(function* (
 	root: string,
@@ -42,7 +42,7 @@ export const destroy = Effect.fn("destroy")(function* (
 	}
 
 	const knownHostsFile = path.join(root, "state", "known_hosts");
-	const connection = yield* connectMachine(root, fleet, state, host);
+	const connection = yield* connectMachine(root, state, host);
 
 	if ((yield* engine.guestState(connection, name)) === "running") {
 		return yield* new DestroyError({
@@ -69,8 +69,7 @@ export const destroy = Effect.fn("destroy")(function* (
 		});
 	}
 
-	// First, so a failure leaves the record that names the node and destroy can run again.
-	const removed = yield* removeFromTailnet(root, state, name);
+	const node = state.machines.get(name)?.tailnetName;
 
 	yield* engine.removeGuest(connection, name);
 	// Only the guest's own key: secrets/<name>/ may also hold fleet secrets that share the name.
@@ -92,8 +91,8 @@ export const destroy = Effect.fn("destroy")(function* (
 	}
 
 	return yield* Console.log(
-		removed
-			? `Destroyed ${name}, and removed it from the tailnet.`
-			: `Destroyed ${name}. Remove it in the Tailscale admin console too: aett couldn't, without aett tailscale setup or with more than one node it could be.`,
+		node === undefined
+			? `Destroyed ${name}.`
+			: `Destroyed ${name}. Remove ${node} from the tailnet at https://login.tailscale.com/admin/machines too, so a new ${name} gets its name.`,
 	);
 }, Effect.scoped);

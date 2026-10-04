@@ -12,14 +12,13 @@ import {
 	poolProblem,
 } from "../domain/disk.ts";
 import { type Fleet, guestsOf } from "../domain/fleet.ts";
-import type { State } from "../domain/state.ts";
 import { formatHost, type Host } from "../domain/host.ts";
+import { tagOf } from "../domain/tailnet.ts";
 import { Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
 import { machineHostKey, trustHostKey } from "./identity.ts";
 import { forgetRecord, loadFleet, readState, updateRecord } from "./load.ts";
-import { secretFile, tailscaleKey } from "../domain/secrets.ts";
-import { oauthClient, removeFromTailnet } from "./tailscale.ts";
+import { approver, syncPolicy } from "./tailscale.ts";
 
 export class InstallError extends Schema.TaggedError<InstallError>()("InstallError", {
 	message: Schema.String,
@@ -55,9 +54,9 @@ export const discover = Effect.fn("discover")(function* (
 
 /**
  * Discovers the machine, lets the operator confirm its disk, makes or reads
- * its host key and disk passphrase, builds its system on the installer, erases
- * the disk (inside LUKS when declared encrypted), installs and reboots into the
- * new system.
+ * its host key and disk passphrase, builds its system on the installer, joins
+ * it to the tailnet once the operator approves it, erases the disk (inside
+ * LUKS when declared encrypted), installs and reboots into the new system.
  */
 export const install = Effect.fn("install")(function* (
 	root: string,
@@ -84,12 +83,8 @@ export const install = Effect.fn("install")(function* (
 		});
 	}
 
-	// The installed machine is reached only over the tailnet, which it joins with a key aett mints.
-	if (Option.isNone(yield* oauthClient(root))) {
-		return yield* new InstallError({
-			message: `${name} would join no tailnet after install, and aett reaches machines only there. Run aett tailscale setup first.`,
-		});
-	}
+	// The installed machine is reached only over the tailnet, which it joins with its role's tag.
+	yield* syncPolicy(root, fleet);
 
 	const connection = yield* connect(options);
 	const { disks, uefi } = yield* engine.discover(root, name, connection);
@@ -132,9 +127,9 @@ export const install = Effect.fn("install")(function* (
 	// Trusted before the build, so the machine is a recipient of the secrets it reads on first boot.
 	yield* trustHostKey(root, name, hostKey.publicKey);
 
-	// Erasing the disk erases the machine's tailnet identity, its initrd's and its guests', so the
-	// build is made to join them again with new keys. Until the install succeeds, the old nodes stay,
-	// and a failure puts their records back.
+	// Erasing the disk erases the machine's tailnet identity, its initrd's and its guests', so they
+	// join again: the machine at this install, the others at its first apply. A failure puts their
+	// records back. Their old nodes stay on the tailnet until the operator removes them.
 	const reinstalling = recorded?.installed === true;
 
 	// Its guests' identities live on its disk too.
@@ -156,16 +151,17 @@ export const install = Effect.fn("install")(function* (
 		}),
 	);
 
+	const oldNodes = erased.flatMap((machineName) => {
+		const old = state.machines.get(machineName);
+
+		return [old?.tailnetName, old?.unlock?.tailnetName].flatMap((node) =>
+			node === undefined ? [] : [node],
+		);
+	});
+
 	if (reinstalling) {
 		yield* Effect.forEach(erased, (machineName) =>
-			forgetRecord(root, machineName, [
-				"tailnet",
-				"tailnetName",
-				"node",
-				"unlock",
-				"tailscaleKeyExpires",
-				"tag",
-			]),
+			forgetRecord(root, machineName, ["tailnet", "tailnetName", "unlock"]),
 		);
 	}
 
@@ -191,14 +187,8 @@ export const install = Effect.fn("install")(function* (
 		yield* updateRecord(root, name, chosen);
 	}
 
-	const guests = yield* Effect.gen(function* () {
+	const installed = yield* Effect.gen(function* () {
 		const { build } = yield* emit(root);
-
-		if (!(yield* fs.exists(path.join(root, secretFile(tailscaleKey(name)))))) {
-			return yield* new InstallError({
-				message: `aett couldn't mint ${name}'s key to join the tailnet, so nothing was erased.`,
-			});
-		}
 
 		// The machine's guests start on its first boot, so their host keys go on its disk too.
 		const keys = new Map(
@@ -211,43 +201,41 @@ export const install = Effect.fn("install")(function* (
 			),
 		);
 
-		yield* engine.install(build, name, connection, { hostKey, guests: keys, passphrase });
+		if (oldNodes.length > 0) {
+			yield* Console.log(
+				`Remove the old ${oldNodes.join(", ")} from the tailnet at https://login.tailscale.com/admin/machines before you approve ${name}, so the new nodes get their names.`,
+			);
+		}
 
-		return keys;
+		const joined = yield* engine.install(
+			build,
+			name,
+			connection,
+			{ hostKey, guests: keys, passphrase },
+			tagOf(machine.role),
+			yield* approver(name),
+		);
+
+		return { keys, joined };
 	}).pipe(Effect.onError(() => Effect.ignore(restore)));
 
-	if (reinstalling) {
-		yield* Effect.forEach(erased, (machineName) => revokeOldNodes(root, state, machineName));
-	}
-
-	yield* updateRecord(root, name, { ...chosen, encrypted: machine.encrypted, installed: true });
-	yield* Effect.forEach(guests, ([guest, key]) => trustHostKey(root, guest, key.publicKey));
+	yield* updateRecord(root, name, {
+		...chosen,
+		encrypted: machine.encrypted,
+		installed: true,
+		tailnet: installed.joined.tailnet,
+		tailnetName: installed.joined.tailnetName,
+	});
+	yield* Effect.forEach(installed.keys, ([guest, key]) => trustHostKey(root, guest, key.publicKey));
 	yield* Console.log(
 		machine.encrypted
-			? `Installed ${name}. It reboots now and asks for its passphrase at the console, this once; then it joins the tailnet. Apply it once it has, and later boots open with aett machine unlock ${name}.`
-			: `Installed ${name}. It reboots now and joins the tailnet.`,
+			? `Installed ${name}, on the tailnet as ${installed.joined.tailnetName}. It reboots now and asks for its passphrase at the console, this once. Apply it once it's up, and later boots open with aett machine unlock ${name}.`
+			: `Installed ${name}, on the tailnet as ${installed.joined.tailnetName}. It reboots now.`,
 	);
 
 	// The reboot drops the connection, which may fail the command; that is expected.
 	return yield* Effect.ignore(connection.run("systemctl reboot"));
 }, Effect.scoped);
-
-// Removes a reinstalled machine's old nodes from the tailnet as `state` recorded them, as far as aett can.
-const revokeOldNodes = Effect.fn("revokeOldNodes")(function* (
-	root: string,
-	state: State,
-	name: string,
-) {
-	const removed = yield* removeFromTailnet(root, state, name).pipe(
-		Effect.catchTag("TailscaleError", (error) => Console.log(error.message).pipe(Effect.as(false))),
-	);
-
-	if (!removed) {
-		yield* Console.log(
-			`Remove ${name}'s old node from the tailnet in the admin console; it joins again as a new one.`,
-		);
-	}
-});
 
 // The bare-metal NixOS machine fleet.ts declares as `name`: what the installer can discover.
 const discoverable = (fleet: Fleet, name: string) =>

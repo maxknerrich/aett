@@ -51,14 +51,6 @@ in
       default = [ ];
     };
 
-    tailscale = {
-      tag = mkOption { type = types.str; };
-      # A Mac that runs the Tailscale app, which aett leaves to it.
-      app = mkOption {
-        type = types.bool;
-        default = false;
-      };
-    };
     # The machine on the tailnet, once it joined.
     tailnet = mkOption {
       type = tailnet;

@@ -1,4 +1,3 @@
-import { isIP } from "node:net";
 import { Context, Effect, Layer, Option, Redacted, Schema } from "effect";
 import {
 	FetchHttpClient,
@@ -12,7 +11,7 @@ export class TailscaleError extends Schema.TaggedError<TailscaleError>()("Tailsc
 	message: Schema.String,
 }) {}
 
-/** The fleet's Tailscale OAuth client, which aett keeps as the secret tailscale/oauth. */
+/** The OAuth client that lets aett edit the tailnet's policy, which aett keeps as the secret tailscale/oauth. */
 export const OAuthClient = Schema.Struct({
 	id: Schema.NonEmptyString,
 	secret: Schema.String.check(
@@ -22,23 +21,10 @@ export const OAuthClient = Schema.Struct({
 
 export interface OAuthClient extends Schema.Schema.Type<typeof OAuthClient> {}
 
-/** A device on the tailnet. */
-export interface Device {
-	/** The node id, which the API removes it by. */
-	readonly node: string;
-	/** Its MagicDNS name, <name>.<tailnet>.ts.net. */
-	readonly name: string;
-	/** The hostname it reported, which aett makes its machine's name. */
-	readonly hostname: string;
-	readonly address: string;
-	readonly tags: ReadonlyArray<string>;
-	readonly created: Date;
-}
-
-/** A one-time auth key and when it stops working. */
-export interface AuthKey {
-	readonly key: Redacted.Redacted;
-	readonly expires: Date;
+/** The tailnet's policy as HuJSON, with the version an edit has to start from. */
+export interface PolicyFile {
+	readonly text: string;
+	readonly etag: string;
 }
 
 const Token = Schema.Struct({
@@ -69,78 +55,24 @@ const failure = (doing: string) => (cause: { readonly message: string }) =>
 			),
 	);
 
-/** The scopes aett's OAuth client needs: minting keys, and finding and removing devices. */
-export const scopes = ["auth_keys", "devices:core"] as const;
-
-const Key = Schema.Struct({ id: Schema.String, key: Schema.String, expires: Schema.String });
-
-// A preauthorized, non-reusable key with `tags`, good for `lifetime` milliseconds.
-const mint = (
-	api: HttpClient.HttpClient,
-	tags: ReadonlyArray<string>,
-	lifetime: number,
-	description: string,
-) =>
-	HttpClientRequest.post("/tailnet/-/keys").pipe(
-		HttpClientRequest.bodyJson({
-			capabilities: {
-				devices: {
-					create: { reusable: false, ephemeral: false, preauthorized: true, tags },
-				},
-			},
-			expirySeconds: lifetime / 1000,
-			description,
-		}),
-		Effect.flatMap(api.execute),
-		Effect.flatMap(HttpClientResponse.schemaBodyJson(Key)),
-		Effect.catch(failure(`mint a key tagged ${tags.join(", ")}`)),
-	);
-
-const Devices = Schema.Struct({
-	devices: Schema.Array(
-		Schema.Struct({
-			nodeId: Schema.String,
-			name: Schema.String,
-			hostname: Schema.String,
-			addresses: Schema.Array(Schema.String),
-			tags: Schema.optionalKey(Schema.Array(Schema.String)),
-			created: Schema.String,
-		}),
-	),
-});
+/** The scope aett's OAuth client needs: writing the policy file. */
+export const policyScope = "policy_file";
 
 /**
- * Tailscale's API, as the fleet's OAuth client: it mints a one-time tagged
- * key per machine, finds the machines on the tailnet and removes them. The
- * tailnet's policy stays its owner's.
+ * Tailscale's API, as the fleet's OAuth client: it reads the tailnet's
+ * policy and writes it back with what the fleet needs.
  */
 export class Tailscale extends Context.Service<
 	Tailscale,
 	{
-		/**
-		 * Checks that `client` signs in with the scopes aett needs and mints keys
-		 * with each of `tags` alone, before aett keeps it. The keys it tries are
-		 * deleted again.
-		 */
-		readonly check: (
+		/** Checks that `client` signs in with the scope aett needs, before aett keeps it. */
+		readonly check: (client: OAuthClient) => Effect.Effect<void, TailscaleError>;
+		readonly policy: (client: OAuthClient) => Effect.Effect<PolicyFile, TailscaleError>;
+		/** Replaces the policy with `text`, unless it changed since the version `etag` names. */
+		readonly setPolicy: (
 			client: OAuthClient,
-			tags: ReadonlyArray<string>,
-		) => Effect.Effect<void, TailscaleError>;
-		/** A preauthorized, non-reusable key for one machine with `tags`, valid for a day. */
-		readonly mintKey: (
-			client: OAuthClient,
-			tags: ReadonlyArray<string>,
-		) => Effect.Effect<AuthKey, TailscaleError>;
-		readonly devices: (client: OAuthClient) => Effect.Effect<ReadonlyArray<Device>, TailscaleError>;
-		readonly removeDevice: (
-			client: OAuthClient,
-			node: string,
-		) => Effect.Effect<void, TailscaleError>;
-		/** Replaces a device's tags. */
-		readonly setTags: (
-			client: OAuthClient,
-			node: string,
-			tags: ReadonlyArray<string>,
+			text: string,
+			etag: string,
 		) => Effect.Effect<void, TailscaleError>;
 	}
 >()("aett/adapters/Tailscale") {
@@ -180,137 +112,56 @@ export class Tailscale extends Context.Service<
 				);
 			});
 
-			const mintKey = Effect.fn("Tailscale.mintKey")(function* (
-				client: OAuthClient,
-				tags: ReadonlyArray<string>,
-			) {
-				const minted = yield* mint(yield* authorized(client), tags, keyLifetime, "aett");
+			const check = Effect.fn("Tailscale.check")(function* (client: OAuthClient) {
+				const granted = (yield* token(client)).scope?.split(" ") ?? [];
 
-				return {
-					key: Redacted.make(minted.key),
-					expires: new Date(minted.expires),
-				} satisfies AuthKey;
-			});
-
-			const devices = Effect.fn("Tailscale.devices")(function* (client: OAuthClient) {
-				const api = yield* authorized(client);
-
-				const listed = yield* api
-					.get("/tailnet/-/devices")
-					.pipe(
-						Effect.flatMap(HttpClientResponse.schemaBodyJson(Devices)),
-						Effect.catch(failure("list the tailnet's devices")),
-					);
-
-				return listed.devices.flatMap((device) => {
-					const address = device.addresses.find((candidate) => isIP(candidate) === 4);
-
-					return address === undefined
-						? []
-						: [
-								{
-									node: device.nodeId,
-									name: device.name.replace(/\.$/, ""),
-									hostname: device.hostname,
-									address,
-									tags: device.tags ?? [],
-									created: new Date(device.created),
-								} satisfies Device,
-							];
-				});
-			});
-
-			const removeDevice = Effect.fn("Tailscale.removeDevice")(function* (
-				client: OAuthClient,
-				node: string,
-			) {
-				const api = yield* authorized(client);
-
-				// A device that is gone already, removed by hand or by an earlier run, is what was wanted.
-				yield* api.del(`/device/${encodeURIComponent(node)}`).pipe(
-					Effect.catchIf(
-						(error) => "response" in error && error.response?.status === 404,
-						() => Effect.void,
-					),
-					Effect.catch(failure(`remove the device ${node}`)),
-				);
-			});
-
-			const check = Effect.fn("Tailscale.check")(function* (
-				client: OAuthClient,
-				tags: ReadonlyArray<string>,
-			) {
-				const granted = new Set((yield* token(client)).scope?.split(" ") ?? []);
-				const missing = scopes.filter((scope) => !granted.has(scope));
-
-				if (missing.length > 0) {
+				if (!granted.includes(policyScope)) {
 					return yield* new TailscaleError({
-						message: `The OAuth client lacks the scope ${missing.join(" and ")}. Make one with Auth Keys: Write and Devices Core: Write.`,
+						message: "The OAuth client can't write the policy. Make one with Policy File: Write.",
 					});
 				}
 
-				const api = yield* authorized(client);
-
-				// aett mints each machine's key with its role's tag alone, which the policy has to allow.
-				return yield* Effect.forEach(
-					tags,
-					(tag) =>
-						Effect.gen(function* () {
-							const { id } = yield* mint(api, [tag], 60_000, "aett check").pipe(
-								Effect.mapError(
-									(error) =>
-										new TailscaleError({
-											message: `${error.message}. The policy has to let the OAuth client's tag own ${tag} in tagOwners.`,
-										}),
-								),
-							);
-
-							yield* api
-								.del(`/tailnet/-/keys/${encodeURIComponent(id)}`)
-								.pipe(Effect.catch(failure(`delete the key ${id} it minted to check ${tag}`)));
-						}),
-					{ discard: true },
-				);
+				return yield* Effect.void;
 			});
 
-			const setTags = Effect.fn("Tailscale.setTags")(function* (
+			const policy = Effect.fn("Tailscale.policy")(function* (client: OAuthClient) {
+				const api = yield* authorized(client);
+
+				return yield* api
+					.execute(
+						HttpClientRequest.get("/tailnet/-/acl").pipe(
+							HttpClientRequest.setHeader("Accept", "application/hujson"),
+						),
+					)
+					.pipe(
+						Effect.flatMap((response) =>
+							Effect.map(response.text, (text): PolicyFile => ({
+								text,
+								etag: response.headers["etag"] ?? "",
+							})),
+						),
+						Effect.catch(failure("read the tailnet's policy")),
+					);
+			});
+
+			const setPolicy = Effect.fn("Tailscale.setPolicy")(function* (
 				client: OAuthClient,
-				node: string,
-				tags: ReadonlyArray<string>,
+				text: string,
+				etag: string,
 			) {
 				const api = yield* authorized(client);
 
-				yield* HttpClientRequest.post(`/device/${encodeURIComponent(node)}/tags`).pipe(
-					HttpClientRequest.bodyJson({ tags }),
-					Effect.flatMap(api.execute),
-					Effect.catch(failure(`tag the device ${node} ${tags.join(", ")}`)),
-				);
+				yield* api
+					.execute(
+						HttpClientRequest.post("/tailnet/-/acl").pipe(
+							HttpClientRequest.setHeader("If-Match", etag),
+							HttpClientRequest.bodyText(text, "application/hujson"),
+						),
+					)
+					.pipe(Effect.catch(failure("update the tailnet's policy")));
 			});
 
-			return Tailscale.of({ check, mintKey, devices, removeDevice, setTags });
+			return Tailscale.of({ check, policy, setPolicy });
 		}),
 	).pipe(Layer.provide(FetchHttpClient.layer));
 }
-
-// How long a key aett mints is good for, in milliseconds.
-const keyLifetime = 86_400_000;
-
-/**
- * The devices a machine may have become when it joined with a key aett
- * minted that `expires`: those with its hostname and `tag` that joined while
- * the key was good. A one-time key joins one device, so with more it is open
- * which.
- */
-export const joinedAs = (
-	devices: ReadonlyArray<Device>,
-	hostname: string,
-	tag: string,
-	expires: Date,
-) =>
-	devices.filter(
-		(device) =>
-			device.hostname === hostname &&
-			device.tags.includes(tag) &&
-			device.created.getTime() >= expires.getTime() - keyLifetime - 60_000 &&
-			device.created.getTime() <= expires.getTime() + 60_000,
-	);

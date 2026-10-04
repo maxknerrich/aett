@@ -1,15 +1,14 @@
 import { Console, Effect, FileSystem, Option, Path, Redacted, Schema } from "effect";
 import { Prompt } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Secrets } from "../adapters/secrets.ts";
-import { type Device, joinedAs, OAuthClient, Tailscale } from "../adapters/tailscale.ts";
+import { OAuthClient, Tailscale, TailscaleError } from "../adapters/tailscale.ts";
 import type { Fleet } from "../domain/fleet.ts";
-import { grantsFor, ownerTag, tagOf, unlockTag } from "../domain/tailnet.ts";
-import { secretFile, tailscaleKey } from "../domain/secrets.ts";
-import type { MachineRecord, State } from "../domain/state.ts";
-import { machineAgeKeys } from "./identity.ts";
-import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
+import { secretFile } from "../domain/secrets.ts";
+import { mergePolicy, policyNeeds, policySnippet } from "../domain/tailnet.ts";
+import { FleetError, loadFleet, readState } from "./load.ts";
 
-/** Where the fleet keeps its Tailscale OAuth client, encrypted to the operators alone. */
+/** Where the fleet keeps the OAuth client that edits the tailnet's policy, encrypted to the operators alone. */
 const clientFile = secretFile("tailscale/oauth");
 
 const ClientJson = Schema.fromJsonString(OAuthClient);
@@ -31,10 +30,15 @@ export const oauthClient = Effect.fn("oauthClient")(function* (root: string) {
 	);
 });
 
+const policyPage = "https://login.tailscale.com/admin/acls/file";
+
+// Where aett notes what it last showed an operator who keeps the policy by hand.
+const shownFile = "state/policy.json";
+
 /**
- * Sets up the fleet's tailnet access once: says what the tailnet's policy
- * needs and how to make the OAuth client, asks for it, checks it and keeps
- * it encrypted to the operators.
+ * Sets up the fleet's tailnet once: says how machines join, and keeps the
+ * OAuth client that lets aett edit the tailnet's policy, if the operator
+ * gives one. Without one it shows what to add to the policy by hand.
  */
 export const setupTailscale = Effect.fn("setupTailscale")(function* (root: string) {
 	const fleet = yield* loadFleet(root);
@@ -42,55 +46,34 @@ export const setupTailscale = Effect.fn("setupTailscale")(function* (root: strin
 	const secrets = yield* Secrets;
 	const state = yield* readState(root, fleet);
 
-	const grants = grantsFor(fleet, state);
-
 	const web = [...fleet.services.values()].some(({ plugin }) =>
 		Object.values(plugin.endpoints ?? {}).some((endpoint) => endpoint.web === true),
 	);
 
-	const tags = [
-		...new Set([
-			...fleet.machines.map(({ role }) => tagOf(role)),
-			...(fleet.machines.some(({ encrypted }) => encrypted) ? [unlockTag] : []),
-		]),
-	].toSorted();
-
 	yield* Console.log(
 		[
-			"aett reaches every machine over your tailnet. Each machine joins once with a key aett mints",
-			"for it through an OAuth client, tagged with its role. Your policy stays yours.",
+			"Each machine joins your tailnet once, when aett installs or first applies it: aett opens a",
+			"login page in your browser and you approve the machine there. It joins tagged with its",
+			"role, so the tailnet's policy has to list the fleet's tags, and grants let its machines",
+			"reach each other's services.",
 			"",
-			"1. In the tailnet policy file (https://login.tailscale.com/admin/acls/file), add the tags, each",
-			`   owned by ${ownerTag}, the OAuth client's own tag, so it can mint keys with any one of them:`,
-			"",
-			`   "tagOwners": { "${ownerTag}": ["autogroup:admin"], ${tags.map((tag) => `"${tag}": ["autogroup:admin", "${ownerTag}"]`).join(", ")} },`,
-			"",
-			"   and let this computer reach them on port 22. Give tag:unlock no access of its own: an",
-			"   encrypted machine's initrd joins with it, and its key sits unencrypted on the boot disk.",
-			...(grants.length === 0
-				? []
-				: [
-						"",
-						"   The fleet's machines reach each other's services through these grants:",
-						"",
-						...grants.map((grant) => `   ${JSON.stringify(grant)},`),
-					]),
-			"",
-			"2. Under Settings → OAuth clients (https://login.tailscale.com/admin/settings/oauth),",
-			"   generate a client with these scopes:",
-			"",
-			`   Auth Keys: Write, with the tag ${ownerTag}`,
-			`   Devices Core: Write, with the tag ${ownerTag}`,
-			"",
+			"aett can add those to the policy itself with an OAuth client that has the scope",
+			"Policy File: Write, which you generate under Settings → OAuth clients",
+			"(https://login.tailscale.com/admin/settings/oauth). Without one, aett shows what to add.",
 			...(web
 				? [
-						"3. Under DNS (https://login.tailscale.com/admin/dns), turn on MagicDNS and HTTPS",
-						"   Certificates: the fleet's web endpoints get their certificates there.",
 						"",
+						"Web endpoints get their certificates once MagicDNS and HTTPS Certificates are on under",
+						"DNS (https://login.tailscale.com/admin/dns).",
 					]
 				: []),
+			"",
 		].join("\n"),
 	);
+
+	if (!(yield* Prompt.Confirm({ message: "Let aett edit the policy with an OAuth client?" }))) {
+		return yield* showPolicy(root, fleet);
+	}
 
 	const id = yield* Prompt.String({ message: "The OAuth client's ID" });
 
@@ -104,257 +87,90 @@ export const setupTailscale = Effect.fn("setupTailscale")(function* (root: strin
 
 	const client: OAuthClient = { id: id.trim(), secret: Redacted.value(secret).trim() };
 
-	yield* tailscale.check(client, tags);
+	yield* tailscale.check(client);
 	yield* secrets.write(root, clientFile, state.operator.ageKeys, JSON.stringify(client));
+	yield* Console.log("The OAuth client works.");
 
-	return yield* Console.log(
-		"The OAuth client works. Machines join the tailnet with their next install or apply.",
-	);
+	return yield* syncPolicy(root, fleet);
 });
 
 /**
- * Mints a one-time key for each machine in `machines` that isn't on the
- * tailnet yet and has no key that still works, and keeps it encrypted to the
- * operators and the machine. Without the OAuth client it says how to set it
- * up instead. A Mac that runs the Tailscale app joins by itself.
+ * Makes sure the tailnet's policy lists what the fleet needs before its
+ * machines join: aett adds what it lacks with the OAuth client, or else shows
+ * the operator what to add whenever that changed since they last saw it.
  */
-export const mintKeys = Effect.fn("mintKeys")(function* (
-	root: string,
-	fleet: Fleet,
-	state: State,
-	machines: ReadonlySet<string>,
-) {
-	const fs = yield* FileSystem.FileSystem;
-	const path = yield* Path.Path;
-	const secrets = yield* Secrets;
-	const tailscale = yield* Tailscale;
-	const now = Date.now();
+export const syncPolicy = Effect.fn("syncPolicy")(function* (root: string, fleet: Fleet) {
+	const needs = policyNeeds(fleet);
 
-	// A machine already on the tailnet, or holding a key that still works, needs none.
-	const joining = yield* Effect.filter(
-		fleet.machines.filter(({ name }) => {
-			const recorded = state.machines.get(name);
-
-			return (
-				machines.has(name) &&
-				recorded?.tailnet === undefined &&
-				recorded?.node === undefined &&
-				recorded?.tailscaleApp !== true
-			);
-		}),
-		({ name }) =>
-			Effect.map(fs.exists(path.join(root, secretFile(tailscaleKey(name)))), (exists) => {
-				const expires = state.machines.get(name)?.tailscaleKeyExpires;
-
-				return !exists || expires === undefined || Date.parse(expires) < now;
-			}),
-	);
-
-	if (joining.length === 0) return yield* Effect.void;
+	if (needs.tags.length === 0) return;
 
 	const client = yield* oauthClient(root);
 
 	if (Option.isNone(client)) {
-		return yield* Console.log(
-			`${joining.map(({ name }) => name).join(", ")} can't join the tailnet until you run aett tailscale setup.`,
-		);
+		const fs = yield* FileSystem.FileSystem;
+		const path = yield* Path.Path;
+		const file = path.join(root, shownFile);
+
+		const shown =
+			(yield* fs.exists(file)) && (yield* fs.readFileString(file)) === JSON.stringify(needs);
+
+		if (!shown) yield* showPolicy(root, fleet);
+
+		return;
 	}
 
-	return yield* Effect.forEach(
-		joining,
-		(machine) =>
-			Effect.gen(function* () {
-				const { key, expires } = yield* tailscale.mintKey(client.value, [tagOf(machine.role)]);
-				const recipients = yield* machineAgeKeys(root, state, [machine.name]);
-
-				yield* secrets.write(
-					root,
-					secretFile(tailscaleKey(machine.name)),
-					[...state.operator.ageKeys, ...recipients],
-					Redacted.value(key),
-				);
-				// The key's tag is the node's once it joins, whatever role the machine has by then.
-				yield* updateRecord(root, machine.name, {
-					tailscaleKeyExpires: expires.toISOString(),
-					tag: tagOf(machine.role),
-				});
-				yield* Console.log(`Minted ${machine.name}'s key to join the tailnet.`);
-			}),
-		{ discard: true },
-	);
-});
-
-/**
- * Records what state lacks about each of `machines` on the tailnet, as the
- * tailnet lists them: the name and node of one known by its address, and
- * all of it for one that joined with the key aett minted for it. A node
- * whose tag isn't its machine's role's, after a role changed, gets that tag.
- * Plugins then name their peers, and no machine gets a key it doesn't need.
- * Without the OAuth client it waits.
- */
-export const nameOnTailnet = Effect.fn("nameOnTailnet")(function* (
-	root: string,
-	fleet: Fleet,
-	state: State,
-	machines: ReadonlySet<string>,
-) {
-	const ours = fleet.machines.filter(
-		({ name }) => machines.has(name) && state.machines.get(name)?.tailscaleApp !== true,
-	);
-
-	const unsettled = ours.filter(({ name, role }) => {
-		const recorded = state.machines.get(name);
-
-		return recorded?.tailnet === undefined
-			? recorded?.tailscaleKeyExpires !== undefined
-			: recorded.tailnetName === undefined ||
-					recorded.node === undefined ||
-					recorded.tag !== tagOf(role);
-	});
-
-	if (unsettled.length === 0) return;
-
-	const client = yield* oauthClient(root);
-
-	if (Option.isNone(client)) return;
-
 	const tailscale = yield* Tailscale;
-	const devices = yield* tailscale.devices(client.value);
 
-	yield* Effect.forEach(unsettled, ({ name, role }) => {
-		const recorded = state.machines.get(name);
+	// Machines can still join once the operator adds what aett couldn't.
+	yield* Effect.gen(function* () {
+		const current = yield* tailscale.policy(client.value);
 
-		const device = Option.fromUndefinedOr(
-			only(recordedNodes(devices, name, recorded, recorded?.tag ?? tagOf(role))),
+		const merged = yield* Effect.fromResult(mergePolicy(current.text, needs)).pipe(
+			Effect.mapError((message) => new TailscaleError({ message })),
 		);
 
-		return Effect.forEach(Option.toArray(device), (found) =>
-			Effect.gen(function* () {
-				if (!(found.tags.length === 1 && found.tags[0] === tagOf(role))) {
-					yield* tailscale.setTags(client.value, found.node, [tagOf(role)]);
-					yield* Console.log(`Tagged ${name} ${tagOf(role)} on the tailnet.`);
-				}
+		if (Option.isNone(merged)) return;
 
-				yield* updateRecord(root, name, {
-					tailnet: found.address,
-					tailnetName: found.name,
-					node: found.node,
-					tag: tagOf(role),
-				});
-			}),
-		);
-	});
-});
-
-/** A one-time key for an encrypted machine's initrd to join with as tag:unlock, if the OAuth client is set up. */
-export const mintUnlockKey = Effect.fn("mintUnlockKey")(function* (root: string) {
-	const tailscale = yield* Tailscale;
-	const client = yield* oauthClient(root);
-
-	return yield* Effect.transposeOption(
-		Option.map(client, (found) =>
-			Effect.map(tailscale.mintKey(found, [unlockTag]), ({ key }) => key),
+		yield* tailscale.setPolicy(client.value, merged.value, current.etag);
+		yield* Console.log("Added the fleet's tags and grants to the tailnet's policy.");
+	}).pipe(
+		Effect.catchTag("TailscaleError", (error) =>
+			Console.log(error.message).pipe(Effect.andThen(showPolicy(root, fleet))),
 		),
 	);
 });
 
-/**
- * Looks up on the tailnet the machine that joined with the key aett minted
- * for it, and records its address, name and node. Returns its address.
- */
-export const findOnTailnet = Effect.fn("findOnTailnet")(function* (
-	root: string,
-	fleet: Fleet,
-	state: State,
-	name: string,
-) {
-	const tailscale = yield* Tailscale;
-	const client = yield* oauthClient(root);
-	const machine = fleet.machines.find((declared) => declared.name === name);
-	const recorded = state.machines.get(name);
+// Shows the operator what the policy needs and notes that they saw it.
+const showPolicy = Effect.fn("showPolicy")(function* (root: string, fleet: Fleet) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const needs = policyNeeds(fleet);
 
-	if (
-		Option.isNone(client) ||
-		machine === undefined ||
-		recorded?.tailscaleKeyExpires === undefined
-	) {
-		return Option.none<string>();
-	}
-
-	const device = only(
-		recordedNodes(
-			yield* tailscale.devices(client.value),
-			name,
-			recorded,
-			recorded.tag ?? tagOf(machine.role),
-		),
+	yield* Console.log(
+		`The tailnet's policy (${policyPage}) needs these tags and grants for the fleet's machines to join and reach each other. Add what it lacks, or let aett do it with aett tailscale setup:\n\n${policySnippet(needs)}\n`,
 	);
-
-	if (device === undefined) return Option.none<string>();
-
-	yield* updateRecord(root, name, {
-		tailnet: device.address,
-		tailnetName: device.name,
-		node: device.node,
-	});
-
-	yield* Console.log(`${name} is on the tailnet as ${device.name} (${device.address}).`);
-
-	return Option.some(device.address);
+	yield* fs.writeFileString(path.join(root, shownFile), JSON.stringify(needs));
 });
 
 /**
- * Removes a machine's node, and its initrd's, from the tailnet. Says whether it could: not
- * without the OAuth client, nor when two nodes could be the machine's.
+ * How a joining machine is approved: aett opens the URL it waits at in the
+ * operator's browser, or says to open it.
  */
-export const removeFromTailnet = Effect.fn("removeFromTailnet")(function* (
-	root: string,
-	state: State,
-	name: string,
-) {
-	const tailscale = yield* Tailscale;
-	const client = yield* oauthClient(root);
-	const recorded = state.machines.get(name);
+export const approver = Effect.fn("approver")(function* (name: string) {
+	const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-	// One that joined before aett recorded its node, such as a guest whose host alone was applied.
-	const unnamed =
-		recorded?.node === undefined &&
-		(recorded?.tailnet !== undefined || recorded?.tailscaleKeyExpires !== undefined);
-
-	if (recorded?.node === undefined && recorded?.unlock === undefined && !unnamed) return true;
-
-	if (Option.isNone(client)) return false;
-
-	const found = unnamed
-		? recordedNodes(yield* tailscale.devices(client.value), name, recorded, recorded?.tag)
-		: [];
-
-	const nodes = [recorded?.node ?? only(found)?.node, recorded?.unlock?.node].flatMap((node) =>
-		Option.toArray(Option.fromUndefinedOr(node)),
-	);
-
-	yield* Effect.forEach(nodes, (node) => tailscale.removeDevice(client.value, node));
-
-	// With two that could be it, aett removes neither, rather than another machine; the operator does.
-	return found.length <= 1;
+	return (url: string) =>
+		Effect.firstSuccessOf(
+			["open", "xdg-open"].map((command) =>
+				spawner
+					.exitCode(ChildProcess.make(command, [url], { stdout: "ignore", stderr: "ignore" }))
+					.pipe(Effect.filterOrFail((exitCode) => exitCode === 0)),
+			),
+		).pipe(
+			Effect.as(`Approve ${name} on the tailnet in your browser (${url}). aett waits for it.`),
+			Effect.orElseSucceed(
+				() => `Open ${url} and approve ${name} on the tailnet there. aett waits for it.`,
+			),
+			Effect.flatMap(Console.log),
+		);
 });
-
-/**
- * The nodes a machine may have joined as, by its record: the one at its
- * address, or, known only by the key aett minted for it with `tag`, those
- * that joined with its name and that tag while the key was good.
- */
-const recordedNodes = (
-	devices: ReadonlyArray<Device>,
-	name: string,
-	recorded: MachineRecord | undefined,
-	tag: string | undefined,
-) =>
-	recorded?.tailnet === undefined
-		? recorded?.tailscaleKeyExpires === undefined || tag === undefined
-			? []
-			: joinedAs(devices, name, tag, new Date(recorded.tailscaleKeyExpires))
-		: devices.filter(({ address }) => address === recorded.tailnet);
-
-// The one item there is, or none when there are more or none.
-const only = <A>(items: ReadonlyArray<A>) => (items.length === 1 ? items[0] : undefined);
