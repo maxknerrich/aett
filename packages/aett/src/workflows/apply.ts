@@ -144,6 +144,12 @@ const applyLocalMac = Effect.fn("applyLocalMac")(function* (run: Run, name: stri
 	}
 });
 
+// Says an initrd didn't join this time, and why.
+const skipped = (name: string, why: string) =>
+	Console.log(`${name}'s initrd stays off the tailnet for now. ${why}`).pipe(
+		Effect.as(Option.none()),
+	);
+
 // Puts each encrypted target's initrd on the tailnet once, so aett machine unlock reaches it at
 // boot, once the operator approves it. Returns whether any joined, which changes the build.
 const enrollUnlocks = Effect.fn("enrollUnlocks")(function* (
@@ -175,11 +181,10 @@ const enrollUnlocks = Effect.fn("enrollUnlocks")(function* (
 				.enrollUnlock(connection, machine.name, yield* approver(`${machine.name}'s initrd`))
 				.pipe(
 					Effect.map(Option.some),
-					Effect.catchTag("EngineError", (error) =>
-						Console.log(
-							`${machine.name}'s initrd stays off the tailnet for now. ${error.message}`,
-						).pipe(Effect.as(Option.none())),
-					),
+					Effect.catchTags({
+						EngineError: (error) => skipped(machine.name, error.message),
+						SshError: (error) => skipped(machine.name, error.message),
+					}),
 				);
 
 			if (Option.isNone(enrolled)) return false;

@@ -97,6 +97,8 @@ const Policy = Schema.Struct({
 				src: Schema.optionalKey(Schema.Array(Schema.String)),
 				dst: Schema.optionalKey(Schema.Array(Schema.String)),
 				ip: Schema.optionalKey(Schema.Array(Schema.String)),
+				srcPosture: Schema.optionalKey(Schema.Unknown),
+				via: Schema.optionalKey(Schema.Unknown),
 			}),
 		),
 	),
@@ -191,11 +193,16 @@ export const mergePolicy = (
 
 	const tags = needs.tags.filter((tag) => !(tag in tagOwners));
 
+	// A grant limited to some devices' posture or to routes through some nodes doesn't count.
 	const missing = needs.grants.filter(
 		(want) =>
 			!grants.some(
 				(have) =>
-					covers(have.src, want.src) && covers(have.dst, want.dst) && covers(have.ip, want.ip),
+					have.srcPosture === undefined &&
+					have.via === undefined &&
+					covers(have.src, want.src) &&
+					covers(have.dst, want.dst) &&
+					covers(have.ip, want.ip),
 			),
 	);
 

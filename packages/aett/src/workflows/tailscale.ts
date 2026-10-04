@@ -72,6 +72,15 @@ export const setupTailscale = Effect.fn("setupTailscale")(function* (root: strin
 	);
 
 	if (!(yield* Prompt.Confirm({ message: "Let aett edit the policy with an OAuth client?" }))) {
+		const fs = yield* FileSystem.FileSystem;
+		const path = yield* Path.Path;
+		const stored = path.join(root, clientFile);
+
+		if (yield* fs.exists(stored)) {
+			yield* fs.remove(stored);
+			yield* Console.log(`Removed ${clientFile}: aett no longer edits the policy.`);
+		}
+
 		return yield* showPolicy(root, fleet);
 	}
 

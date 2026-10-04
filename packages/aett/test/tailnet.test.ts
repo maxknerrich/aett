@@ -90,5 +90,16 @@ describe("mergePolicy", () => {
 				needs,
 			),
 		).toEqual(Result.succeed(Option.none()));
+
+		// A grant limited to some devices' posture covers nothing.
+		expect(
+			Result.map(
+				mergePolicy(
+					`{"tagOwners": {"tag:server": [], "tag:unlock": []}, "grants": [{"src": ["*"], "dst": ["*"], "ip": ["*"], "srcPosture": ["posture:latest"]}]}`,
+					needs,
+				),
+				Option.isSome,
+			),
+		).toEqual(Result.succeed(true));
 	});
 });
