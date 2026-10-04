@@ -166,8 +166,9 @@ export const bridgeAddress = (subnet: string | undefined) =>
 
 /**
  * state/ssh_config: a Host block per machine with the fleet's user, which
- * logs in as the user at the machine's name on the tailnet, or for a guest
- * not on it yet through the port its host forwards on the LAN, and checks the
+ * logs in as the user at the machine's tailnet address, which works without
+ * MagicDNS, or for a guest not on the tailnet yet through the port its host
+ * forwards on the LAN, and checks the
  * machine's key against aett's known hosts at `knownHosts`. Macs are left
  * out. The operator includes it from ~/.ssh/config. Empty when no machine
  * has the user.
@@ -176,7 +177,7 @@ export const sshConfig = (fleet: Fleet, state: State, knownHosts: string) => {
 	const blocks = fleet.machines.flatMap(({ name, vm, user, kind }) => {
 		const recorded = state.machines.get(name);
 
-		const route = Option.match(Option.fromUndefinedOr(recorded?.tailnetName), {
+		const route = Option.match(Option.fromUndefinedOr(recorded?.tailnet), {
 			onSome: (tailnet) => Option.some([`\tHostName ${tailnet}`]),
 			onNone: () =>
 				Option.zipWith(

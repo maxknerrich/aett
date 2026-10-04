@@ -121,7 +121,13 @@ describe("sshConfig", () => {
 		const state = stateWith([
 			[
 				"zeus",
-				{ facts: false, host: "kronos", address: "10.100.1.2", tailnetName: "zeus.example.ts.net" },
+				{
+					facts: false,
+					host: "kronos",
+					address: "10.100.1.2",
+					tailnet: "100.64.0.7",
+					tailnetName: "zeus.example.ts.net",
+				},
 			],
 			[
 				"hades",
@@ -139,7 +145,7 @@ describe("sshConfig", () => {
 				"# Written by aett: the fleet's machines, over the tailnet. Include it from ~/.ssh/config.",
 				"",
 				"Host zeus",
-				"\tHostName zeus.example.ts.net",
+				"\tHostName 100.64.0.7",
 				"\tUser mkn",
 				"\tHostKeyAlias zeus",
 				'\tUserKnownHostsFile "/fleet/state/known_hosts"',
