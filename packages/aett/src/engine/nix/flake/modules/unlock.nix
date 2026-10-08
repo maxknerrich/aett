@@ -86,6 +86,8 @@ in
           "wlan"
         ];
         networkConfig.DHCP = "yes";
+        # As NetworkManager asks, so the DHCP server hands out the address aett recorded.
+        dhcpV4Config.ClientIdentifier = "mac";
       };
     };
 

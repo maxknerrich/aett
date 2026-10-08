@@ -2,7 +2,7 @@ import { Option, Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
 import { mergePolicy, policyNeeds } from "../src/domain/tailnet.ts";
-import { computer, fleet, hypervisor, nas, server } from "../src/index.ts";
+import { computer, fleet, hypervisor, nas, plugin, server } from "../src/index.ts";
 
 // The fleet aett works with for a declaration.
 const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
@@ -13,7 +13,7 @@ const needs = {
 };
 
 describe("policyNeeds", () => {
-	it("tags NixOS machines by role and grants plugins' endpoints by tag, and Macs as members", () => {
+	it("tags NixOS machines by role, grants plugins' endpoints by tag and Macs as members, and web endpoints to the whole tailnet", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
@@ -23,7 +23,8 @@ describe("policyNeeds", () => {
 					vault: nas(),
 					fawkes: computer({ os: "macos" }),
 				},
-				services: { backup: "hades" },
+				services: { backup: "hades", wiki: "vault" },
+				plugins: [plugin({ name: "wiki", endpoints: { page: { port: 8080, web: true } } })],
 			}),
 		);
 
@@ -35,6 +36,7 @@ describe("policyNeeds", () => {
 					dst: ["tag:server"],
 					ip: ["tcp:51515"],
 				},
+				{ src: ["*"], dst: ["tag:nas"], ip: ["tcp:8080"] },
 			],
 		});
 	});

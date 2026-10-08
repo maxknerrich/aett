@@ -60,16 +60,24 @@ const selectorsOf = (fleet: Fleet, names: ReadonlyArray<string>) => [
 
 /**
  * The grants the tailnet's policy needs so each plugin's clients and
- * instances reach its instances' endpoints: one per plugin that has
+ * instances reach its instances' endpoints, and the whole tailnet its web
  * endpoints.
  */
 export const grantsFor = (fleet: Fleet): ReadonlyArray<Grant> =>
 	[...fleet.services.values()].flatMap(({ plugin, instances, clients }) => {
-		const ip = Object.values(plugin.endpoints ?? {}).map(({ port }) => `tcp:${port}`);
-		const src = selectorsOf(fleet, [...instances, ...clients]);
+		const endpoints = Object.values(plugin.endpoints ?? {});
+
+		const ports = (web: boolean) =>
+			endpoints.flatMap((endpoint) =>
+				(endpoint.web === true) === web ? [`tcp:${endpoint.port}`] : [],
+			);
+
 		const dst = selectorsOf(fleet, instances);
 
-		return ip.length === 0 || src.length === 0 || dst.length === 0 ? [] : [{ src, dst, ip }];
+		return [
+			{ src: selectorsOf(fleet, [...instances, ...clients]), dst, ip: ports(false) },
+			{ src: ["*"], dst, ip: ports(true) },
+		].filter(({ src, ip }) => ip.length > 0 && src.length > 0 && dst.length > 0);
 	});
 
 /** What the fleet needs from the tailnet's policy: the tags its machines join with and the grants between them. */
