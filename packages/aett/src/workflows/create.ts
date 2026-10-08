@@ -155,24 +155,40 @@ export const create = Effect.fn("create")(function* (
 	});
 
 	const mac = yield* thisMacName;
+	const given = options.machines.length > 0 || options.noMachines;
 
-	const machines =
-		options.machines.length > 0 || options.noMachines
-			? options.machines
-			: yield* Option.match(mac, {
-					onNone: () => askMachines([]),
-					onSome: (here) =>
-						Prompt.Confirm({
-							message: `Add this Mac as ${here}? aett adopts the apps Homebrew has on it.`,
-							initial: true,
-						}).pipe(
-							Effect.flatMap((add) =>
-								askMachines(
-									add ? [{ name: here, role: "computer", mac: true, encrypted: false }] : [],
-								),
-							),
+	// This Mac's name in the fleet, if it is in it: asked for, or a --machine with its local name.
+	const included = given
+		? Option.filter(mac, (here) =>
+				options.machines.some((machine) => machine.mac && machine.name === here),
+			)
+		: yield* Option.match(mac, {
+				onNone: () => Effect.succeed(Option.none<string>()),
+				onSome: (here) =>
+					Prompt.Confirm({
+						message: "Include this Mac? aett adopts the apps Homebrew has on it.",
+						initial: true,
+					}).pipe(
+						Effect.flatMap((include) =>
+							include
+								? Prompt.String({
+										message: "Its name in the fleet",
+										default: here,
+										validate: (value) => Effect.fromResult(newMachineName([], value)),
+									}).pipe(Effect.map(Option.some))
+								: Effect.succeed(Option.none<string>()),
 						),
-				});
+					),
+			});
+
+	const machines = given
+		? options.machines
+		: yield* askMachines(
+				Option.match(included, {
+					onNone: () => [],
+					onSome: (named) => [{ name: named, role: "computer", mac: true, encrypted: false }],
+				}),
+			);
 
 	const duplicate = duplicateName(machines);
 
@@ -202,11 +218,8 @@ export const create = Effect.fn("create")(function* (
 
 	// The Mac aett runs on brings the apps it has, if fleet.ts declares it.
 	const adopted = yield* Effect.transposeOption(
-		Option.map(
-			Option.filter(mac, (here) =>
-				machines.some((machine) => machine.mac && machine.name === here),
-			),
-			(here) => Effect.map(installedApps, (apps): Adopted => ({ mac: here, apps })),
+		Option.map(included, (named) =>
+			Effect.map(installedApps, (apps): Adopted => ({ mac: named, apps })),
 		),
 	);
 
@@ -238,7 +251,7 @@ export const create = Effect.fn("create")(function* (
 	const installed = machines.find((machine) => !machine.mac);
 
 	const next = [
-		"  aett tailscale setup, once: every machine joins your tailnet through it.",
+		"  aett tailscale setup, once: what your tailnet's policy needs, which aett can add for you.",
 		...Option.toArray(
 			Option.map(adopted, ({ mac: here }) => `  aett apply ${here}, to take over this Mac.`),
 		),
