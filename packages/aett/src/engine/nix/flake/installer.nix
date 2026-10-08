@@ -89,6 +89,9 @@
     (pkgs.writeShellScriptBin "aett-code" "cat /run/issue.d/aett.issue")
   ];
 
+  # Wi-Fi cards need their firmware, which the kexec installer's netboot-minimal leaves out.
+  hardware.enableRedistributableFirmware = lib.mkForce true;
+
   # aett installs btrfs; leaving out ZFS keeps the image smaller.
   boot.supportedFilesystems.zfs = lib.mkForce false;
 
