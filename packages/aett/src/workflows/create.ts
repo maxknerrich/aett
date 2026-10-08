@@ -238,16 +238,21 @@ export const create = Effect.fn("create")(function* (
 
 	yield* Effect.forEach(failures, (failure) => Console.error(failure));
 
-	const installed = machines.find((machine) => !machine.mac);
+	const installed = machines.filter((machine) => !machine.mac);
 
 	const next = [
 		"  aett tailscale setup, once: what your tailnet's policy needs, which aett can add for you.",
 		...Option.toArray(
 			Option.map(adopted, ({ mac: here }) => `  aett apply ${here}, to take over this Mac.`),
 		),
-		installed === undefined
-			? "  Declare machines in fleet.ts, then boot one from the aett installer and run aett machine install <name>."
-			: `  Boot ${installed.name} from the aett installer, then: aett machine install ${installed.name}`,
+		...(installed.length === 0
+			? [
+					"  Declare machines in fleet.ts, then boot one from the aett installer and run aett machine install <name>.",
+				]
+			: installed.map(
+					({ name: machine }) =>
+						`  Boot ${machine} from the aett installer, then: aett machine install ${machine}`,
+				)),
 	];
 
 	yield* Console.log(["", "Next:", `  cd ${path.relative(cwd, root)}`, ...next].join("\n"));
