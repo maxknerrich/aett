@@ -157,7 +157,7 @@ export const create = Effect.fn("create")(function* (
 	const mac = yield* thisMacName;
 	const given = options.machines.length > 0 || options.noMachines;
 
-	// This Mac's name in the fleet, if it is in it: asked for, or a --machine with its local name.
+	// This Mac, by its local host name, if it is in the fleet: asked, or a --machine with that name.
 	const included = given
 		? Option.filter(mac, (here) =>
 				options.machines.some((machine) => machine.mac && machine.name === here),
@@ -168,17 +168,7 @@ export const create = Effect.fn("create")(function* (
 					Prompt.Confirm({
 						message: "Include this Mac? aett adopts the apps Homebrew has on it.",
 						initial: true,
-					}).pipe(
-						Effect.flatMap((include) =>
-							include
-								? Prompt.String({
-										message: "Its name in the fleet",
-										default: here,
-										validate: (value) => Effect.fromResult(newMachineName([], value)),
-									}).pipe(Effect.map(Option.some))
-								: Effect.succeed(Option.none<string>()),
-						),
-					),
+					}).pipe(Effect.map((include) => Option.filter(Option.some(here), () => include))),
 			});
 
 	const machines = given
