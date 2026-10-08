@@ -196,6 +196,17 @@ export class Engine extends Context.Service<
 			tag: string,
 			approve: Approve,
 		) => Effect.Effect<Joined, EngineError | SshError>;
+		/**
+		 * Switches `target`, a machine that runs Linux with Nix, into the aett
+		 * installer through kexec: it builds the installer itself and restarts
+		 * into it in memory, with `keys` able to log in as root and the Wi-Fi
+		 * networks it knew. Its disks stay as they are. The connection drops.
+		 */
+		readonly switchToInstaller: (
+			build: Build,
+			target: Connection,
+			keys: ReadonlyArray<string>,
+		) => Effect.Effect<void, EngineError | SshError>;
 		/** `target`'s IPv4 address on its LAN, where an encrypted machine's initrd answers; none without a route out. */
 		readonly lanAddress: (target: Connection) => Effect.Effect<Option.Option<string>, SshError>;
 		/**

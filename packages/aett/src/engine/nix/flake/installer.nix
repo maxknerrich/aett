@@ -53,6 +53,26 @@
     PasswordAuthentication = true;
   };
 
+  # Marks the installer, so aett tells it apart from a system it replaced through kexec.
+  environment.etc."aett-installer".text = revision;
+
+  # Booted through kexec from a running machine, the installer finds an archive with /aett in its
+  # initrd: the operators' SSH keys, which log in instead of the code, and the Wi-Fi networks the
+  # machine knew. This carries them into the live system.
+  boot.initrd.systemd.services.aett-carry = {
+    description = "Carry the operators' keys and Wi-Fi networks into the installer";
+    wantedBy = [ "initrd.target" ];
+    requires = [ "sysroot.mount" ];
+    after = [ "sysroot.mount" ];
+    before = [ "initrd.target" ];
+    unitConfig = {
+      DefaultDependencies = false;
+      ConditionPathExists = "/aett";
+    };
+    serviceConfig.Type = "oneshot";
+    script = "cp -a /aett/. /sysroot/";
+  };
+
   services.avahi = {
     enable = true;
     nssmdns4 = true;

@@ -77,6 +77,19 @@ export class Ssh extends Context.Service<
 			Scope.Scope
 		>;
 		/**
+		 * Logs in as root with the operators' keys from the SSH agent to a
+		 * machine aett is about to install, whatever runs on it: another Linux it
+		 * switches into the installer, or that installer. Its host key changes
+		 * with every boot, so it is not checked.
+		 */
+		readonly takeover: (
+			host: Host,
+		) => Effect.Effect<
+			Connection,
+			SshError | EngineError | PlatformError.PlatformError,
+			Scope.Scope
+		>;
+		/**
 		 * Logs in to an installed machine as root with the operator's key from the
 		 * SSH agent and keeps the connection open for the scope. The host key is
 		 * checked against `knownHosts` under the machine's name, whatever its
@@ -230,6 +243,22 @@ export class Ssh extends Context.Service<
 				});
 			});
 
+			const takeover = Effect.fn("Ssh.takeover")(function* (host: Host) {
+				return yield* open(host, yield* temporaryDirectory, {
+					target: "the machine",
+					options: [
+						"BatchMode=yes",
+						"ConnectTimeout=10",
+						"PasswordAuthentication=no",
+						"KbdInteractiveAuthentication=no",
+						"IdentityFile=none",
+						"StrictHostKeyChecking=no",
+						"UserKnownHostsFile=/dev/null",
+					],
+					env: {},
+				});
+			});
+
 			const machine = Effect.fn("Ssh.machine")(function* (
 				name: string,
 				host: Host,
@@ -268,7 +297,7 @@ export class Ssh extends Context.Service<
 				});
 			});
 
-			return Ssh.of({ installer, machine, guest });
+			return Ssh.of({ installer, takeover, machine, guest });
 		}),
 	);
 }

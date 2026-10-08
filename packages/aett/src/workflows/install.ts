@@ -1,7 +1,7 @@
-import { Console, Effect, FileSystem, Option, Path, Redacted, Schema } from "effect";
+import { Console, Effect, FileSystem, Option, Path, Redacted, Schedule, Schema } from "effect";
 import { Prompt } from "effect/cli";
 import { Secrets } from "../adapters/secrets.ts";
-import { Ssh } from "../adapters/ssh.ts";
+import { type Connection, Ssh } from "../adapters/ssh.ts";
 import {
 	type Disk,
 	diskLabel,
@@ -13,7 +13,7 @@ import {
 } from "../domain/disk.ts";
 import { type Fleet, guestsOf } from "../domain/fleet.ts";
 import { formatHost, type Host } from "../domain/host.ts";
-import { tagOf } from "../domain/tailnet.ts";
+import { joinedFrom, tagOf } from "../domain/tailnet.ts";
 import { Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
 import { machineHostKey, trustHostKey } from "./identity.ts";
@@ -87,7 +87,7 @@ export const install = Effect.fn("install")(function* (
 	// The installed machine is reached only over the tailnet, which it joins with its role's tag.
 	yield* syncPolicy(root, fleet);
 
-	const connection = yield* connect(options);
+	const connection = yield* reachInstaller(root, name, state.operator.sshKeys, options);
 	const { disks, uefi } = yield* engine.discover(root, name, connection);
 
 	// Installed systems boot with systemd-boot, so a machine booted without UEFI would be left unbootable.
@@ -278,6 +278,94 @@ const installable = (fleet: Fleet, name: string) =>
 	);
 
 // Logs in to the installer, asking for its code unless --code gave it.
+/**
+ * Logs in to the installer at `options.host` for install. Without --code it
+ * tries the operators' keys first: a machine that lets them in and still runs
+ * another Linux is switched into the installer in memory, once the operator
+ * agrees, and aett logs in to that installer on the machine's LAN. Its disks
+ * stay as they are until install erases them. Otherwise it asks for the code
+ * a stick-booted installer shows.
+ */
+const reachInstaller = Effect.fn("reachInstaller")(function* (
+	root: string,
+	name: string,
+	keys: ReadonlyArray<string>,
+	options: InstallOptions,
+) {
+	const ssh = yield* Ssh;
+	const engine = yield* Engine;
+
+	const running = yield* Option.match(options.code, {
+		onSome: () => Effect.succeed(Option.none()),
+		onNone: () => ssh.takeover(options.host).pipe(Effect.option),
+	});
+
+	if (Option.isNone(running)) return yield* connect(options);
+
+	if (yield* isInstaller(running.value)) return running.value;
+
+	const system = (yield* running.value.run(
+		'. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}"',
+	)).trim();
+
+	const node = joinedFrom(
+		yield* running.value.run("tailscale status --json --peers=false 2>/dev/null || true"),
+	);
+
+	const lan = Option.getOrElse(yield* engine.lanAddress(running.value), () => options.host.name);
+
+	yield* Console.log(
+		`${name} at ${formatHost(options.host)} runs ${system}. aett switches it into the installer in memory, without a USB stick; nothing is erased until you confirm its disks.`,
+	);
+
+	yield* Effect.forEach(Option.toArray(node), ({ tailnetName }) =>
+		Console.log(
+			`It is on your tailnet as ${tailnetName}. Remove that node at https://login.tailscale.com/admin/machines before you approve ${name} later, so the new one gets its name.`,
+		),
+	);
+
+	if (
+		!options.yes &&
+		!(yield* Prompt.Confirm({ message: `Switch ${name} into the installer now?` }))
+	) {
+		return yield* new InstallError({ message: `Left ${name} as it is.` });
+	}
+
+	const { build } = yield* emit(root);
+
+	yield* engine.switchToInstaller(build, running.value, keys);
+
+	// The installer isn't on the tailnet: aett finds it on the machine's LAN.
+	const installer = { name: lan, port: 22 };
+
+	yield* Console.log(`Waiting for the installer on ${name} at ${formatHost(installer)}…`);
+
+	return yield* ssh.takeover(installer).pipe(
+		Effect.flatMap((connection) =>
+			Effect.flatMap(isInstaller(connection), (ready) =>
+				ready
+					? Effect.succeed(connection)
+					: Effect.fail(
+							new InstallError({ message: `${name} at ${lan} isn't the installer yet.` }),
+						),
+			),
+		),
+		Effect.retry(Schedule.spaced("10 seconds").pipe(Schedule.upTo({ duration: "10 minutes" }))),
+		Effect.mapError(
+			(error) =>
+				new InstallError({
+					message: `${error.message}\nThe installer on ${name} didn't answer at ${lan}. aett reaches it on ${name}'s LAN, so from elsewhere connect to that LAN first, such as over your VPN. Its console shows what happened.`,
+				}),
+		),
+	);
+});
+
+// Whether `connection` is to the aett installer rather than to a system it replaces.
+const isInstaller = (connection: Connection) =>
+	connection
+		.run("test -e /etc/aett-installer && echo yes || true")
+		.pipe(Effect.map((said) => said.trim() === "yes"));
+
 const connect = Effect.fn("connect")(function* ({ host, code }: InstallerAccess) {
 	const ssh = yield* Ssh;
 

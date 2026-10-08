@@ -704,6 +704,36 @@ export const nixEngine = (flake: string, plugins: string) =>
 				return system;
 			});
 
+			const switchToInstaller = Effect.fn("NixEngine.switchToInstaller")(function* (
+				build: Build,
+				target: Connection,
+				keys: ReadonlyArray<string>,
+			) {
+				if ((yield* target.run("command -v nix >/dev/null && echo yes || true")).trim() !== "yes") {
+					return yield* new EngineError({
+						message:
+							"The machine has no Nix to build the installer with. Boot it from the aett installer stick instead.",
+					});
+				}
+
+				const source = yield* ship(build, target);
+
+				yield* Console.log("Building the installer on it…");
+
+				const kexec = (yield* target.stream(
+					`nix build --no-link --print-out-paths --extra-experimental-features 'nix-command flakes' ${shellQuote(`${source}#packages.`)}"$(nix eval --raw --impure --extra-experimental-features nix-command --expr builtins.currentSystem)".installer-kexec`,
+				)).trim();
+
+				yield* Console.log("Switching it into the installer…");
+
+				return yield* target
+					.run(
+						`keys=$(mktemp) && cat > "$keys" && ${shellQuote(`${kexec}/bin/aett-kexec`)} "$keys"`,
+						`${keys.join("\n")}\n`,
+					)
+					.pipe(Effect.asVoid);
+			});
+
 			const install = Effect.fn("NixEngine.install")(function* (
 				build: Build,
 				name: string,
@@ -958,6 +988,7 @@ export const nixEngine = (flake: string, plugins: string) =>
 				removeGuest,
 				placeGuestKey,
 				join,
+				switchToInstaller,
 				lanAddress,
 				unlockWifi,
 				refreshBoot,

@@ -165,6 +165,55 @@
           ];
         }).config.system.build.isoImage;
 
+      # The installer as a kernel and initrd that a running Linux machine with Nix boots into through
+      # kexec, without a USB stick. `aett-kexec <authorized_keys>` adds an archive with those keys and
+      # the Wi-Fi networks NetworkManager knows there, loads it all and restarts into it.
+      installerKexec =
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          inherit
+            ((nixpkgs.lib.nixosSystem {
+              modules = [
+                "${nixpkgs}/nixos/modules/installer/netboot/netboot-minimal.nix"
+                ./installer.nix
+                {
+                  nixpkgs.hostPlatform = system;
+                  _module.args.revision = self.shortRev or self.dirtyShortRev or "unknown";
+                }
+              ];
+            }))
+            config
+            ;
+        in
+        pkgs.writeShellApplication {
+          name = "aett-kexec";
+          runtimeInputs = [
+            pkgs.kexec-tools
+            pkgs.cpio
+            pkgs.gzip
+            pkgs.coreutils
+            pkgs.findutils
+          ];
+          text = ''
+            work=$(mktemp -d)
+            install -d -m 0700 "$work/aett/root/.ssh"
+            install -m 0600 "$1" "$work/aett/root/.ssh/authorized_keys"
+            if [ -d /etc/NetworkManager/system-connections ]; then
+              install -d -m 0700 "$work/aett/etc/NetworkManager/system-connections"
+              find /etc/NetworkManager/system-connections -maxdepth 1 -name '*.nmconnection' \
+                -exec install -m 0600 {} "$work/aett/etc/NetworkManager/system-connections/" \;
+            fi
+            (cd "$work" && find aett | cpio -o -H newc --quiet | gzip -9) > "$work/aett.cpio.gz"
+            cat ${config.system.build.netbootRamdisk}/initrd "$work/aett.cpio.gz" > "$work/initrd"
+            kexec --load ${config.system.build.kernel}/${config.system.boot.loader.kernelFile} \
+              --initrd="$work/initrd" \
+              --command-line "init=${config.system.build.toplevel}/init ${toString config.boot.kernelParams}"
+            # In a moment, so the command that started this returns first.
+            systemd-run --on-active=2 systemctl kexec
+          '';
+        };
+
       # Controllers run the tools aett shells out to from this pin.
       tools =
         system:
@@ -226,6 +275,7 @@
       packages =
         lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
           installer = installer system;
+          installer-kexec = installerKexec system;
           tools = tools system;
         })
         // {

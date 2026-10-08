@@ -62,7 +62,7 @@ Dotfiles live in `home/`. `home/default/` goes to every machine with your user, 
 | Command | What it does |
 |---|---|
 | `aett show` | Prints the fleet by machine: services, endpoints, packages, apps, dotfiles. |
-| `aett machine install <name>` | Installs a NixOS machine from the aett installer, erasing its disks. |
+| `aett machine install <name>` | Installs a NixOS machine from the aett installer, erasing its disks. One that already runs Linux with Nix switches into the installer itself, without a USB stick: pass `--host` with its address. |
 | `aett apply [name]` | Builds each machine's system on it and switches to it. On a Mac, it applies the Mac itself. |
 | `aett status` | Asks every machine whether it runs what fleet.ts builds, and how its services are. |
 | `aett update [name]` | Moves pins forward. On a Mac in the fleet, it also upgrades its apps. |
