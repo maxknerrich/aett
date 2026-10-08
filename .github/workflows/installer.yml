@@ -50,6 +50,14 @@ jobs:
             --out-link result \
             ./packages/aett/src/engine/nix/flake#packages.${{ matrix.system }}.installer
 
+      # What a running machine builds for itself to switch into the installer without a stick.
+      - name: Build kexec installer
+        run: |
+          nix build \
+            --print-build-logs \
+            --no-link \
+            ./packages/aett/src/engine/nix/flake#packages.${{ matrix.system }}.installer-kexec
+
       # Named after aett's version, and the commit too unless a version tag built it.
       - name: Prepare assets
         run: |
