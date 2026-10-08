@@ -632,26 +632,15 @@ export const nixEngine = (flake: string, plugins: string) =>
 			// nix reaches the target through its master connection: the pinned ssh first on PATH and the
 			// connection's options in NIX_SSHOPTS, which nix splits like a shell. With more than one
 			// connection nix would open its own master, which could not log in to an installer.
+			// Copies the build's flake alone: the machine fetches its pinned inputs itself, from GitHub and
+			// the binary caches, which is faster than through the controller when it is far away.
 			const ship = Effect.fn("NixEngine.ship")(function* (build: Build, target: Connection) {
-				yield* Console.log("Copying aett's flake and its inputs…");
+				yield* Console.log("Copying the fleet's flake…");
 
-				const output = yield* nix(
-					[
-						"flake",
-						"archive",
-						"--json",
-						"--to",
-						`ssh-ng://${target.destination}?max-connections=1`,
-						flakeAt(build.directory),
-					],
-					{
-						PATH: `${yield* tools}:${inheritedPath}`,
-						NIX_SSHOPTS: target.sshOptions.map(shellQuote).join(" "),
-					},
-				);
-
-				return yield* Schema.decodeUnknownEffect(ArchiveOutput)(output).pipe(
-					Effect.map(({ path: stored }) => stored),
+				// Archived here first, inputs included, which evaluating locked them into already.
+				const stored = yield* nix(["flake", "archive", "--json", flakeAt(build.directory)]).pipe(
+					Effect.flatMap(Schema.decodeUnknownEffect(ArchiveOutput)),
+					Effect.map(({ path: source }) => source),
 					Effect.catchTag("SchemaError", (error) =>
 						Effect.fail(
 							new EngineError({
@@ -660,6 +649,13 @@ export const nixEngine = (flake: string, plugins: string) =>
 						),
 					),
 				);
+
+				yield* nix(["copy", "--to", `ssh-ng://${target.destination}?max-connections=1`, stored], {
+					PATH: `${yield* tools}:${inheritedPath}`,
+					NIX_SSHOPTS: target.sshOptions.map(shellQuote).join(" "),
+				});
+
+				return stored;
 			});
 
 			const buildSystem = Effect.fn("NixEngine.buildSystem")(function* (
