@@ -557,7 +557,8 @@ const keygenAccepts = Effect.fnUntraced(function* (key: string) {
 
 /** Shows a key by its type and comment, or the end of its blob when it has no comment. */
 const keyLabel = (key: string) => {
-	const [type, blob = "", ...comment] = key.split(" ");
+	const [type, blob = "", ...rest] = key.trim().split(/\s+/);
+	const comment = rest.join(" ");
 
-	return comment.length > 0 ? `${comment.join(" ")} (${type})` : `…${blob.slice(-16)} (${type})`;
+	return comment === "" ? `…${blob.slice(-16)} (${type})` : `${comment} (${type})`;
 };
