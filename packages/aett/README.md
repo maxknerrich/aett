@@ -66,7 +66,7 @@ Dotfiles live in `home/`. `home/default/` goes to every machine with your user, 
 | `aett apply [name]` | Builds each machine's system on it and switches to it. On a Mac, it applies the Mac itself. |
 | `aett status` | Asks every machine whether it runs what fleet.ts builds, and how its services are. |
 | `aett update [name]` | Moves pins forward. On a Mac in the fleet, it also upgrades its apps. |
-| `aett machine unlock <name>` | Opens an encrypted machine waiting at boot, over the tailnet. |
+| `aett machine unlock <name>` | Opens an encrypted machine waiting at boot, over its LAN (reach it over a VPN from elsewhere). |
 | `aett machine destroy <name>` | Deletes a VM that fleet.ts dropped. You remove its node in the Tailscale admin console. |
 | `aett secret set <name>` | Sets a secret machines read. |
 | `aett tailscale setup` | Says what your tailnet's policy needs, or keeps the OAuth client that adds it. |

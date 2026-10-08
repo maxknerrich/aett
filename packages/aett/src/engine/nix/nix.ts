@@ -18,14 +18,14 @@ import { Source } from "../../domain/packages.ts";
 import { InputsLock, type Pins, Platform } from "../../domain/pins.ts";
 import { machineSecrets } from "../../domain/secrets.ts";
 import type { State } from "../../domain/state.ts";
-import { joinedFrom, unlockTag } from "../../domain/tailnet.ts";
+import { joinedFrom } from "../../domain/tailnet.ts";
 import {
 	type Approve,
 	type Build,
 	Engine,
 	EngineError,
-	type Enrolled,
 	type HostKey,
+	type Installed,
 	type InstallSecrets,
 } from "../engine.ts";
 import { FacterReport, installFacts } from "./facter.ts";
@@ -210,7 +210,7 @@ const placeGuestKey = (host: Connection, guest: string, hostKey: HostKey) =>
 // Where an installer keeps the tailnet identity the machine joined with until the install copies it.
 const joinDirectory = "/run/aett-join";
 
-// Where unlock.nix takes the initrd's tailnet identity, sshd key and Wi-Fi networks from.
+// Where unlock.nix takes the initrd's sshd key and Wi-Fi networks from.
 const unlockDirectory = "/persist/aett/unlock";
 
 // How a node joins the tailnet: as `hostname`, with `flags` for tailscale up, through the system's
@@ -324,22 +324,39 @@ const join = (target: Connection, hostname: string, tag: string, approve: Approv
 // Marks Wi-Fi networks the boot loader has yet to put into the initrd, until a boot loader install does.
 const wifiPending = `${unlockDirectory}/wifi-pending`;
 
-// Hands the Wi-Fi networks NetworkManager knows to the initrd as wpa_supplicant's configuration,
-// which only root can read. Says whether the boot loader has yet to put them into the initrd.
-const unlockWifi = Effect.fn("NixEngine.unlockWifi")(function* (target: Connection) {
+// The Wi-Fi networks NetworkManager knows on `target`, as wpa_supplicant's configuration for the initrd.
+const wifiConfig = Effect.fn("NixEngine.wifiConfig")(function* (target: Connection) {
 	const separator = "\n--- aett ---\n";
 
 	const keyfiles = yield* target.run(
 		`for file in /etc/NetworkManager/system-connections/*.nmconnection; do [ -f "$file" ] && cat "$file" && printf ${shellQuote(separator)}; done; true`,
 	);
 
+	return wpaSupplicant(keyfiles.split(separator));
+});
+
+// Hands the Wi-Fi networks NetworkManager knows to the initrd as wpa_supplicant's configuration,
+// which only root can read. Says whether the boot loader has yet to put them into the initrd.
+const unlockWifi = Effect.fn("NixEngine.unlockWifi")(function* (target: Connection) {
 	const said = yield* target.run(
 		`umask 077 && next=$(mktemp) && cat > "$next" && if cmp -s "$next" ${unlockDirectory}/wpa_supplicant.conf; then rm -f "$next"; else mv -f "$next" ${unlockDirectory}/wpa_supplicant.conf && touch ${wifiPending}; fi && if [ -e ${wifiPending} ]; then echo pending; fi`,
-		wpaSupplicant(keyfiles.split(separator)),
+		yield* wifiConfig(target),
 	);
 
 	return said.trim() === "pending";
 });
+
+// The address `target` reaches the internet from: its own on its LAN.
+const lanAddress = (target: Connection) =>
+	target
+		.run(
+			"ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \\([0-9.]*\\).*/\\1/p' | head -n 1",
+		)
+		.pipe(
+			Effect.map((printed) =>
+				Option.filter(Option.some(printed.trim()), (address) => address !== ""),
+			),
+		);
 
 // Installs the boot loader again for the system the machine runs, which appends the initrd's
 // secrets as they are now.
@@ -742,12 +759,31 @@ export const nixEngine = (flake: string, plugins: string) =>
 				yield* target.run(
 					`install -d -m 0700 /mnt/persist/var/lib/tailscale && cp -a ${joinDirectory}/. /mnt/persist/var/lib/tailscale/`,
 				);
+
+				// What unlock.nix puts into an encrypted machine's initrd, there before the boot loader install.
+				const unlockKey = yield* Effect.transposeOption(
+					Option.map(secrets.passphrase, () =>
+						Effect.gen(function* () {
+							const directory = `/mnt${unlockDirectory}`;
+
+							yield* target.run(
+								`install -d -m 0700 ${directory} && umask 077 && cat > ${directory}/wpa_supplicant.conf`,
+								yield* wifiConfig(target),
+							);
+
+							return (yield* target.run(
+								`ssh-keygen -q -t ed25519 -N "" -C ${shellQuote(`root@${name}-unlock`)} -f ${directory}/ssh_host_ed25519_key && cat ${directory}/ssh_host_ed25519_key.pub`,
+							)).trim();
+						}),
+					),
+				);
+
 				yield* Console.log("Installing…");
 				yield* target.run(
 					`nixos-install --root /mnt --system ${shellQuote(toplevel)} --no-root-passwd --no-channel-copy`,
 				);
 
-				return joined;
+				return { joined, unlockKey } satisfies Installed;
 			});
 
 			// Locks a scratch copy of the flake, which lists no machines, so nothing but the inputs is read.
@@ -803,37 +839,6 @@ export const nixEngine = (flake: string, plugins: string) =>
 					names.map((name) => [name, Option.fromNullOr(found[name] ?? null)] as const),
 				);
 			}, Effect.scoped);
-
-			const enrollUnlock = Effect.fn("NixEngine.enrollUnlock")(function* (
-				target: Connection,
-				name: string,
-				approve: Approve,
-			) {
-				const joined = yield* joinWith(
-					target,
-					{
-						hostname: `${name}-unlock`,
-						flags: `--advertise-tags=${unlockTag} --accept-dns=false --accept-routes=false --netfilter-mode=off`,
-						bin: "",
-						directory: Option.some(unlockDirectory),
-					},
-					approve,
-				);
-
-				const key = `${unlockDirectory}/ssh_host_ed25519_key`;
-
-				const hostKey = (yield* target.run(
-					`[ -f ${key} ] || ssh-keygen -q -t ed25519 -N "" -C ${shellQuote(`root@${name}-unlock`)} -f ${key}; cat ${key}.pub`,
-				)).trim();
-
-				if (!hostKey.startsWith("ssh-ed25519 ")) {
-					return yield* new EngineError({
-						message: `${name}'s initrd joined the tailnet, but its SSH key is missing.`,
-					});
-				}
-
-				return { ...joined, hostKey } satisfies Enrolled;
-			});
 
 			// The pinned tools and the operator's terminal for a command that may ask for sudo's password.
 			const interactive = Effect.fn("NixEngine.interactive")(function* (
@@ -957,7 +962,7 @@ export const nixEngine = (flake: string, plugins: string) =>
 				removeGuest,
 				placeGuestKey,
 				join,
-				enrollUnlock,
+				lanAddress,
 				unlockWifi,
 				refreshBoot,
 				buildDarwin,

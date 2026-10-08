@@ -19,6 +19,7 @@ import { emit } from "./compile.ts";
 import { machineHostKey, trustHostKey } from "./identity.ts";
 import { forgetRecord, loadFleet, readState, updateRecord } from "./load.ts";
 import { approver, syncPolicy } from "./tailscale.ts";
+import { unlockName } from "./unlock.ts";
 
 export class InstallError extends Schema.TaggedError<InstallError>()("InstallError", {
 	message: Schema.String,
@@ -127,8 +128,8 @@ export const install = Effect.fn("install")(function* (
 	// Trusted before the build, so the machine is a recipient of the secrets it reads on first boot.
 	yield* trustHostKey(root, name, hostKey.publicKey);
 
-	// Erasing the disk erases the machine's tailnet identity, its initrd's and its guests', so they
-	// join again: the machine at this install, the others at its first apply. A failure puts their
+	// Erasing the disk erases the machine's tailnet identity and its guests', so they join again:
+	// the machine at this install, its guests at its first apply. A failure puts their
 	// records back. Their old nodes stay on the tailnet until the operator removes them.
 	const reinstalling = recorded?.installed === true;
 
@@ -151,13 +152,9 @@ export const install = Effect.fn("install")(function* (
 		}),
 	);
 
-	const oldNodes = erased.flatMap((machineName) => {
-		const old = state.machines.get(machineName);
-
-		return [old?.tailnetName, old?.unlock?.tailnetName].flatMap((node) =>
-			node === undefined ? [] : [node],
-		);
-	});
+	const oldNodes = erased.flatMap((machineName) =>
+		Option.toArray(Option.fromUndefinedOr(state.machines.get(machineName)?.tailnetName)),
+	);
 
 	if (reinstalling) {
 		yield* Effect.forEach(erased, (machineName) =>
@@ -187,6 +184,19 @@ export const install = Effect.fn("install")(function* (
 		yield* updateRecord(root, name, chosen);
 	}
 
+	// An encrypted machine's initrd answers on its LAN from the first boot, where the installer is now.
+	if (machine.encrypted) {
+		const address = yield* Effect.fromOption(
+			yield* engine.lanAddress(connection),
+			() =>
+				new InstallError({
+					message: `The installer on ${name} has no route to the internet, so aett can't tell its LAN address. Nothing was erased.`,
+				}),
+		);
+
+		yield* updateRecord(root, name, { unlock: { address } });
+	}
+
 	const installed = yield* Effect.gen(function* () {
 		const { build } = yield* emit(root);
 
@@ -207,7 +217,7 @@ export const install = Effect.fn("install")(function* (
 			);
 		}
 
-		const joined = yield* engine.install(
+		const done = yield* engine.install(
 			build,
 			name,
 			connection,
@@ -216,7 +226,7 @@ export const install = Effect.fn("install")(function* (
 			yield* approver(name),
 		);
 
-		return { keys, joined };
+		return { keys, ...done };
 	}).pipe(Effect.onError(() => Effect.ignore(restore)));
 
 	yield* updateRecord(root, name, {
@@ -227,9 +237,12 @@ export const install = Effect.fn("install")(function* (
 		tailnetName: installed.joined.tailnetName,
 	});
 	yield* Effect.forEach(installed.keys, ([guest, key]) => trustHostKey(root, guest, key.publicKey));
+	yield* Effect.forEach(Option.toArray(installed.unlockKey), (key) =>
+		trustHostKey(root, unlockName(name), key),
+	);
 	yield* Console.log(
 		machine.encrypted
-			? `Installed ${name}, on the tailnet as ${installed.joined.tailnetName}. It reboots now and asks for its passphrase at the console, this once. Apply it once it's up, and later boots open with aett machine unlock ${name}.`
+			? `Installed ${name}, on the tailnet as ${installed.joined.tailnetName}. It reboots now and waits for its passphrase: aett machine unlock ${name} opens it from its LAN, or type it at its console.`
 			: `Installed ${name}, on the tailnet as ${installed.joined.tailnetName}. It reboots now.`,
 	);
 

@@ -1,4 +1,4 @@
-import { Console, Effect, Path, Schema } from "effect";
+import { Console, Effect, Option, Path, Schema } from "effect";
 import { Secrets } from "../adapters/secrets.ts";
 import { Ssh } from "../adapters/ssh.ts";
 import { loadFleet, readState } from "./load.ts";
@@ -10,12 +10,20 @@ export class UnlockError extends Schema.TaggedError<UnlockError>()("UnlockError"
 /** The name aett knows an encrypted machine's initrd by in its known hosts, which no machine can have. */
 export const unlockName = (machine: string) => `${machine}.unlock`;
 
+// Where unlock.nix's sshd listens in the initrd.
+const unlockPort = 2222;
+
 /**
  * Opens an encrypted machine that waits at boot for its disk passphrase: logs
- * in to its initrd over the tailnet and answers the prompt with the
- * passphrase the fleet keeps. The machine then boots.
+ * in to its initrd on its LAN, at the address install recorded or at `host`,
+ * and answers the prompt with the passphrase the fleet keeps. The machine
+ * then boots.
  */
-export const unlock = Effect.fn("unlock")(function* (root: string, name: string) {
+export const unlock = Effect.fn("unlock")(function* (
+	root: string,
+	name: string,
+	host: Option.Option<string>,
+) {
 	const path = yield* Path.Path;
 	const ssh = yield* Ssh;
 	const secrets = yield* Secrets;
@@ -34,22 +42,33 @@ export const unlock = Effect.fn("unlock")(function* (root: string, name: string)
 
 	const recorded = (yield* readState(root, fleet)).machines.get(name)?.unlock;
 
-	if (recorded === undefined) {
-		return yield* new UnlockError({
-			message: `${name}'s initrd isn't on the tailnet yet. It joins with the first apply after install; until then, type the passphrase at ${name}'s console.`,
-		});
-	}
+	const address = yield* Effect.fromOption(
+		Option.orElse(host, () => Option.fromUndefinedOr(recorded?.address)),
+		() =>
+			new UnlockError({
+				message: `${name}'s initrd answers on its LAN once aett machine install set it up, and this install didn't. Type the passphrase at ${name}'s console.`,
+			}),
+	);
 
 	const passphrase = yield* secrets.read(root, path.join("secrets", name, "luks-passphrase.json"));
 
-	yield* Console.log(`Connecting to ${name}'s initrd at ${recorded.tailnetName}…`);
+	yield* Console.log(`Connecting to ${name}'s initrd at ${address}…`);
 
-	const connection = yield* ssh.machine(
-		unlockName(name),
-		{ name: recorded.tailnet, port: 22 },
-		path.join(root, "state", "known_hosts"),
-		"refuse",
-	);
+	const connection = yield* ssh
+		.machine(
+			unlockName(name),
+			{ name: address, port: unlockPort },
+			path.join(root, "state", "known_hosts"),
+			"refuse",
+		)
+		.pipe(
+			Effect.mapError(
+				(error) =>
+					new UnlockError({
+						message: `${error.message}\n${name}'s initrd answers on its LAN, at ${address}:${unlockPort}. From another network, reach that LAN first, such as over your VPN, or pass --host with an address that reaches it.`,
+					}),
+			),
+		);
 
 	// The initrd runs aett-unlock for the operators' keys whatever they ask for.
 	const answer = yield* connection.run("aett-unlock", `${passphrase}\n`);

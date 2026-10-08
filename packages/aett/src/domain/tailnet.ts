@@ -7,9 +7,6 @@ import type { Grant } from "./plugin.ts";
 /** The tag a machine joins the tailnet with: its role's. */
 export const tagOf = (role: string) => `tag:${role}`;
 
-/** The tag an encrypted machine's initrd joins the tailnet with, which the policy should grant nothing. */
-export const unlockTag = "tag:unlock";
-
 /** A node on the tailnet, as it says itself: its IPv4 address, its name there and its tags. */
 export interface Joined {
 	readonly tailnet: string;
@@ -81,15 +78,12 @@ export interface PolicyNeeds {
 	readonly grants: ReadonlyArray<Grant>;
 }
 
-/** The fleet's needs: each NixOS machine's role tag, tag:unlock for encrypted ones, and the plugins' grants. */
+/** The fleet's needs: each NixOS machine's role tag and the plugins' grants. */
 export const policyNeeds = (fleet: Fleet): PolicyNeeds => ({
-	tags: [
-		...tagsOf(
-			fleet,
-			fleet.machines.map(({ name }) => name),
-		),
-		...(fleet.machines.some(({ encrypted }) => encrypted) ? [unlockTag] : []),
-	],
+	tags: tagsOf(
+		fleet,
+		fleet.machines.map(({ name }) => name),
+	),
 	grants: grantsFor(fleet),
 });
 

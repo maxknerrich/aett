@@ -1,10 +1,9 @@
-# Unlocking an encrypted machine over the tailnet. Its initrd joins the tailnet as its own node,
-# <name>-unlock, from the identity aett enrolled into /persist/aett/unlock, over Ethernet or the Wi-Fi
-# networks the machine knows, and runs sshd. The operators' keys there can only answer the disk's
-# passphrase prompt: aett machine unlock pipes the passphrase to aett-unlock.
+# Unlocking an encrypted machine over its LAN. Its initrd brings up Ethernet or the Wi-Fi networks the
+# machine knows and runs sshd on port 2222, with the key install made in /persist/aett/unlock. The
+# operators' keys there can only answer the disk's passphrase prompt: aett machine unlock pipes the
+# passphrase to aett-unlock. From another network, the operator reaches the LAN first, such as over a VPN.
 #
-# Everything here sits unencrypted on the ESP: the unlock node's identity, its SSH host key and the
-# Wi-Fi passwords. Give tag:unlock no access in the tailnet's policy.
+# Everything here sits unencrypted on the ESP: the SSH host key and the Wi-Fi passwords.
 {
   config,
   lib,
@@ -73,7 +72,7 @@ in
   options.aett.unlock = lib.mkOption {
     type = lib.types.bool;
     default = false;
-    description = "Whether aett enrolled the unlock node, so its identity is in ${directory}.";
+    description = "Whether install made the initrd's sshd key in ${directory}.";
   };
 
   config = lib.mkIf config.aett.unlock {
@@ -91,19 +90,12 @@ in
     };
 
     boot.initrd.availableKernelModules = [
-      "tun"
       # Intel Wi-Fi's operation modes, which iwlwifi loads once it knows the card.
       "iwlmvm"
       "iwldvm"
     ];
 
-    boot.initrd.secrets = {
-      "/var/lib/tailscale/tailscaled.state" = "${directory}/tailscaled.state";
-      "/etc/aett/wpa_supplicant.conf" = "${directory}/wpa_supplicant.conf";
-    };
-
-    boot.initrd.systemd.contents."/etc/ssl/certs/ca-certificates.crt".source =
-      "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+    boot.initrd.secrets."/etc/aett/wpa_supplicant.conf" = "${directory}/wpa_supplicant.conf";
 
     boot.initrd.systemd.extraBin = {
       aett-unlock = unlock;
@@ -119,24 +111,10 @@ in
       };
     };
 
-    boot.initrd.systemd.services.aett-unlock-tailscaled = early // {
-      wants = [ "network-online.target" ];
-      after = [
-        "network-online.target"
-        "systemd-resolved.service"
-        "initrd-nixos-copy-secrets.service"
-      ];
-      requires = [ "initrd-nixos-copy-secrets.service" ];
-      serviceConfig = {
-        ExecStart = "${pkgs.tailscale}/bin/tailscaled --state=/var/lib/tailscale/tailscaled.state --statedir=/var/lib/tailscale --socket=/run/tailscale/tailscaled.sock --tun=tailscale0";
-        Restart = "on-failure";
-        RuntimeDirectory = "tailscale";
-      };
-    };
-
     boot.initrd.network.ssh = {
       enable = true;
-      port = 22;
+      # Not the system's port, so ssh clients that know the machine by its address don't see two host keys there.
+      port = 2222;
       hostKeys = [ "${directory}/ssh_host_ed25519_key" ];
       # The operators can only answer the passphrase prompt.
       authorizedKeys = map (key: ''restrict,command="/bin/aett-unlock" ${key}'') config.aett.operator.sshKeys;

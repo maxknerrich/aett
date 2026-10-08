@@ -13,7 +13,7 @@ const needs = {
 };
 
 describe("policyNeeds", () => {
-	it("tags NixOS machines by role, adds tag:unlock for encrypted ones, and grants plugins' endpoints by tag, and Macs as members", () => {
+	it("tags NixOS machines by role and grants plugins' endpoints by tag, and Macs as members", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
@@ -28,7 +28,7 @@ describe("policyNeeds", () => {
 		);
 
 		expect(policyNeeds(declared)).toEqual({
-			tags: ["tag:hypervisor", "tag:nas", "tag:server", "tag:unlock"],
+			tags: ["tag:hypervisor", "tag:nas", "tag:server"],
 			grants: [
 				{
 					src: ["tag:nas", "tag:server", "autogroup:member"],

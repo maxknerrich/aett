@@ -9,13 +9,12 @@ import type { State } from "../domain/state.ts";
 import { type Build, Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
 import { applyHome, HomeError, planHome, readHomes } from "./home.ts";
-import { placeGuestKeys, trustHostKey } from "./identity.ts";
+import { placeGuestKeys } from "./identity.ts";
 import { loadFleet, readState, updateRecord } from "./load.ts";
 import { applyMac, prepareMac, thisMac } from "./mac.ts";
 import { connectGuest, connectMachine, recordTailnet } from "./reach.ts";
 import { approver, syncPolicy } from "./tailscale.ts";
 import { tagOf } from "../domain/tailnet.ts";
-import { unlockName } from "./unlock.ts";
 
 export class ApplyError extends Schema.TaggedError<ApplyError>()("ApplyError", {
 	message: Schema.String,
@@ -39,9 +38,8 @@ interface Run {
 /**
  * Brings machines to their declared systems: the named one, or else every
  * machine aett can apply to, hosts before their guests, and the Mac aett
- * runs on. The tailnet's policy gets what the fleet needs first, then
- * encrypted machines' initrds join the tailnet, so aett machine unlock
- * reaches them, and a guest joins once it runs. Everything is evaluated
+ * runs on. The tailnet's policy gets what the fleet needs first, and a guest
+ * joins the tailnet once it runs. Everything is evaluated
  * before any machine is contacted, and the first machine that fails stops
  * the run. A machine that joined during the run was built without its
  * address, as were its peers, so the run goes once more.
@@ -67,16 +65,13 @@ export const apply = Effect.fn("apply")(function* (
 		Effect.flatMap(readState(root, declared), (recorded) => prepareMac(root, recorded, mac)),
 	);
 
-	const first = yield* emit(root);
+	const built = yield* emit(root);
 
 	const { targets, skipped } = yield* Effect.fromResult(
-		applyTargets(first.fleet, first.state, name, local),
+		applyTargets(built.fleet, built.state, name, local),
 	).pipe(Effect.mapError((message) => new ApplyError({ message })));
 
-	yield* syncPolicy(root, first.fleet);
-
-	const enrolled = yield* enrollUnlocks(root, first.state, first.fleet, targets);
-	const built = enrolled ? yield* emit(root) : first;
+	yield* syncPolicy(root, built.fleet);
 
 	yield* Effect.forEach(skipped, ({ name: machine, reason }) =>
 		Console.log(`${machine} ${reason}, skipping it.`),
@@ -173,66 +168,6 @@ const applyLocalMac = Effect.fn("applyLocalMac")(function* (run: Run, name: stri
 	}
 });
 
-// Says an initrd didn't join this time, and why.
-const skipped = (name: string, why: string) =>
-	Console.log(`${name}'s initrd stays off the tailnet for now. ${why}`).pipe(
-		Effect.as(Option.none()),
-	);
-
-// Puts each encrypted target's initrd on the tailnet once, so aett machine unlock reaches it at
-// boot, once the operator approves it. Returns whether any joined, which changes the build.
-const enrollUnlocks = Effect.fn("enrollUnlocks")(function* (
-	root: string,
-	state: State,
-	fleet: Fleet,
-	targets: ReadonlyArray<string>,
-) {
-	const engine = yield* Engine;
-
-	const waiting = fleet.machines.filter(
-		({ name, encrypted, kind }) =>
-			targets.includes(name) &&
-			encrypted &&
-			kind === "nixos" &&
-			state.machines.get(name)?.unlock === undefined,
-	);
-
-	const joined = yield* Effect.forEach(waiting, (machine) =>
-		Effect.gen(function* () {
-			const connection = yield* connectMachine(root, state, machine.name);
-
-			yield* Console.log(
-				`Putting ${machine.name}'s initrd on the tailnet, for aett machine unlock…`,
-			);
-
-			// The initrd can join with a later apply; this one goes on without it.
-			const enrolled = yield* engine
-				.enrollUnlock(connection, machine.name, yield* approver(`${machine.name}'s initrd`))
-				.pipe(
-					Effect.map(Option.some),
-					Effect.catchTags({
-						EngineError: (error) => skipped(machine.name, error.message),
-						SshError: (error) => skipped(machine.name, error.message),
-					}),
-				);
-
-			if (Option.isNone(enrolled)) return false;
-
-			yield* updateRecord(root, machine.name, {
-				unlock: { tailnet: enrolled.value.tailnet, tailnetName: enrolled.value.tailnetName },
-			});
-			yield* trustHostKey(root, unlockName(machine.name), enrolled.value.hostKey);
-			yield* Console.log(
-				`${machine.name}'s initrd is on the tailnet as ${enrolled.value.tailnetName}.`,
-			);
-
-			return true;
-		}).pipe(Effect.scoped),
-	);
-
-	return joined.includes(true);
-});
-
 // Builds a bare-metal machine's system on it and, once the operator agrees, switches to it. A
 // host's guests get their host keys first, so the ones the switch starts find their identity, and
 // the guests fleet.ts dropped stop once the host runs its new system.
@@ -244,9 +179,16 @@ const applyMachine = Effect.fn("applyMachine")(function* (run: Run, name: string
 
 	yield* placeGuestKeys(run.root, connection, guests, run.state.operator.ageKeys);
 
-	// The boot loader puts the Wi-Fi networks the machine knows now into its initrd.
-	const wifi =
-		run.state.machines.get(name)?.unlock !== undefined && (yield* engine.unlockWifi(connection));
+	// An encrypted machine's initrd answers on its LAN: at the address it has now, with the Wi-Fi
+	// networks it knows now, which the boot loader puts into the initrd.
+	const unlock = run.state.machines.get(name)?.unlock;
+	const wifi = unlock !== undefined && (yield* engine.unlockWifi(connection));
+
+	yield* Effect.forEach(Option.toArray(yield* engine.lanAddress(connection)), (address) =>
+		unlock === undefined || unlock.address === address
+			? Effect.void
+			: updateRecord(run.root, name, { unlock: { address } }),
+	);
 
 	const system = yield* engine.buildSystem(run.build, name, connection);
 	const current = yield* engine.currentSystem(connection);

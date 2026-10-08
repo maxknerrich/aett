@@ -64,8 +64,8 @@ export const MachineRecord = Schema.Struct({
 	// The machine on the tailnet, once it joined: its IPv4 address and its name there.
 	tailnet: Schema.optionalKey(Schema.String),
 	tailnetName: Schema.optionalKey(Schema.String),
-	// An encrypted machine's initrd on the tailnet, which aett machine unlock reaches.
-	unlock: Schema.optionalKey(Schema.Struct({ tailnet: Schema.String, tailnetName: Schema.String })),
+	// An encrypted machine's initrd, set up at install: its address on the LAN, where aett machine unlock reaches it.
+	unlock: Schema.optionalKey(Schema.Struct({ address: Schema.String })),
 	// A Mac: the public half of the age key aett made for it, which its secrets are encrypted to.
 	age: Schema.optionalKey(AgePublicKey),
 	// A Mac: whether Determinate Nix runs it, whose settings nix-darwin leaves to a file of their own.

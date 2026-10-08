@@ -96,11 +96,21 @@ const machine = Command.make("machine").pipe(
 				"Discover the machine, erase its disk and install NixOS from the installer.",
 			),
 		),
-		Command.make("unlock", { name: machineName }, ({ name }) =>
-			Effect.flatMap(fleet, (root) => unlock(root, name)),
+		Command.make(
+			"unlock",
+			{
+				name: machineName,
+				host: Flag.String("host").pipe(
+					Flag.withDescription(
+						"The machine's address, if not the LAN address install recorded, such as over a VPN.",
+					),
+					Flag.optional,
+				),
+			},
+			({ name, host }) => Effect.flatMap(fleet, (root) => unlock(root, name, host)),
 		).pipe(
 			Command.withDescription(
-				"Open an encrypted machine waiting at boot: send its disk passphrase to its initrd over the tailnet.",
+				"Open an encrypted machine waiting at boot: send its disk passphrase to its initrd on its LAN.",
 			),
 		),
 		Command.make(

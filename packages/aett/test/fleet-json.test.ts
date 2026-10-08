@@ -81,7 +81,7 @@ describe("fleetJson", () => {
 					{
 						facts: true,
 						disk,
-						unlock: { tailnet: "100.64.0.9", tailnetName: "box-unlock.example.ts.net", node: "n9" },
+						unlock: { address: "192.168.1.9" },
 					},
 				],
 				["web", { facts: true, disk, tailnet: "100.64.0.2", tailnetName: "web.example.ts.net" }],

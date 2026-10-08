@@ -174,7 +174,7 @@ export const fleetJson = (fleet: Fleet, state: State, extras: Extras, pins: Pins
 						? { pools: recorded?.pools ?? { root: [], tank: [] } }
 						: { disk: { device: recorded?.disk ?? "", encrypted: machine.encrypted } };
 
-				// An encrypted machine's initrd joins the tailnet once aett enrolled it.
+				// An encrypted machine's initrd answers on its LAN once install set it up.
 				const unlock = machine.encrypted && recorded?.unlock !== undefined;
 
 				return [
