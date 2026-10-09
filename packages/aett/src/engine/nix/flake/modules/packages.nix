@@ -70,6 +70,9 @@ in
   };
 
   config = {
+    # Packages under licences that aren't free, such as the 1Password CLI, install like any other.
+    nixpkgs.config.allowUnfree = true;
+
     aett.pkgs = resolved;
 
     environment.systemPackages = lib.attrValues resolved ++ map release cfg.releases;
