@@ -184,20 +184,20 @@ export const install = Effect.fn("install")(function* (
 		yield* updateRecord(root, name, chosen);
 	}
 
-	// An encrypted machine's initrd answers on its LAN from the first boot, where the installer is now.
-	if (machine.encrypted) {
-		const address = yield* Effect.fromOption(
-			yield* engine.lanAddress(connection),
-			() =>
-				new InstallError({
-					message: `The installer on ${name} has no route to the internet, so aett can't tell its LAN address. Nothing was erased.`,
-				}),
-		);
-
-		yield* updateRecord(root, name, { unlock: { address } });
-	}
-
 	const installed = yield* Effect.gen(function* () {
+		// An encrypted machine's initrd answers on its LAN from the first boot, where the installer is now.
+		if (machine.encrypted) {
+			const address = yield* Effect.fromOption(
+				yield* engine.lanAddress(connection),
+				() =>
+					new InstallError({
+						message: `The installer on ${name} has no route to the internet, so aett can't tell its LAN address. Nothing was erased.`,
+					}),
+			);
+
+			yield* updateRecord(root, name, { unlock: { address } });
+		}
+
 		const { build } = yield* emit(root);
 
 		// The machine's guests start on its first boot, so their host keys go on its disk too.

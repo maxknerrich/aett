@@ -199,12 +199,16 @@
             work=$(mktemp -d)
             install -d -m 0700 "$work/aett/root/.ssh"
             install -m 0600 "$1" "$work/aett/root/.ssh/authorized_keys"
-            # NetworkManager's profile directories, each overriding the ones before it.
-            install -d -m 0700 "$work/aett/etc/NetworkManager/system-connections"
+            # NetworkManager's profile directories, each overriding the ones before it. A profile tied to
+            # an interface name could miss the installer's, which names interfaces its own way.
+            carried="$work/aett/etc/NetworkManager/system-connections"
+            install -d -m 0700 "$carried"
             for directory in /usr/lib /run /etc; do
-              [ -d "$directory/NetworkManager/system-connections" ] || continue
-              find "$directory/NetworkManager/system-connections" -maxdepth 1 -name '*.nmconnection' \
-                -exec install -m 0600 {} "$work/aett/etc/NetworkManager/system-connections/" \;
+              for profile in "$directory"/NetworkManager/system-connections/*.nmconnection; do
+                [ -f "$profile" ] || continue
+                sed '/^interface-name=/d' "$profile" > "$carried/''${profile##*/}"
+                chmod 0600 "$carried/''${profile##*/}"
+              done
             done
             (cd "$work" && find aett | cpio -o -H newc --quiet | gzip -9) > "$work/aett.cpio.gz"
             cat ${config.system.build.netbootRamdisk}/initrd "$work/aett.cpio.gz" > "$work/initrd"
