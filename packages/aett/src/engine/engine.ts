@@ -44,6 +44,13 @@ export interface Installed {
 	readonly unlockKey: Option.Option<string>;
 }
 
+/** The package names of each Nix registry. */
+export interface NixNames {
+	readonly nixpkgs: ReadonlyArray<string>;
+	readonly unstable: ReadonlyArray<string>;
+	readonly "llm-agents": ReadonlyArray<string>;
+}
+
 /** Shows the operator the URL a machine joining the tailnet waits at until they approve it. */
 export type Approve = (url: string) => Effect.Effect<void>;
 
@@ -122,6 +129,10 @@ export class Engine extends Context.Service<
 			ReadonlyMap<string, Option.Option<Source>>,
 			EngineError | PlatformError.PlatformError
 		>;
+		/** Every package name in the Nix registries at the revisions `inputs` pins, for the editor to complete. */
+		readonly packageNames: (
+			inputs: InputsLock,
+		) => Effect.Effect<NixNames, EngineError | PlatformError.PlatformError>;
 		/** Downloads a file on the controller and returns the hash a build pins it by. */
 		readonly prefetch: (url: string) => Effect.Effect<string, EngineError>;
 		/** Checks a machine's system on the controller, before any machine is contacted. Returns what it evaluated. */

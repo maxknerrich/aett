@@ -19,6 +19,7 @@ import { Engine } from "../engine/engine.ts";
 import { loadFleet, readState } from "./load.ts";
 import { emitAsIs } from "./compile.ts";
 import { thisMac, upgradeApps } from "./mac.ts";
+import { writeRegistries } from "./registries.ts";
 
 export class PinsError extends Schema.TaggedError<PinsError>()("PinsError", {
 	message: Schema.String,
@@ -439,14 +440,17 @@ export const update = Effect.fn("update")(function* (root: string, names: Readon
 		}),
 	];
 
-	yield* writePins(root, {
+	const updated: Pins = {
 		inputs: lock,
 		releases: {
 			...pins.releases,
 			...Object.fromEntries(releases.map(({ release, pin }) => [release.github, pin] as const)),
 		},
 		packages: pins.packages,
-	});
+	};
+
+	yield* writePins(root, updated);
+	yield* writeRegistries(root, updated);
 
 	yield* Console.log(
 		changes.length === 0

@@ -268,6 +268,14 @@
       darwinConfigurations = lib.mapAttrs darwin (lib.filterAttrs isDarwin fleet.machines);
 
       lib = {
+        # The package names of each Nix registry, for the editor to complete in fleet.ts. Attribute
+        # names are the same on every system.
+        names = {
+          nixpkgs = builtins.attrNames nixpkgs.legacyPackages.x86_64-linux;
+          unstable = builtins.attrNames nixpkgs-unstable.legacyPackages.x86_64-linux;
+          llm-agents = lib.unique (lib.concatMap builtins.attrNames (builtins.attrValues llm-agents.packages));
+        };
+
         # The source of each package name on `system` for a machine on `channel`, first come first
         # served: llm-agents.nix, nixpkgs on that channel, nixpkgs unstable. aett pins the answer in the
         # fleet's state/pins.json.

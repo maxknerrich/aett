@@ -29,7 +29,9 @@ import {
 import { ageKeyPair, type Operator, SshPublicKey } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { installedApps } from "./mac.ts";
+import type { Pins } from "../domain/pins.ts";
 import { writePins } from "./pins.ts";
+import { writeRegistries } from "./registries.ts";
 
 export class CreateError extends Schema.TaggedError<CreateError>()("CreateError", {
 	message: Schema.String,
@@ -218,13 +220,12 @@ export const create = Effect.fn("create")(function* (
 		path.join(root, "package.json"),
 		`${JSON.stringify(manifest, null, "\t")}\n`,
 	);
-	yield* fs.writeFileString(path.join(root, ".gitignore"), "node_modules/\n.aett/build/\n");
+	// Everything under .aett/ is aett's to make again: the build and the registries' names.
+	yield* fs.writeFileString(path.join(root, ".gitignore"), "node_modules/\n.aett/\n");
 	// Before operator.json, so nothing that can fail comes between it and showing the private key.
-	yield* writePins(root, {
-		inputs: yield* (yield* Engine).defaultInputs,
-		releases: {},
-		packages: {},
-	});
+	const pins: Pins = { inputs: yield* (yield* Engine).defaultInputs, releases: {}, packages: {} };
+
+	yield* writePins(root, pins);
 	yield* fs.writeFileString(
 		path.join(root, "state", "operator.json"),
 		`${JSON.stringify({ sshKeys: [key], ageKeys: [age.publicKey] } satisfies Operator, null, "\t")}\n`,
@@ -237,6 +238,7 @@ export const create = Effect.fn("create")(function* (
 	const failures = Arr.getSomes([yield* gitInit(root), yield* installDependencies(root, manager)]);
 
 	yield* Effect.forEach(failures, (failure) => Console.error(failure));
+	yield* writeRegistries(root, pins);
 
 	const installed = machines.filter((machine) => !machine.mac);
 

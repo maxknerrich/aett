@@ -36,6 +36,15 @@ import { wpaSupplicant } from "./wifi.ts";
 // A local directory as a flake reference; nix parses it as a URL, so spaces and the like are percent-encoded.
 const flakeAt = (directory: string) => `path:${pathToFileURL(directory).pathname}`;
 
+// What flake.nix's lib.names evaluates to.
+const PackageNames = Schema.fromJsonString(
+	Schema.Struct({
+		nixpkgs: Schema.Array(Schema.String),
+		unstable: Schema.Array(Schema.String),
+		"llm-agents": Schema.Array(Schema.String),
+	}),
+);
+
 // What `nix flake archive --json` prints; `path` is the flake's own store path.
 const ArchiveOutput = Schema.fromJsonString(Schema.Struct({ path: Schema.String }));
 
@@ -837,6 +846,25 @@ export const nixEngine = (flake: string, plugins: string) =>
 			}, Effect.scoped);
 
 			// Evaluates flake.nix's lib.sources in a scratch copy of the flake locked to `inputs`.
+			// Evaluates flake.nix's lib.names in a scratch copy of the flake locked to `inputs`.
+			const packageNames = Effect.fn("NixEngine.packageNames")(function* (inputs: InputsLock) {
+				const directory = path.join(
+					yield* fs.makeTempDirectoryScoped({ prefix: "aett-" }),
+					"flake",
+				);
+
+				yield* copyFlake(directory, inputs);
+
+				return yield* nix(["eval", "--json", `${flakeAt(directory)}#lib.names`]).pipe(
+					Effect.flatMap(Schema.decodeUnknownEffect(PackageNames)),
+					Effect.catchTag("SchemaError", (error) =>
+						Effect.fail(
+							new EngineError({ message: `nix eval printed unexpected names: ${error.message}` }),
+						),
+					),
+				);
+			}, Effect.scoped);
+
 			const packageSources = Effect.fn("NixEngine.packageSources")(function* (
 				inputs: InputsLock,
 				platform: Platform,
@@ -980,6 +1008,7 @@ export const nixEngine = (flake: string, plugins: string) =>
 				updateInputs,
 				prefetch,
 				packageSources,
+				packageNames,
 				discover,
 				discovered,
 				emit,

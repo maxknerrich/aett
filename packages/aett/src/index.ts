@@ -1,3 +1,4 @@
+import { Predicate } from "effect";
 import type { Channel } from "./domain/fleet.ts";
 import type { Plugin, Role } from "./domain/plugin.ts";
 import type { shipped } from "./domain/shipped.ts";
@@ -176,11 +177,57 @@ export interface Release {
 export const release = (source: Release): Release => source;
 
 /**
- * A package: a name aett looks up the first time it sees it, in llm-agents.nix,
- * then nixpkgs on the machine's channel, then nixpkgs unstable, and pins in
- * state/pins.json; or a release().
+ * The names in each package registry. aett writes them into the fleet's
+ * .aett/packages.d.ts from its pins and Homebrew's catalog, so the editor
+ * completes them; until then any name goes.
  */
-export type Package = string | Release;
+// oxlint-disable-next-line typescript/no-empty-interface -- the fleet's generated declaration fills it in.
+export interface Registries {}
+
+/** The registries a package can come from, as a name leads it: nixpkgs.git. */
+export type RegistryName = "nixpkgs" | "unstable" | "llm-agents" | "cask" | "brew";
+
+// A registry's names: the generated ones, or any.
+type NamesIn<R extends RegistryName> = R extends keyof Registries ? Registries[R] & string : string;
+
+/** A registry's packages by name, each that name led by its source: nixpkgs.git is "nixpkgs.git". */
+export type Registry<R extends RegistryName> = {
+	readonly [Name in NamesIn<R>]: `${R}.${Name}`;
+};
+
+/**
+ * A package: a name aett picks the source of the first time it sees it and
+ * pins in state/pins.json, completed from every registry once generated; a
+ * registry's package, such as nixpkgs.git or cask.raycast; or a release().
+ */
+// `string & {}` keeps any name allowed without losing the completion of the known ones.
+export type Package = NamesIn<RegistryName> | (string & {}) | Release;
+
+declare global {
+	/** nixpkgs's packages, on the machine's channel: nixpkgs.git. */
+	const nixpkgs: Registry<"nixpkgs">;
+	/** nixpkgs unstable's packages: unstable["zed-editor"]. */
+	const unstable: Registry<"unstable">;
+	/** llm-agents.nix's packages: llmAgents["claude-code"]. */
+	const llmAgents: Registry<"llm-agents">;
+	/** Homebrew's casks, on Macs: cask.raycast. */
+	const cask: Registry<"cask">;
+	/** Homebrew's formulae, on Macs: brew.mas. */
+	const brew: Registry<"brew">;
+}
+
+// A registry as fleet.ts reads names off it: each name it reads is that name led by the registry.
+const registry = (source: RegistryName) =>
+	new Proxy({}, { get: (_, name) => (Predicate.isString(name) ? `${source}.${name}` : undefined) });
+
+// The registries are globals, so fleet.ts uses them without importing them; importing fleet sets them.
+Object.assign(globalThis, {
+	nixpkgs: registry("nixpkgs"),
+	unstable: registry("unstable"),
+	llmAgents: registry("llm-agents"),
+	cask: registry("cask"),
+	brew: registry("brew"),
+});
 
 // The names of the machines whose role is one of `Roles`.
 type WithRole<Machines, Roles> = {
@@ -264,7 +311,7 @@ type CheckedServices<Services, Machines, Plugins> = {
  * hardware, keyed by hostname. `services` puts things on them: a known name
  * is a service aett ships or a plugin from `plugins`, any other name is a
  * pack of your own. An entry is the machine it is on, a list of them, or an
- * object with `on`, `packages`, `apps` and a service's options; without `on`
+ * object with `on`, `packages` and a service's options; without `on`
  * it is on every machine it can be. `home/<name>/` follows its entry, and
  * `home/default/` goes to every machine with the user.
  *

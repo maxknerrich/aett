@@ -7,6 +7,7 @@ import { Engine } from "../engine/engine.ts";
 import { ensureGuestKeys } from "./identity.ts";
 import { FleetError, loadFleet, readState, updateRecord } from "./load.ts";
 import { completePins, readPins } from "./pins.ts";
+import { registriesFile, writeRegistries } from "./registries.ts";
 import { existingSecrets, shareSecrets } from "./secrets.ts";
 
 /**
@@ -35,6 +36,11 @@ export const emit = Effect.fn("emit")(function* (root: string) {
 	const extras = yield* shareSecrets(root, fleet, state);
 	const pins = yield* completePins(root, fleet, state);
 	const build = yield* engine.emit(root, fleet, state, extras, pins);
+
+	// A fleet made before aett wrote them, or one fresh from Git, gets the names once.
+	if (!(yield* (yield* FileSystem.FileSystem).exists(path.join(root, registriesFile)))) {
+		yield* writeRegistries(root, pins);
+	}
 
 	return { build, fleet, state, pins };
 });
