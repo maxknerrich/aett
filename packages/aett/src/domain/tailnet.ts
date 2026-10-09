@@ -86,14 +86,24 @@ export interface PolicyNeeds {
 	readonly grants: ReadonlyArray<Grant>;
 }
 
-/** The fleet's needs: each NixOS machine's role tag and the plugins' grants. */
-export const policyNeeds = (fleet: Fleet): PolicyNeeds => ({
-	tags: tagsOf(
+/**
+ * The fleet's needs: each NixOS machine's role tag, SSH to those machines
+ * from the owner's devices, where aett runs, and the plugins' grants.
+ */
+export const policyNeeds = (fleet: Fleet): PolicyNeeds => {
+	const tags = tagsOf(
 		fleet,
 		fleet.machines.map(({ name }) => name),
-	),
-	grants: grantsFor(fleet),
-});
+	);
+
+	return {
+		tags,
+		grants: [
+			...(tags.length === 0 ? [] : [{ src: ["autogroup:member"], dst: tags, ip: ["tcp:22"] }]),
+			...grantsFor(fleet),
+		],
+	};
+};
 
 // Who owns a tag aett adds: the tailnet's admins, who approve each machine that joins with it.
 const owners = ["autogroup:admin"];

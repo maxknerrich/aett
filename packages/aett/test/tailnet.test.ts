@@ -13,7 +13,7 @@ const needs = {
 };
 
 describe("policyNeeds", () => {
-	it("tags NixOS machines by role, grants plugins' endpoints by tag and Macs as members, and web endpoints to the whole tailnet", () => {
+	it("tags NixOS machines by role, lets the owner's devices SSH to them, grants plugins' endpoints by tag and Macs as members, and web endpoints to the whole tailnet", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
@@ -31,6 +31,11 @@ describe("policyNeeds", () => {
 		expect(policyNeeds(declared)).toEqual({
 			tags: ["tag:hypervisor", "tag:nas", "tag:server"],
 			grants: [
+				{
+					src: ["autogroup:member"],
+					dst: ["tag:hypervisor", "tag:nas", "tag:server"],
+					ip: ["tcp:22"],
+				},
 				{
 					src: ["tag:nas", "tag:server", "autogroup:member"],
 					dst: ["tag:server"],
