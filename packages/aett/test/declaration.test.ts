@@ -13,6 +13,20 @@ const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(decla
 const vp = release({ github: "voidzero-dev/vite-plus", asset: "vp-{target}.tar.gz", bin: "vp" });
 
 describe("decodeFleet", () => {
+	it("takes Homebrew's names, such as 1password, as package names", () => {
+		expect(
+			Result.isSuccess(
+				decodeFleet(
+					fleet({
+						user: "mkn",
+						machines: { fawkes: computer({ os: "macos" }) },
+						services: { mac: { packages: ["1password", "firefox@developer-edition", "brew.mas"] } },
+					}),
+				),
+			),
+		).toBe(true);
+	});
+
 	it("puts entries on the machines they name, packs on every machine but hypervisors without on, and Homebrew's packages only on Macs", () => {
 		const declared = loaded(
 			fleet({
@@ -273,7 +287,9 @@ describe("decodeFleet", () => {
 
 		expect(problems(bareMetal)).toContain("machines.box.system.memory: Unexpected key");
 		expect(problems(bareMetal)).toContain("machines.vault.system.encrypted: Unexpected key");
-		expect(problems(mac)).toContain("machines.mac.system.encrypted: Expected never");
+		expect(problems(mac)).toContain(
+			"machines.mac.system.encrypted: Unexpected key with value true",
+		);
 		expect(problems(small)).toContain("machines.vm.system.memory: Expected at least 512 MiB");
 		expect(problems(inline)).toContain("machines.box.system.memory: Unexpected key");
 		expect(problems(inline)).toContain("machines.web.packages: Unexpected key");

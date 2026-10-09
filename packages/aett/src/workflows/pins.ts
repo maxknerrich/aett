@@ -392,9 +392,17 @@ export const update = Effect.fn("update")(function* (root: string, names: Readon
 		];
 	};
 
+	// Homebrew's packages come unpinned; upgrading the Mac below takes them.
+	const homebrew = (name: string) =>
+		Option.exists(
+			sourceOf(pins, name, "darwin"),
+			({ source }) => source === "cask" || source === "brew",
+		);
+
 	const unknown = names.filter(
 		(name) =>
 			inputsFor(name).length === 0 &&
+			!homebrew(name) &&
 			!declared.some(({ github, bin }) => name === github || name === bin),
 	);
 

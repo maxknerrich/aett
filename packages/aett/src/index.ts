@@ -15,6 +15,7 @@ export type Size = `${number} ${"MiB" | "GiB" | "TiB"}`;
 export interface NixosSystem {
 	/** Puts the btrfs partition inside LUKS; the passphrase is typed at the console or sent with aett machine unlock. */
 	readonly encrypted?: boolean;
+	/** Its nixpkgs: stable for servers and hypervisors, unstable for computers, unless set. */
 	readonly channel?: Channel;
 }
 
@@ -64,7 +65,8 @@ interface Vm {
 interface Mac {
 	readonly os: "macos";
 	readonly host?: never;
-	readonly system?: { readonly [key: string]: never };
+	/** Its nixpkgs and nix-darwin: unstable unless set to stable. */
+	readonly system?: { readonly channel?: Channel };
 }
 
 // Rejects keys a config doesn't know, at its top level and in its system. Inferring a

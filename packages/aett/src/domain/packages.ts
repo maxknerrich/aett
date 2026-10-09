@@ -2,12 +2,13 @@ import { Option, Predicate, Schema } from "effect";
 
 /**
  * A package name: an attribute path such as "htop" or
- * "python3Packages.rich", whose source aett picks, or one led by the source
- * it comes from, such as "nixpkgs.htop", "unstable.zed-editor",
+ * "python3Packages.rich", or a Homebrew name such as "1password" or
+ * "firefox@developer-edition", whose source aett picks; or one led by the
+ * source it comes from, such as "nixpkgs.htop", "unstable.zed-editor",
  * "llm-agents.claude-code", "cask.raycast" or "brew.acsandmann/tap/rift".
  */
 export const PackagePath = Schema.String.check(
-	Schema.isPattern(/^(?:(?:cask|brew)\.[\w.+@/-]+|[A-Za-z_][\w'-]*(\.[A-Za-z_][\w'-]*)*)$/, {
+	Schema.isPattern(/^(?:(?:cask|brew)\.[\w.+@/-]+|\w[\w'@+-]*(\.\w[\w'@+-]*)*)$/, {
 		expected:
 			'a package name such as "htop", "python3Packages.rich" or one led by its source, such as "cask.raycast"',
 	}),

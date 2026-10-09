@@ -100,8 +100,7 @@ const Computer = Schema.Struct({
 const Mac = Schema.Struct({
 	role: Schema.Literal("computer"),
 	os: Schema.Literal("macos"),
-	// No settings yet; a record of nothing rejects every key, where an empty struct would not.
-	system: Schema.optionalKey(Schema.Record(Schema.String, Schema.Never)),
+	system: Schema.optionalKey(Schema.Struct({ channel: Schema.optionalKey(Channel) })),
 });
 
 // Enough of a declared machine to tell which shape it must have.
@@ -735,7 +734,8 @@ const toMachine = (
 		role: machine.role,
 		kind: machine.kind,
 		encrypted: machine.role === "nas" || system.encrypted === true,
-		channel: system.channel ?? "stable",
+		// Computers follow nixpkgs unstable, the rest stable, unless fleet.ts says otherwise.
+		channel: system.channel ?? (machine.role === "computer" ? "unstable" : "stable"),
 		vm: Option.map(Option.fromUndefinedOr(machine.host), (host) => ({
 			host,
 			cpu: system.cpu ?? 2,

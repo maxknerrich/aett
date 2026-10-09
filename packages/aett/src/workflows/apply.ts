@@ -3,6 +3,7 @@ import { Console, Effect, Option, Schema } from "effect";
 import { Prompt } from "effect/cli";
 import type { Connection } from "../adapters/ssh.ts";
 import { applyTargets } from "../domain/apply.ts";
+import { describeChanges } from "../domain/changes.ts";
 import { type Fleet, guestsOf } from "../domain/fleet.ts";
 import { type Entry, resolveHome } from "../domain/home.ts";
 import type { State } from "../domain/state.ts";
@@ -205,7 +206,10 @@ const applyMachine = Effect.fn("applyMachine")(function* (run: Run, name: string
 		return yield* stopDroppedGuests(run, name, connection);
 	}
 
-	const changes = yield* engine.changes(connection, current, system);
+	const changes = describeChanges(
+		yield* engine.changes(connection, current, system),
+		run.fleet.machines.find((machine) => machine.name === name)?.packages ?? [],
+	);
 
 	yield* Console.log(
 		changes === ""
@@ -366,7 +370,10 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 		return yield* settleGuest;
 	}
 
-	const changes = yield* engine.changes(connection, current, system);
+	const changes = describeChanges(
+		yield* engine.changes(connection, current, system),
+		run.fleet.machines.find((machine) => machine.name === name)?.packages ?? [],
+	);
 
 	yield* Console.log(
 		changes === ""

@@ -12,6 +12,8 @@ import { type Build, Engine } from "../engine/engine.ts";
 import { applyHome, planHome } from "./home.ts";
 import { updateRecord } from "./load.ts";
 import { recordTailnet, tailnetStatus } from "./reach.ts";
+import { describeChanges } from "../domain/changes.ts";
+import { brewfileEntries, undeclaredHomebrew } from "../domain/homebrew.ts";
 
 export class MacError extends Schema.TaggedError<MacError>()("MacError", {
 	message: Schema.String,
@@ -151,25 +153,18 @@ const runBrew = Effect.fn("runBrew")(function* (args: ReadonlyArray<string>) {
 });
 
 /**
- * The apps and formulae Homebrew has on this Mac that `brewfile` doesn't
- * list: what applying with zap removes. brew bundle cleanup lists them
- * without --force and fails when it finds any.
+ * What Homebrew has on this Mac that `brewfile` doesn't list, as "cask
+ * raycast" or "formula owner/tap/name": what applying with zap removes.
  */
 const undeclared = Effect.fn("undeclared")(function* (brewfile: string) {
-	const fs = yield* FileSystem.FileSystem;
-	const directory = yield* fs.makeTempDirectoryScoped({ prefix: "aett-" });
-	const file = `${directory}/Brewfile`;
+	const installed = yield* Effect.all({
+		casks: listed(["list", "--cask", "-1"]),
+		brews: listed(["list", "--formula", "--installed-on-request", "--full-name", "-1"]),
+		taps: listed(["tap"]),
+	});
 
-	yield* fs.writeFileString(file, brewfile);
-
-	const { stdout } = yield* runBrew(["bundle", "cleanup", `--file=${file}`]);
-
-	// It prints a heading per kind, such as "Would uninstall casks:", then a name per line.
-	return stdout
-		.split("\n")
-		.map((line) => line.trim())
-		.filter((line) => line !== "" && !/^(Would|Run) /.test(line));
-}, Effect.scoped);
+	return undeclaredHomebrew(installed, brewfileEntries(brewfile));
+});
 
 /**
  * Applies the Mac aett runs on: builds its nix-darwin system here, shows what
@@ -228,8 +223,8 @@ export const applyMac = Effect.fn("applyMac")(function* (
 	} else {
 		const changes =
 			current === ""
-				? "nix-darwin takes over this Mac."
-				: (yield* connection.run(`nix store diff-closures ${current} ${system}`)).trim();
+				? "  nix-darwin takes over this Mac."
+				: describeChanges(yield* engine.changes(connection, current, system), machine.packages);
 
 		yield* Console.log(
 			changes === ""
@@ -342,5 +337,5 @@ const listed = (args: ReadonlyArray<string>) =>
  */
 export const installedApps = Effect.all({
 	apps: listed(["list", "--cask", "-1"]),
-	brews: listed(["leaves", "--installed-on-request"]),
+	brews: listed(["list", "--formula", "--installed-on-request", "--full-name", "-1"]),
 });

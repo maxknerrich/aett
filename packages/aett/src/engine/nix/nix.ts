@@ -18,6 +18,7 @@ import { Source } from "../../domain/packages.ts";
 import { InputsLock, type Pins, Platform } from "../../domain/pins.ts";
 import { machineSecrets } from "../../domain/secrets.ts";
 import type { State } from "../../domain/state.ts";
+import type { Changes } from "../../domain/changes.ts";
 import { joinedFrom } from "../../domain/tailnet.ts";
 import {
 	type Approve,
@@ -108,10 +109,32 @@ const buildOn = <A>(
 const currentSystem = (target: Connection) =>
 	target.run("readlink -f /run/current-system").pipe(Effect.map((system) => system.trim()));
 
-const changes = (target: Connection, from: string, to: string) =>
+// The commands a system puts on PATH: its own and its users' profiles'.
+const commands = (target: Connection, system: string) =>
 	target
-		.run(`nix store diff-closures ${shellQuote(from)} ${shellQuote(to)}`)
-		.pipe(Effect.map((text) => text.trim()));
+		.run(
+			`ls -1 ${shellQuote(`${system}/sw/bin`)} ${shellQuote(system)}/etc/profiles/per-user/*/bin 2>/dev/null | grep -v -e ':$' -e '^$' | sort -u || true`,
+		)
+		.pipe(Effect.map((listed) => new Set(listed.split("\n").filter((name) => name !== ""))));
+
+const changes = Effect.fn("NixEngine.changes")(function* (
+	target: Connection,
+	from: string,
+	to: string,
+) {
+	const diff = (yield* target.run(
+		`nix store diff-closures ${shellQuote(from)} ${shellQuote(to)}`,
+	)).trim();
+
+	const before = yield* commands(target, from);
+	const after = yield* commands(target, to);
+
+	return {
+		diff,
+		removed: [...before].filter((name) => !after.has(name)).toSorted(),
+		added: [...after].filter((name) => !before.has(name)).toSorted(),
+	} satisfies Changes;
+});
 
 // nixos-rebuild's invocation: a transient unit finishes the switch even if the connection drops.
 // Its output goes to stderr, which streams to the terminal.

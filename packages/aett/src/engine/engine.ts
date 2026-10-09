@@ -7,6 +7,7 @@ import {
 	Schema,
 } from "effect";
 import type { Connection, SshError } from "../adapters/ssh.ts";
+import type { Changes } from "../domain/changes.ts";
 import type { Disk } from "../domain/disk.ts";
 import type { Channel, Fleet } from "../domain/fleet.ts";
 import type { Source } from "../domain/packages.ts";
@@ -154,12 +155,12 @@ export class Engine extends Context.Service<
 		) => Effect.Effect<string, EngineError | SshError>;
 		/** The system `target` runs now. */
 		readonly currentSystem: (target: Connection) => Effect.Effect<string, SshError>;
-		/** What changes from system `from` to system `to`, both in `target`'s store, as text for the operator; empty when no package changes. */
+		/** What changes from system `from` to system `to`, both in `target`'s store: the closure's diff and the commands that go and come. */
 		readonly changes: (
 			target: Connection,
 			from: string,
 			to: string,
-		) => Effect.Effect<string, SshError>;
+		) => Effect.Effect<Changes, SshError>;
 		/** Makes `system` what `target` runs and boots. */
 		readonly activate: (target: Connection, system: string) => Effect.Effect<void, SshError>;
 		/** Whether `host` has `guest` installed, and whether it runs. */

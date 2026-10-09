@@ -24,6 +24,11 @@
       url = "github:nix-darwin/nix-darwin/nix-darwin-26.05";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # A Mac on nixpkgs unstable takes nix-darwin's development branch, which tracks it.
+    nix-darwin-unstable = {
+      url = "github:nix-darwin/nix-darwin/master";
+      inputs.nixpkgs.follows = "nixpkgs-unstable";
+    };
   };
 
   outputs =
@@ -36,6 +41,7 @@
       llm-agents,
       microvm,
       nix-darwin,
+      nix-darwin-unstable,
       ...
     }:
     let
@@ -47,6 +53,11 @@
       channels = {
         stable = nixpkgs;
         unstable = nixpkgs-unstable;
+      };
+
+      darwins = {
+        stable = nix-darwin;
+        unstable = nix-darwin-unstable;
       };
 
       # The other sources packages.nix takes tools from.
@@ -134,7 +145,7 @@
 
       darwin =
         name: declared:
-        nix-darwin.lib.darwinSystem {
+        darwins.${declared.channel}.lib.darwinSystem {
           modules = [
             sops-nix.darwinModules.sops
             ./modules/options.nix
