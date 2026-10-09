@@ -7,7 +7,8 @@ import type { RegistryName } from "../index.ts";
 /** Where aett writes the registries' package names, which the editor completes in fleet.ts. */
 export const registriesFile = ".aett/packages.d.ts";
 
-// What a fleet's tsconfig.json needs for the editor: fleet.ts and its plugins, and the names.
+// What a fleet's tsconfig.json needs for the editor: fleet.ts and its plugins, and the names. Dotfiles
+// are the machines' files, not the fleet's code, even when they're TypeScript.
 const tsconfig = {
 	compilerOptions: {
 		strict: true,
@@ -18,6 +19,7 @@ const tsconfig = {
 		skipLibCheck: true,
 	},
 	include: ["**/*.ts", registriesFile],
+	exclude: ["**/dotfiles"],
 };
 
 // The declaration that fills in aett's Registries with every name.
