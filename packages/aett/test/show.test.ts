@@ -10,7 +10,7 @@ import { computer, fleet, hypervisor, release, server } from "../src/index.ts";
 const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
 
 describe("describeFleet", () => {
-	it("prints each machine with its services, endpoints, packs, packages by source and home trees", () => {
+	it("prints each machine with its services, endpoints, packs, packages by source and dotfiles", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
@@ -59,12 +59,12 @@ describe("describeFleet", () => {
 				"        services  tailscale, backup",
 				"        endpoints backup repository hades.example.ts.net:51515",
 				"        packages  kopia (nixpkgs) · tailscale (not pinned yet)",
-				"        home      home/default/, home/backup/",
+				"        dotfiles  dotfiles/default/, dotfiles/backup/",
 				"fawkes  computer, a Mac · not on the tailnet yet",
 				"        services  tailscale, backup client of hades",
 				"        packs     dev",
 				"        packages  ghostty (cask) · git, kopia (nixpkgs) · tailscale (not pinned yet) · vp v1.0.0 (o/vp)",
-				"        home      home/default/, home/dev/",
+				"        dotfiles  dotfiles/default/, dotfiles/dev/",
 			].join("\n"),
 		);
 	});

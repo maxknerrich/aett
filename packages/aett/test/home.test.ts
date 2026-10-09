@@ -67,7 +67,7 @@ describe("resolveHome", () => {
 	it("rejects a link that leads through another link, which could leave the home", () => {
 		expect(resolveHome(sets, ["chain"])).toEqual(
 			Result.fail(
-				"home/chain/escape links to alias/../outside, through the link alias. Links in a set can't lead through other links.",
+				"dotfiles/chain/escape links to alias/../outside, through the link alias. Links in a set can't lead through other links.",
 			),
 		);
 	});
@@ -75,12 +75,12 @@ describe("resolveHome", () => {
 	it("rejects what stands in the way of aett's manifest", () => {
 		expect(resolveHome(sets, ["state"])).toEqual(
 			Result.fail(
-				"home/state/.local/state/aett/home.json is in the way of aett's manifest, .local/state/aett/home.json.",
+				"dotfiles/state/.local/state/aett/home.json is in the way of aett's manifest, .local/state/aett/home.json.",
 			),
 		);
 		expect(resolveHome(sets, ["dotlocal"])).toEqual(
 			Result.fail(
-				"home/dotlocal/.local is in the way of aett's manifest, .local/state/aett/home.json.",
+				"dotfiles/dotlocal/.local is in the way of aett's manifest, .local/state/aett/home.json.",
 			),
 		);
 	});
@@ -90,8 +90,8 @@ describe("resolveHome", () => {
 			Result.fail(
 				[
 					".config/git/config is in both dev and work.",
-					"home/escape/.evil links to ../../etc/passwd, which is outside the home.",
-					"home/escape/.config/absolute links to the absolute path /etc/passwd. Links in a set are relative.",
+					"dotfiles/escape/.evil links to ../../etc/passwd, which is outside the home.",
+					"dotfiles/escape/.config/absolute links to the absolute path /etc/passwd. Links in a set are relative.",
 				].join("\n"),
 			),
 		);

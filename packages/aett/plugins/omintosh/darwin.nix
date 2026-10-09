@@ -1,7 +1,7 @@
 # omintosh: a keyboard-first Mac desktop. Rift tiles windows into five workspaces, SketchyBar shows them,
 # JankyBorders outlines the focused window and Karabiner turns the Globe key into a modifier for it all.
-# The configuration files land in the user's home from home/, where the fleet's own
-# home/omintosh/<path> wins. macOS asks once to let Rift, SketchyBar and Karabiner control the Mac.
+# The configuration files land in the user's home from dotfiles/, where the fleet's own
+# dotfiles/omintosh/<path> wins. macOS asks once to let Rift, SketchyBar and Karabiner control the Mac.
 { config, pkgs, ... }:
 {
   homebrew = {
@@ -32,7 +32,7 @@
 
   environment.systemPackages = [ pkgs.jq ];
 
-  # Reads ~/.config/sketchybar/sketchybarrc, which the home tree brings.
+  # Reads ~/.config/sketchybar/sketchybarrc, which the dotfiles bring.
   services.sketchybar = {
     enable = true;
     extraPackages = [ pkgs.jq ];

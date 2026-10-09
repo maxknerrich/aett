@@ -1,4 +1,4 @@
-# The shell set on a Mac, as on every NixOS server and computer: the tools the fleet's home trees expect.
+# The shell set on a Mac, as on every NixOS server and computer: the tools the fleet's dotfiles expect.
 { pkgs, ... }:
 {
   programs.fish.enable = true;

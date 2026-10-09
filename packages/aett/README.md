@@ -55,7 +55,7 @@ On a Mac, `create` offers to add the Mac itself and adopts what Homebrew has on 
 
 `packages` takes names and `release({ github, asset, bin })`. The first time aett sees a name, it picks the source. On Linux that's llm-agents.nix, else nixpkgs on the machine's channel, else nixpkgs unstable. On a Mac a Homebrew cask comes first, so apps land in /Applications and update themselves, then those, then a Homebrew formula. aett pins the choice per platform in `state/pins.json`, and `aett update` moves the pins. To choose the source yourself, take the package from its registry: `nixpkgs.git`, `unstable["zed-editor"]`, `llmAgents["claude-code"]`, `cask.raycast`, `brew.mas`. The registries are there in `fleet.ts` without an import, and your editor completes every name in them: aett writes the names of the pinned Nix inputs and Homebrew's catalog into `.aett/packages.d.ts` on `create` and `update`. Plain names complete too. Homebrew's packages reach only Macs and come unpinned.
 
-Dotfiles live in `home/`. `home/default/` goes to every machine with your user, and `home/<entry>/` follows its entry. `{{host.name}}`, `{{host.color}}` and `{{home}}` are filled in on each machine.
+Dotfiles live in `dotfiles/`. `dotfiles/default/` goes to every machine with your user, and `dotfiles/<entry>/` follows its entry. `{{host.name}}`, `{{host.color}}` and `{{home}}` are filled in on each machine.
 
 ## Commands
 
@@ -87,7 +87,7 @@ import { plugin, Schema } from "aett"
 export const hello = plugin({
 	name: "hello",
 	options: Schema.Struct({ greeting: Schema.optionalKey(Schema.String) }),
-	directory: new URL(".", import.meta.url), // nixos.nix, darwin.nix and home/
+	directory: new URL(".", import.meta.url), // nixos.nix, darwin.nix and dotfiles/
 	endpoints: { page: { port: 8080, web: true } },
 	health: "curl -fsS http://127.0.0.1:8080 >/dev/null && echo serving",
 })

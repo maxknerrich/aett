@@ -79,7 +79,7 @@ const packName = (mac: string) =>
 /**
  * Renders fleet.ts for what create was given: the user, the first machines,
  * and the apps of the Mac it runs on, in a pack named after the Mac, whose
- * home/<mac>/ then holds that Mac's own dotfiles.
+ * dotfiles/<mac>/ then holds that Mac's own dotfiles.
  */
 export const fleetSource = (
 	user: string,

@@ -1,6 +1,6 @@
 import { type Plugin, plugin } from "./plugin.ts";
 
-// The plugins aett ships. Their modules and home trees live in the package's plugins/<name>/.
+// The plugins aett ships. Their modules and dotfiles live in the package's plugins/<name>/.
 
 /**
  * Tailscale on every machine: aett reaches machines over the tailnet and

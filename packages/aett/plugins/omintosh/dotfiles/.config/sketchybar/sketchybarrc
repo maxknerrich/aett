@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# omintosh's bar. A file at home/omintosh/.config/sketchybar/sketchybarrc in the fleet replaces it.
+# omintosh's bar. A file at dotfiles/omintosh/.config/sketchybar/sketchybarrc in the fleet replaces it.
 sketchybar --bar position=top height=38 topmost=window show_in_fullscreen=off \
   color=0xff000000 \
   padding_left=6 padding_right=8

@@ -98,9 +98,9 @@ const readTrees = Effect.fn("readTrees")(function* (directory: string) {
 });
 
 /**
- * Reads every home tree by name: each plugin's own home/, under the plugin's
- * name, with the fleet's `<root>/home/<name>/` laid over it, and the fleet's
- * other trees such as home/default/.
+ * Reads every dotfile tree by name: each plugin's own dotfiles/, under the
+ * plugin's name, with the fleet's `<root>/dotfiles/<name>/` laid over it, and
+ * the fleet's other trees such as dotfiles/default/.
  */
 export const readHomes = Effect.fn("readHomes")(function* (root: string, fleet: Fleet) {
 	const fs = yield* FileSystem.FileSystem;
@@ -109,13 +109,13 @@ export const readHomes = Effect.fn("readHomes")(function* (root: string, fleet: 
 
 	const shipped = yield* Effect.forEach([...fleet.services.values()], ({ plugin }) =>
 		Effect.gen(function* () {
-			const tree = path.join(pluginDirectory(plugins, root, plugin), "home");
+			const tree = path.join(pluginDirectory(plugins, root, plugin), "dotfiles");
 
 			return (yield* fs.exists(tree)) ? [[plugin.name, yield* readTree(tree, "")] as const] : [];
 		}),
 	);
 
-	return overlay(new Map(shipped.flat()), yield* readTrees(path.join(root, "home")));
+	return overlay(new Map(shipped.flat()), yield* readTrees(path.join(root, "dotfiles")));
 });
 
 /** A planned sync of one user's home on one machine, which applyHome carries out. */

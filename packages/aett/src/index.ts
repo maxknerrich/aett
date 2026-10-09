@@ -314,8 +314,8 @@ type CheckedServices<Services, Machines, Plugins> = {
  * is a service aett ships or a plugin from `plugins`, any other name is a
  * pack of your own. An entry is the machine it is on, a list of them, or an
  * object with `on`, `packages` and a service's options; without `on`
- * it is on every machine it can be. `home/<name>/` follows its entry, and
- * `home/default/` goes to every machine with the user.
+ * it is on every machine it can be. `dotfiles/<name>/` follows its entry, and
+ * `dotfiles/default/` goes to every machine with the user.
  *
  * ```ts
  * export default fleet({

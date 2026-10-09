@@ -60,8 +60,8 @@ export interface Plugin<Name extends string = string, Options = unknown> {
 	readonly options?: Schema.Decoder<Options>;
 	/**
 	 * A directory with `nixos.nix` and `darwin.nix`, the modules aett imports on
-	 * the machines it configures, and a `home/` tree that lands in the user's
-	 * home on its instances, where the fleet's own `home/<name>/` wins. Shipped
+	 * the machines it configures, and a `dotfiles/` tree that lands in the user's
+	 * home on its instances, where the fleet's own `dotfiles/<name>/` wins. Shipped
 	 * plugins live in aett.
 	 */
 	readonly directory?: string | URL;

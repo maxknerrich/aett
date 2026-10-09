@@ -134,14 +134,15 @@ export const UserName = Schema.String.check(
 	),
 );
 
-/** An entry's name in `services`, which home/<name>/ follows. "default" names the home tree every machine gets. */
+/** An entry's name in `services`, which dotfiles/<name>/ follows. "default" names the dotfiles every machine gets. */
 export const EntryName = Schema.String.check(
 	Schema.isPattern(/^[a-z0-9][a-z0-9._-]*$/, {
 		expected: "a lowercase name: a-z, 0-9, dots, dashes and underscores",
 	}),
 	Schema.makeFilter(
 		(name: string) =>
-			name !== "default" || "Expected another name: home/default/ goes to every machine already",
+			name !== "default" ||
+			"Expected another name: dotfiles/default/ goes to every machine already",
 	),
 );
 
@@ -255,7 +256,7 @@ export interface Machine {
 	readonly releases: ReadonlyArray<Release>;
 	/** The plugins on it, by name. */
 	readonly services: ReadonlyArray<Placement>;
-	/** The trees under home/ that land in its home: default, then each entry it is on. */
+	/** The trees under dotfiles/ that land in its home: default, then each entry it is on. */
 	readonly home: ReadonlyArray<string>;
 	/** What it declares that aett can't build yet; install and apply refuse it while there is any. */
 	readonly unsupported: ReadonlyArray<string>;
@@ -756,7 +757,7 @@ const toMachine = (
 			.toSorted(),
 		releases,
 		services: placements,
-		// Plugins on every machine have no entry, so no home tree follows them.
+		// Plugins on every machine have no entry, so no dotfiles follow them.
 		home: user
 			? [
 					"default",

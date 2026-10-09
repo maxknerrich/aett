@@ -235,7 +235,7 @@ export const command = (aett: AettPackage) =>
 			),
 			Command.make("show", {}, () => Effect.flatMap(fleet, show)).pipe(
 				Command.withDescription(
-					"Print the fleet by machine: what each is, its services, packages, apps and home trees.",
+					"Print the fleet by machine: what each is, its services, packages and dotfiles.",
 				),
 			),
 			Command.make(

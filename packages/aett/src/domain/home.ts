@@ -49,7 +49,7 @@ const follow = (
 // Why a set's link can't be kept, if it can't: it must be relative, stay inside the home and lead
 // through no other link of the home.
 const linkProblems = (set: string, path: string, target: string, links: ReadonlySet<string>) => {
-	const file = `home/${set}/${path}`;
+	const file = `dotfiles/${set}/${path}`;
 
 	if (target.startsWith("/")) {
 		return [`${file} links to the absolute path ${target}. Links in a set are relative.`];
@@ -64,7 +64,7 @@ const linkProblems = (set: string, path: string, target: string, links: Readonly
 };
 
 /**
- * Lays a fleet's home trees over the home trees its plugins ship: under the
+ * Lays a fleet's dotfile trees over the ones its plugins ship: under the
  * same name, the fleet's file at a path wins over the plugin's at that path
  * or above or below it.
  */
@@ -92,7 +92,7 @@ export const overlay = (
 	);
 
 /**
- * Merges the home trees a machine gets into its home, sorted by path so the
+ * Merges the dotfile trees a machine gets into its home, sorted by path so the
  * order of the trees can't change it. A name without a tree adds nothing.
  * Links inside the home stay links, also when they lead into another tree.
  * Fails with every problem, one per line: a path in more than one tree, a
@@ -138,7 +138,7 @@ export const resolveHome = (
 		path === manifestPath ||
 		path.startsWith(`${manifestPath}/`) ||
 		manifestPath.startsWith(`${path}/`)
-			? [`home/${set}/${path} is in the way of aett's manifest, ${manifestPath}.`]
+			? [`dotfiles/${set}/${path} is in the way of aett's manifest, ${manifestPath}.`]
 			: [],
 	);
 
