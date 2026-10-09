@@ -7,14 +7,20 @@ const unescape = (value: string) =>
 		(_, escape: string) => ({ s: " ", t: "\t", n: "\n", r: "\r", "\\": "\\" })[escape] ?? escape,
 	);
 
-// The keyfile's keys by section, such as wifi.ssid.
+// NetworkManager's canonical names for its Wi-Fi sections and connection type, and the short ones.
+const aliases = new Map([
+	["802-11-wireless", "wifi"],
+	["802-11-wireless-security", "wifi-security"],
+]);
+
+// The keyfile's keys by section, such as wifi.ssid, under the short names.
 const parse = (keyfile: string) => {
 	const values = new Map<string, string>();
 
 	keyfile.split("\n").reduce((section, line) => {
 		const header = /^\[(.+)\]\s*$/.exec(line);
 
-		if (header?.[1] !== undefined) return header[1];
+		if (header?.[1] !== undefined) return aliases.get(header[1]) ?? header[1];
 
 		const equals = line.indexOf("=");
 
@@ -53,7 +59,9 @@ export const wpaSupplicant = (keyfiles: ReadonlyArray<string>) =>
 		.flatMap((values) => {
 			const ssid = values.get("wifi.ssid");
 
-			if (values.get("connection.type") !== "wifi" || ssid === undefined) return [];
+			const type = values.get("connection.type") ?? "";
+
+			if ((aliases.get(type) ?? type) !== "wifi" || ssid === undefined) return [];
 
 			const bytes = ssidBytes(ssid);
 			const management = values.get("wifi-security.key-mgmt");

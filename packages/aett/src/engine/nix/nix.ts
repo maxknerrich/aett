@@ -324,12 +324,19 @@ const join = (target: Connection, hostname: string, tag: string, approve: Approv
 // Marks Wi-Fi networks the boot loader has yet to put into the initrd, until a boot loader install does.
 const wifiPending = `${unlockDirectory}/wifi-pending`;
 
+// Where NetworkManager keeps its connection profiles, the last winning over the others.
+const profileDirectories = [
+	"/usr/lib/NetworkManager/system-connections",
+	"/run/NetworkManager/system-connections",
+	"/etc/NetworkManager/system-connections",
+];
+
 // The Wi-Fi networks NetworkManager knows on `target`, as wpa_supplicant's configuration for the initrd.
 const wifiConfig = Effect.fn("NixEngine.wifiConfig")(function* (target: Connection) {
 	const separator = "\n--- aett ---\n";
 
 	const keyfiles = yield* target.run(
-		`for file in /etc/NetworkManager/system-connections/*.nmconnection; do [ -f "$file" ] && cat "$file" && printf ${shellQuote(separator)}; done; true`,
+		`for file in ${profileDirectories.map((directory) => `${directory}/*.nmconnection`).join(" ")}; do [ -f "$file" ] && cat "$file" && printf ${shellQuote(separator)}; done; true`,
 	);
 
 	return wpaSupplicant(keyfiles.split(separator));

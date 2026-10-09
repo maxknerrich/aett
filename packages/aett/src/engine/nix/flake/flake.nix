@@ -199,11 +199,13 @@
             work=$(mktemp -d)
             install -d -m 0700 "$work/aett/root/.ssh"
             install -m 0600 "$1" "$work/aett/root/.ssh/authorized_keys"
-            if [ -d /etc/NetworkManager/system-connections ]; then
-              install -d -m 0700 "$work/aett/etc/NetworkManager/system-connections"
-              find /etc/NetworkManager/system-connections -maxdepth 1 -name '*.nmconnection' \
+            # NetworkManager's profile directories, each overriding the ones before it.
+            install -d -m 0700 "$work/aett/etc/NetworkManager/system-connections"
+            for directory in /usr/lib /run /etc; do
+              [ -d "$directory/NetworkManager/system-connections" ] || continue
+              find "$directory/NetworkManager/system-connections" -maxdepth 1 -name '*.nmconnection' \
                 -exec install -m 0600 {} "$work/aett/etc/NetworkManager/system-connections/" \;
-            fi
+            done
             (cd "$work" && find aett | cpio -o -H newc --quiet | gzip -9) > "$work/aett.cpio.gz"
             cat ${config.system.build.netbootRamdisk}/initrd "$work/aett.cpio.gz" > "$work/initrd"
             kexec --load ${config.system.build.kernel}/${config.system.boot.loader.kernelFile} \
