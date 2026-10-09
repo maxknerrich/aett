@@ -1003,6 +1003,13 @@ export const nixEngine = (flake: string, plugins: string) =>
 					"-c",
 					`f=/etc/nix/nix.custom.conf; if [ -e ${shellQuote(`${system}/etc/nix/nix.custom.conf`)} ] && [ -f "$f" ] && [ ! -L "$f" ]; then mv "$f" "$f.before-nix-darwin" && echo "Moved $f to $f.before-nix-darwin; aett writes Nix's settings there now." >&2; fi`,
 				]);
+				// A nix-homebrew install whose taps were Nix's links them read-only into the store, where
+				// Homebrew can't tap anything; Homebrew makes the directory again.
+				yield* interactive([
+					"/bin/sh",
+					"-c",
+					`for taps in /opt/homebrew/Library/Taps /usr/local/Homebrew/Library/Taps; do if [ -L "$taps" ]; then rm "$taps" && echo "Made $taps Homebrew's own again." >&2; fi; done`,
+				]);
 				yield* interactive([`${system}/activate`]);
 			});
 

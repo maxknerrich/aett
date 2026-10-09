@@ -124,8 +124,7 @@ const runBrew = Effect.fn("runBrew")(function* (args: ReadonlyArray<string>) {
 
 	if (binary === undefined) {
 		return yield* new MacError({
-			message:
-				"Homebrew isn't installed, and a Mac's apps come through it. Install it first: /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"",
+			message: "Homebrew isn't installed yet. Apply this Mac first, which installs it.",
 		});
 	}
 

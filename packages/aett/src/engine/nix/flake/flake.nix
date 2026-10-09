@@ -24,6 +24,8 @@
       url = "github:nix-darwin/nix-darwin/nix-darwin-26.05";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Homebrew on Macs, installed and pinned by Nix.
+    nix-homebrew.url = "github:zhaofengli/nix-homebrew";
     # A Mac on nixpkgs unstable takes nix-darwin's development branch, which tracks it.
     nix-darwin-unstable = {
       url = "github:nix-darwin/nix-darwin/master";
@@ -42,6 +44,7 @@
       microvm,
       nix-darwin,
       nix-darwin-unstable,
+      nix-homebrew,
       ...
     }:
     let
@@ -148,6 +151,7 @@
         darwins.${declared.channel}.lib.darwinSystem {
           modules = [
             sops-nix.darwinModules.sops
+            nix-homebrew.darwinModules.nix-homebrew
             ./modules/options.nix
             ./modules/secrets.nix
             ./modules/packages.nix

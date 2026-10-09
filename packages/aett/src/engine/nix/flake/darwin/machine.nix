@@ -61,6 +61,28 @@ in
     sops.age.keyFile = "/var/lib/sops-nix/key.txt";
     sops.age.sshKeyPaths = [ ];
 
+    # Homebrew itself comes from Nix, pinned with the fleet; an existing install is taken over and keeps
+    # what it installed. Taps stay Homebrew's, so brew bundle taps what the Brewfile needs, and the
+    # formulae and casks fleet.ts takes from a tap are trusted.
+    nix-homebrew = {
+      enable = true;
+      user = cfg.user.name;
+      autoMigrate = true;
+      mutableTaps = true;
+      trust =
+        let
+          fromTap =
+            entries:
+            builtins.filter (name: lib.length (lib.splitString "/" name) == 3) (
+              map (entry: entry.name) entries
+            );
+        in
+        {
+          formulae = fromTap config.homebrew.brews;
+          casks = fromTap config.homebrew.casks;
+        };
+    };
+
     homebrew = {
       enable = true;
       inherit (cfg.homebrew) casks brews;

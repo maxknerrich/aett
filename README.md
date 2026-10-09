@@ -34,7 +34,7 @@ aett tailscale setup       # once: whether aett keeps your tailnet's policy for 
 
 Each NixOS machine joins the tailnet once, when aett installs it or a VM first starts: aett opens a login page in your browser and you approve it. It joins tagged with its role, such as `tag:server`. Your tailnet's policy has to list those tags, and grants let the fleet's machines reach each other's services. Give `aett tailscale setup` an OAuth client with Policy File: Write and aett adds them itself; without one, it shows you what to add. Macs are your own devices on the Tailscale app.
 
-On a Mac, `create` offers to add the Mac itself and adopts what Homebrew has on it into its `packages`: the casks, and the formulae you installed. It keeps your new age key, which decrypts the fleet's secrets, in the login keychain. It also puts the key on the clipboard so you can save it in your password manager.
+On a Mac, `create` offers to add the Mac itself and adopts what Homebrew has on it into its `packages`: the casks, and the formulae you installed. aett installs and pins Homebrew itself through nix-homebrew, taking over an existing install in place. It keeps your new age key, which decrypts the fleet's secrets, in the login keychain. It also puts the key on the clipboard so you can save it in your password manager.
 
 ## The declaration
 
