@@ -33,13 +33,14 @@ describe("describeChanges", () => {
 });
 
 describe("undeclaredHomebrew", () => {
-	it("lists the casks, formulae and taps a Brewfile doesn't, a tap formula by its full name", () => {
+	it("lists the casks, formulae and taps a Brewfile doesn't, one from a tap by its full name or its own", () => {
 		const declared = brewfileEntries(
 			[
 				'tap "homebrew/cask"',
 				'brew "mas"',
 				'brew "owner/tap/tool"',
 				'cask "ghostty"',
+				'cask "other/tap/app"',
 				'mas "Xcode", id: 497799835',
 			].join("\n"),
 		);
@@ -47,9 +48,9 @@ describe("undeclaredHomebrew", () => {
 		expect(
 			undeclaredHomebrew(
 				{
-					casks: ["ghostty", "zoom"],
+					casks: ["ghostty", "app", "zoom"],
 					brews: ["mas", "owner/tap/tool", "acsandmann/tap/rift"],
-					taps: ["homebrew/cask", "owner/tap", "acsandmann/tap"],
+					taps: ["homebrew/cask", "owner/tap", "other/tap", "acsandmann/tap"],
 				},
 				declared,
 			),

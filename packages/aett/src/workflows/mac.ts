@@ -158,7 +158,7 @@ const runBrew = Effect.fn("runBrew")(function* (args: ReadonlyArray<string>) {
 const undeclared = Effect.fn("undeclared")(function* (brewfile: string) {
 	const installed = yield* Effect.all({
 		casks: listed(["list", "--cask", "-1"]),
-		brews: listed(["list", "--formula", "--installed-on-request", "--full-name", "-1"]),
+		brews: requestedFormulae,
 		taps: listed(["tap"]),
 	});
 
@@ -330,11 +330,66 @@ const listed = (args: ReadonlyArray<string>) =>
 		Effect.orElseSucceed((): ReadonlyArray<string> => []),
 	);
 
+// What a formula's install receipt says: whether it was asked for, and the tap it came from.
+const Receipt = Schema.fromJsonString(
+	Schema.Struct({
+		installed_on_request: Schema.optionalKey(Schema.Boolean),
+		source: Schema.optionalKey(
+			Schema.Struct({ tap: Schema.optionalKey(Schema.NullOr(Schema.String)) }),
+		),
+	}),
+);
+
 /**
- * What aett create adopts from this Mac: the casks Homebrew has, as its
- * apps, and the formulae installed on request, as its brews.
+ * The formulae installed on request, by full name such as
+ * acsandmann/tap/rift, from their install receipts: brew list leaves out
+ * those of taps it doesn't trust.
+ */
+const requestedFormulae = Effect.gen(function* () {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+
+	const cellars = yield* Effect.filter(["/opt/homebrew/Cellar", "/usr/local/Cellar"], (cellar) =>
+		fs.exists(cellar),
+	);
+
+	const found = yield* Effect.forEach(cellars, (cellar) =>
+		Effect.flatMap(fs.readDirectory(cellar), (names) =>
+			Effect.forEach(names, (name) =>
+				fs.readDirectory(path.join(cellar, name)).pipe(
+					Effect.flatMap((versions) =>
+						Effect.forEach(versions, (version) =>
+							fs.readFileString(path.join(cellar, name, version, "INSTALL_RECEIPT.json")).pipe(
+								Effect.flatMap(Schema.decodeUnknownEffect(Receipt)),
+								Effect.map(({ installed_on_request, source }) => {
+									const tap = source?.tap ?? "homebrew/core";
+
+									return installed_on_request === true
+										? [tap === "homebrew/core" ? name : `${tap}/${name}`]
+										: [];
+								}),
+								Effect.orElseSucceed((): ReadonlyArray<string> => []),
+							),
+						),
+					),
+					Effect.orElseSucceed((): ReadonlyArray<ReadonlyArray<string>> => []),
+				),
+			),
+		),
+	).pipe(
+		Effect.orElseSucceed(
+			(): ReadonlyArray<ReadonlyArray<ReadonlyArray<ReadonlyArray<string>>>> => [],
+		),
+	);
+
+	return [...new Set(found.flat(3))].toSorted();
+});
+
+/**
+ * What aett create adopts from this Mac: the casks Homebrew has, and the
+ * formulae installed on request.
  */
 export const installedApps = Effect.all({
 	apps: listed(["list", "--cask", "-1"]),
-	brews: listed(["list", "--formula", "--installed-on-request", "--full-name", "-1"]),
+	brews: requestedFormulae,
 });
