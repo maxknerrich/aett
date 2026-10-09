@@ -324,11 +324,12 @@ const join = (target: Connection, hostname: string, tag: string, approve: Approv
 // Marks Wi-Fi networks the boot loader has yet to put into the initrd, until a boot loader install does.
 const wifiPending = `${unlockDirectory}/wifi-pending`;
 
-// Where NetworkManager keeps its connection profiles, the last winning over the others.
+// Where NetworkManager keeps its connection profiles, the first shadowing the others: runtime ones,
+// then persistent ones, then those the system ships.
 const profileDirectories = [
-	"/usr/lib/NetworkManager/system-connections",
 	"/run/NetworkManager/system-connections",
 	"/etc/NetworkManager/system-connections",
+	"/usr/lib/NetworkManager/system-connections",
 ];
 
 // The Wi-Fi networks NetworkManager knows on `target`, as wpa_supplicant's configuration for the initrd.

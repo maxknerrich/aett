@@ -199,15 +199,23 @@
             work=$(mktemp -d)
             install -d -m 0700 "$work/aett/root/.ssh"
             install -m 0600 "$1" "$work/aett/root/.ssh/authorized_keys"
-            # NetworkManager's profile directories, each overriding the ones before it. A profile tied to
-            # an interface name could miss the installer's, which names interfaces its own way.
+            # NetworkManager's profile directories, a runtime profile shadowing a persistent one and that
+            # one a shipped one with its UUID. A profile tied to an interface name could miss the
+            # installer's, which names interfaces its own way.
             carried="$work/aett/etc/NetworkManager/system-connections"
             install -d -m 0700 "$carried"
-            for directory in /usr/lib /run /etc; do
+            seen=" "
+            for directory in /run /etc /usr/lib; do
               for profile in "$directory"/NetworkManager/system-connections/*.nmconnection; do
                 [ -f "$profile" ] || continue
-                sed '/^interface-name=/d' "$profile" > "$carried/''${profile##*/}"
-                chmod 0600 "$carried/''${profile##*/}"
+                uuid=$(sed -n 's/^uuid=//p' "$profile" | head -n 1)
+                if [ -n "$uuid" ]; then
+                  case "$seen" in *" $uuid "*) continue ;; esac
+                  seen="$seen$uuid "
+                fi
+                copy="$carried/''${directory##*/}-''${profile##*/}"
+                sed '/^interface-name=/d' "$profile" > "$copy"
+                chmod 0600 "$copy"
               done
             done
             (cd "$work" && find aett | cpio -o -H newc --quiet | gzip -9) > "$work/aett.cpio.gz"

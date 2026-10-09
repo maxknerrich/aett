@@ -4,6 +4,19 @@ import { wpaSupplicant } from "../src/engine/nix/wifi.ts";
 
 const keyfile = (lines: ReadonlyArray<string>) => lines.join("\n");
 
+// One connection's profile, with `psk` as its password.
+const profile = (psk: string) =>
+	keyfile([
+		"[connection]",
+		"type=wifi",
+		"uuid=5d1f1c2e-0000-4000-8000-000000000001",
+		"[wifi]",
+		"ssid=home",
+		"[wifi-security]",
+		"key-mgmt=wpa-psk",
+		`psk=${psk}`,
+	]);
+
 describe("wpaSupplicant", () => {
 	it("writes each SSID in hex and each passphrase as its PSK, so no value needs quoting, under either section name", () => {
 		const home = keyfile([
@@ -58,6 +71,16 @@ describe("wpaSupplicant", () => {
 				`network={\n\tssid=${Buffer.from("cafe").toString("hex")}\n\tscan_ssid=1\n\tkey_mgmt=NONE\n}\n`,
 				protectedHome,
 			].join(""),
+		);
+	});
+
+	it("takes a connection's first profile, as NetworkManager lets a runtime one shadow a persistent one", () => {
+		const runtime = pbkdf2Sync("new password", Buffer.from("home"), 4096, 32, "sha1").toString(
+			"hex",
+		);
+
+		expect(wpaSupplicant([profile("new password"), profile("old password")])).toBe(
+			`network={\n\tssid=${Buffer.from("home").toString("hex")}\n\tpsk=${runtime}\n\tkey_mgmt=WPA-PSK\n}\n`,
 		);
 	});
 });

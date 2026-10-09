@@ -47,17 +47,27 @@ const ssidBytes = (value: string) =>
 
 /**
  * wpa_supplicant's configuration for the Wi-Fi networks in NetworkManager's
- * keyfiles: each SSID in hex and each passphrase as the PSK it derives, so no
+ * keyfiles, in NetworkManager's order: the first profile of a connection
+ * shadows later ones with its UUID. Each SSID is in hex and each passphrase
+ * the PSK it derives, so no
  * value needs quoting. Open networks join without a key. A WPA3 network
  * joins through WPA2 with the same passphrase, which an access point in
  * transition mode allows; one that only speaks WPA3, and enterprise Wi-Fi,
  * are left to the console.
  */
-export const wpaSupplicant = (keyfiles: ReadonlyArray<string>) =>
-	keyfiles
-		.map(parse)
-		.flatMap((values) => {
+export const wpaSupplicant = (keyfiles: ReadonlyArray<string>) => {
+	const profiles = keyfiles.map(parse);
+
+	return profiles
+		.flatMap((values, index) => {
 			const ssid = values.get("wifi.ssid");
+			const uuid = values.get("connection.uuid");
+
+			const shadowed =
+				uuid !== undefined &&
+				profiles.findIndex((other) => other.get("connection.uuid") === uuid) !== index;
+
+			if (shadowed) return [];
 
 			const type = values.get("connection.type") ?? "";
 
@@ -83,3 +93,4 @@ export const wpaSupplicant = (keyfiles: ReadonlyArray<string>) =>
 			return [`network={\n\t${network}\n\tpsk=${psk}\n\tkey_mgmt=WPA-PSK\n}\n`];
 		})
 		.join("");
+};
