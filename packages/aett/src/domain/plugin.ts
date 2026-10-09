@@ -56,7 +56,7 @@ export interface State {
  */
 export interface Plugin<Name extends string = string, Options = unknown> {
 	readonly name: Name;
-	/** What its entry takes besides `on`, `packages` and `apps`, which its modules read. */
+	/** What its entry takes besides `on` and `packages`, which its modules read. */
 	readonly options?: Schema.Decoder<Options>;
 	/**
 	 * A directory with `nixos.nix` and `darwin.nix`, the modules aett imports on

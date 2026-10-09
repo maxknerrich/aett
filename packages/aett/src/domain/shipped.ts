@@ -5,7 +5,7 @@ import { type Plugin, plugin } from "./plugin.ts";
 /**
  * Tailscale on every machine: aett reaches machines over the tailnet and
  * nowhere else. A NixOS machine joins once the operator approves it; a Mac
- * runs the Tailscale app.
+ * gets the Tailscale app, which its owner signs in to.
  */
 export const tailscale = plugin({
 	name: "tailscale",
@@ -42,6 +42,9 @@ export const omintosh = plugin({
 	roles: ["computer"],
 	systems: ["darwin"],
 });
+
+/** The Homebrew apps aett's plugins put on every Mac, as plugins/tailscale/darwin.nix does: no fleet lists them. */
+export const macApps = ["tailscale-app"];
 
 /** Every plugin aett ships. */
 export const shipped = [tailscale, backup, omintosh] as const;

@@ -61,7 +61,11 @@ describe("fleetSource", () => {
 					newMachine("web-1", "server"),
 					newMachine("fawkes", "computer", { mac: true }),
 				],
-				Option.some({ mac: "fawkes", apps: ["ghostty", "raycast"], brews: ["mas"] }),
+				Option.some({
+					mac: "fawkes",
+					apps: ["ghostty", "raycast", "tailscale-app"],
+					brews: ["mas"],
+				}),
 			),
 		).toBe(
 			[

@@ -24,7 +24,7 @@ export default fleet({
 
 ## Start
 
-You need Node 24.11 or newer, Nix, and a [Tailscale](https://tailscale.com) tailnet with the Tailscale app on your Mac.
+You need Node 24.11 or newer, Nix, and a [Tailscale](https://tailscale.com) tailnet with the Tailscale app on your Mac. A Mac in the fleet gets the app from aett on its first apply.
 
 ```sh
 npm create aett            # or: pnpm create aett, vp create aett

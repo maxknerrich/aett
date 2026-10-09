@@ -90,12 +90,16 @@ export const prepareMac = Effect.fn("prepareMac")(function* (
 		yield* updateRecord(root, name, { system, determinate });
 	}
 
-	// A Mac is on the tailnet through the Tailscale app, as its owner's device.
+	// A Mac is on the tailnet through the Tailscale app, as its owner's device; applying it installs the app.
+	const app = yield* fs.exists("/Applications/Tailscale.app/Contents/MacOS/Tailscale");
+
 	yield* Option.match(yield* tailnetStatus(yield* localConnection), {
 		onSome: (joined) => recordTailnet(root, state, name, joined),
 		onNone: () =>
 			Console.log(
-				`${name} isn't on the tailnet. Install the Tailscale app (https://tailscale.com/download/mac) and sign in, so it reaches the fleet's machines and they reach it.`,
+				app
+					? `${name} isn't on the tailnet: Tailscale is off or signed out. Turn it on from its menu bar icon, so ${name} reaches the fleet's machines and they reach it.`
+					: `${name} isn't on the tailnet yet. Applying it installs the Tailscale app; open it and sign in then, so ${name} reaches the fleet's machines and they reach it.`,
 			),
 	});
 
@@ -167,11 +171,11 @@ const undeclared = Effect.fn("undeclared")(function* (brewfile: string) {
 
 /**
  * Applies the Mac aett runs on: builds its nix-darwin system here, shows what
- * changes, and once the operator agrees, switches to it through sudo and
- * syncs the home. The first time, it lists the Homebrew apps fleet.ts doesn't
- * name and asks once whether apply may remove them, now and from then on.
- * Returns whether the build has to be made again because that answer changed
- * it.
+ * changes, Homebrew's removals included, and once the operator agrees,
+ * switches to it through sudo and syncs the home. The first time, it lists
+ * the Homebrew apps fleet.ts doesn't name and asks once whether apply may
+ * remove them, now and from then on. Returns whether the build has to be made
+ * again because that answer changed it.
  */
 export const applyMac = Effect.fn("applyMac")(function* (
 	root: string,
@@ -186,9 +190,10 @@ export const applyMac = Effect.fn("applyMac")(function* (
 	const secrets = yield* Secrets;
 	const connection = yield* localConnection;
 	const recorded = state.machines.get(machine.name);
+	const brewfile = yield* engine.brewfile(build, machine.name);
 
 	if (recorded?.zap === undefined) {
-		const extra = yield* undeclared(yield* engine.brewfile(build, machine.name));
+		const extra = yield* undeclared(brewfile);
 
 		const zap = yield* Prompt.Confirm({
 			message: [
@@ -209,6 +214,9 @@ export const applyMac = Effect.fn("applyMac")(function* (
 		if (zap) return true;
 	}
 
+	// What zapping removes this time, shown before the operator agrees to it.
+	const removals = recorded?.zap === true ? yield* undeclared(brewfile) : [];
+
 	const system = yield* engine.buildDarwin(build, machine.name);
 
 	const current = (yield* connection
@@ -217,13 +225,24 @@ export const applyMac = Effect.fn("applyMac")(function* (
 
 	if (current === system) {
 		// The system holds, but apps may have come or gone by hand since.
-		yield* reconcileApps(yield* engine.brewfile(build, machine.name), recorded?.zap === true);
+		const zap =
+			removals.length > 0 &&
+			(yield* agree(
+				yes,
+				`Homebrew has ${removals.join(", ")} on ${machine.name}, and fleet.ts doesn't list them. Remove them?`,
+			));
+
+		yield* reconcileApps(brewfile, zap);
 		yield* Console.log(`${machine.name} is up to date.`);
 	} else {
-		const changes =
+		const changes = [
+			...(removals.length === 0 ? [] : [`  From Homebrew it removes: ${removals.join(", ")}`]),
 			current === ""
 				? "  nix-darwin takes over this Mac."
-				: describeChanges(yield* engine.changes(connection, current, system), machine.packages);
+				: describeChanges(yield* engine.changes(connection, current, system), machine.packages),
+		]
+			.filter((line) => line !== "")
+			.join("\n");
 
 		yield* Console.log(
 			changes === ""

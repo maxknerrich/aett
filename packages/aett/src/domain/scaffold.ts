@@ -1,6 +1,6 @@
 import { Option, Result, Schema } from "effect";
 import { MachineName, Role } from "./fleet.ts";
-import { shippedPlugins } from "./shipped.ts";
+import { macApps, shippedPlugins } from "./shipped.ts";
 
 /** A fleet's name: its directory and its package name, so lowercase and URL-safe. */
 export const FleetName = Schema.String.check(
@@ -65,7 +65,7 @@ const entry = ({ name, role, mac, encrypted }: NewMachine) => {
 	return `\t\t${key(name)}: ${role}(${config}),\n`;
 };
 
-/** What create adopts from the Mac it runs on: the casks Homebrew has there, and the formulae installed on request. */
+/** What create adopts from the Mac it runs on: the casks Homebrew has there, and the formulae installed on request. Those aett brings itself stay out. */
 export interface Adopted {
 	readonly mac: string;
 	readonly apps: ReadonlyArray<string>;
@@ -92,7 +92,7 @@ export const fleetSource = (
 		onNone: () => "",
 		// Casks come first on a Mac anyway; formulae are led by brew., so none turns into a cask or a Nix package.
 		onSome: ({ mac, apps, brews }) =>
-			`\tservices: {\n\t\t${key(packName(mac))}: { on: ${JSON.stringify(mac)}, packages: [${[...apps, ...brews.map((brew) => `brew.${brew}`)].map((name) => JSON.stringify(name)).join(", ")}] },\n\t},\n`,
+			`\tservices: {\n\t\t${key(packName(mac))}: { on: ${JSON.stringify(mac)}, packages: [${[...apps.filter((app) => !macApps.includes(app)), ...brews.map((brew) => `brew.${brew}`)].map((name) => JSON.stringify(name)).join(", ")}] },\n\t},\n`,
 	});
 
 	return `import { ${imports.join(", ")} } from "aett"\n\nexport default fleet({\n\tuser: ${JSON.stringify(user)},\n\tmachines: {${machines.length === 0 ? "" : `\n${machines.map(entry).join("")}\t`}},\n${services}})\n`;
