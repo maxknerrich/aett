@@ -23,10 +23,21 @@ let
   };
 in
 {
-  # Whether the operator agreed to remove the apps fleet.ts doesn't list. aett asks once.
-  options.aett.homebrew.zap = lib.mkOption {
-    type = lib.types.bool;
-    default = false;
+  options.aett.homebrew = {
+    # Whether the operator agreed to remove what Homebrew has that fleet.ts doesn't list. aett asks once.
+    zap = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+    };
+    # The packages whose source is a Homebrew cask or formula.
+    casks = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+    };
+    brews = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+    };
   };
 
   config = {
@@ -52,8 +63,7 @@ in
 
     homebrew = {
       enable = true;
-      casks = cfg.apps;
-      brews = cfg.brews;
+      inherit (cfg.homebrew) casks brews;
       # Apps come unpinned: apply installs what is missing, and aett update upgrades them.
       onActivation.cleanup = if config.aett.homebrew.zap then "zap" else "none";
     };

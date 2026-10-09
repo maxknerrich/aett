@@ -45,15 +45,6 @@ in
       type = types.listOf types.attrs;
       default = [ ];
     };
-    # Homebrew casks and formulae; only Macs install them.
-    apps = mkOption {
-      type = types.listOf types.str;
-      default = [ ];
-    };
-    brews = mkOption {
-      type = types.listOf types.str;
-      default = [ ];
-    };
 
     # The machine on the tailnet, once it joined.
     tailnet = mkOption {

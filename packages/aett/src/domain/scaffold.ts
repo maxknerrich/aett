@@ -90,8 +90,9 @@ export const fleetSource = (
 
 	const services = Option.match(adopted, {
 		onNone: () => "",
+		// Casks come first on a Mac anyway; formulae are led by brew., so none turns into a cask or a Nix package.
 		onSome: ({ mac, apps, brews }) =>
-			`\tservices: {\n\t\t${key(packName(mac))}: { on: ${JSON.stringify(mac)}, apps: [${apps.map((app) => JSON.stringify(app)).join(", ")}]${brews.length === 0 ? "" : `, brews: [${brews.map((brew) => JSON.stringify(brew)).join(", ")}]`} },\n\t},\n`,
+			`\tservices: {\n\t\t${key(packName(mac))}: { on: ${JSON.stringify(mac)}, packages: [${[...apps, ...brews.map((brew) => `brew.${brew}`)].map((name) => JSON.stringify(name)).join(", ")}] },\n\t},\n`,
 	});
 
 	return `import { ${imports.join(", ")} } from "aett"\n\nexport default fleet({\n\tuser: ${JSON.stringify(user)},\n\tmachines: {${machines.length === 0 ? "" : `\n${machines.map(entry).join("")}\t`}},\n${services}})\n`;

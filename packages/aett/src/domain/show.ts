@@ -1,6 +1,6 @@
 import { Option } from "effect";
 import type { Fleet, Machine } from "./fleet.ts";
-import type { Pins } from "./pins.ts";
+import { type Pins, sourceOf } from "./pins.ts";
 import type { State } from "./state.ts";
 
 // A size in MiB as the declaration writes it.
@@ -30,10 +30,22 @@ const headline = (machine: Machine, state: State) => {
 
 // The packages by where the pins take them from, a release with its version.
 const packagesOf = (machine: Machine, pins: Pins) => {
-	const bySource = Map.groupBy(machine.packages, (name) => pins.packages[name] ?? "not pinned yet");
+	const family = machine.kind === "macos" ? "darwin" : "linux";
+
+	// Each by its name in its source, so "cask.raycast" shows as raycast (cask).
+	const sourced = machine.packages.map((name) =>
+		Option.match(sourceOf(pins, name, family), {
+			onNone: () => ({ name, source: "not pinned yet" }),
+			onSome: (found) => found,
+		}),
+	);
+
+	const bySource = Map.groupBy(sourced, ({ source }) => source);
 
 	return [
-		...[...bySource].map(([source, names]) => `${names.join(", ")} (${source})`),
+		...[...bySource].map(
+			([source, packages]) => `${packages.map(({ name }) => name).join(", ")} (${source})`,
+		),
 		...machine.releases.map(
 			({ github, bin }) =>
 				`${bin} ${pins.releases[github]?.version ?? "not pinned yet"} (${github})`,
@@ -83,8 +95,6 @@ export const describeFleet = (fleet: Fleet, state: State, pins: Pins) => {
 			["endpoints", endpoints(machine)],
 			["packs", entries.join(", ")],
 			["packages", packagesOf(machine, pins)],
-			["apps", machine.apps.join(", ")],
-			["brews", machine.brews.join(", ")],
 			["home", machine.home.map((name) => `home/${name}/`).join(", ")],
 			["blocked", machine.unsupported.map((what) => `${what} aren't supported yet`).join(", ")],
 		].filter(([, value]) => value !== "");

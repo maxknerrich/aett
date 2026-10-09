@@ -51,7 +51,7 @@ describe("fleetSource", () => {
 		);
 	});
 
-	it("declares each machine by its role and the Mac's apps and brews in a pack named after it", () => {
+	it("declares each machine by its role and what Homebrew has on the Mac in a pack named after it", () => {
 		expect(
 			fleetSource(
 				"mkn",
@@ -76,7 +76,7 @@ describe("fleetSource", () => {
 				'\t\tfawkes: computer({ os: "macos" }),',
 				"\t},",
 				"\tservices: {",
-				'\t\tfawkes: { on: "fawkes", apps: ["ghostty", "raycast"], brews: ["mas"] },',
+				'\t\tfawkes: { on: "fawkes", packages: ["ghostty", "raycast", "brew.mas"] },',
 				"\t},",
 				"})",
 				"",
@@ -93,7 +93,7 @@ describe("fleetSource adopting a Mac named like one of aett's entries", () => {
 				[newMachine("backup", "computer", { mac: true })],
 				Option.some({ mac: "backup", apps: ["ghostty"], brews: [] }),
 			),
-		).toContain('\t\tapps: { on: "backup", apps: ["ghostty"] },');
+		).toContain('\t\tapps: { on: "backup", packages: ["ghostty"] },');
 	});
 });
 

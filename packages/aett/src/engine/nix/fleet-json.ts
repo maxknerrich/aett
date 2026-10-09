@@ -3,7 +3,7 @@ import type { Fleet, Machine } from "../../domain/fleet.ts";
 import { buildable } from "../../domain/build.ts";
 import { bridgeAddress, guestInterface } from "../../domain/network.ts";
 import type { Source } from "../../domain/packages.ts";
-import type { Pins } from "../../domain/pins.ts";
+import { type Pins, sourceOf } from "../../domain/pins.ts";
 import { machineSecrets } from "../../domain/secrets.ts";
 import type { State } from "../../domain/state.ts";
 
@@ -23,10 +23,18 @@ const tailnetOf = (state: State, name: string) => {
 };
 
 // Package names by the source the pins record for them; names without one yet are left out.
-const bySource = (packages: ReadonlyArray<string>, pins: Pins) => {
-	const of = (source: Source) => packages.filter((name) => pins.packages[name] === source);
+const bySource = (machine: Machine, pins: Pins) => {
+	const family = machine.kind === "macos" ? "darwin" : "linux";
+	const sourced = machine.packages.flatMap((name) => Option.toArray(sourceOf(pins, name, family)));
 
-	return { "llm-agents": of("llm-agents"), nixpkgs: of("nixpkgs"), unstable: of("unstable") };
+	const of = (source: Source) =>
+		sourced.flatMap(({ source: from, name }) => (from === source ? [name] : []));
+
+	return {
+		nix: { "llm-agents": of("llm-agents"), nixpkgs: of("nixpkgs"), unstable: of("unstable") },
+		casks: of("cask"),
+		brews: of("brew"),
+	};
 };
 
 // What every listed machine has: its settings, packages, secrets, services and the fleet's user.
@@ -62,7 +70,7 @@ const base = (fleet: Fleet, machine: Machine, state: State, extras: Extras, pins
 	return {
 		role: machine.role,
 		channel: machine.channel,
-		packages: bySource(machine.packages, pins),
+		packages: bySource(machine, pins).nix,
 		releases: machine.releases.flatMap(({ github }) =>
 			Option.toArray(
 				Option.map(Option.fromUndefinedOr(pins.releases[github]), ({ bin, version, assets }) => ({
@@ -72,8 +80,6 @@ const base = (fleet: Fleet, machine: Machine, state: State, extras: Extras, pins
 				})),
 			),
 		),
-		apps: machine.apps,
-		brews: machine.brews,
 		tailnet: tailnetOf(state, machine.name),
 		user: fleet.user.pipe(
 			Option.filter(() => machine.user),
@@ -202,7 +208,11 @@ export const fleetJson = (fleet: Fleet, state: State, extras: Extras, pins: Pins
 								system: state.machines.get(machine.name)?.platform ?? "aarch64-darwin",
 								determinate: state.machines.get(machine.name)?.determinate === true,
 							},
-							homebrew: { zap: state.machines.get(machine.name)?.zap === true },
+							homebrew: {
+								zap: state.machines.get(machine.name)?.zap === true,
+								casks: bySource(machine, pins).casks,
+								brews: bySource(machine, pins).brews,
+							},
 						},
 					] as const,
 			),

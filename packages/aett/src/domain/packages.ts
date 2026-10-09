@@ -1,9 +1,15 @@
-import { Predicate, Schema } from "effect";
+import { Option, Predicate, Schema } from "effect";
 
-/** A nixpkgs or llm-agents.nix attribute path such as "htop" or "python3Packages.rich". */
+/**
+ * A package name: an attribute path such as "htop" or
+ * "python3Packages.rich", whose source aett picks, or one led by the source
+ * it comes from, such as "nixpkgs.htop", "unstable.zed-editor",
+ * "llm-agents.claude-code", "cask.raycast" or "brew.acsandmann/tap/rift".
+ */
 export const PackagePath = Schema.String.check(
-	Schema.isPattern(/^[A-Za-z_][\w'-]*(\.[A-Za-z_][\w'-]*)*$/, {
-		expected: 'a package name such as "htop" or "python3Packages.rich"',
+	Schema.isPattern(/^(?:(?:cask|brew)\.[\w.+@/-]+|[A-Za-z_][\w'-]*(\.[A-Za-z_][\w'-]*)*)$/, {
+		expected:
+			'a package name such as "htop", "python3Packages.rich" or one led by its source, such as "cask.raycast"',
 	}),
 );
 
@@ -27,10 +33,34 @@ export const Package = Schema.Union([PackagePath, Release]);
 
 export type Package = typeof Package.Type;
 
-/** The sources a package name can come from, in the order aett looks: the fastest first. */
-export const Source = Schema.Literals(["llm-agents", "nixpkgs", "unstable"]);
+/** The Nix sources of packages, in the order aett looks: the fastest first. */
+export const nixSources = ["llm-agents", "nixpkgs", "unstable"] as const;
+
+export type NixSource = (typeof nixSources)[number];
+
+/** Where a package comes from: a Nix source, or on a Mac a Homebrew cask or formula. */
+export const Source = Schema.Literals([...nixSources, "cask", "brew"]);
 
 export type Source = typeof Source.Type;
+
+/** The systems a package's source is picked for: the same name can come from nixpkgs on Linux and as a cask on a Mac. */
+export type Family = "linux" | "darwin";
+
+/** A package as a source names it: its source and its name there. */
+export interface Sourced {
+	readonly source: Source;
+	readonly name: string;
+}
+
+/** The source a package name is led by, if it is, with its name there. */
+export const explicitSource = (name: string): Option.Option<Sourced> => {
+	const dot = name.indexOf(".");
+	const lead = name.slice(0, dot);
+
+	return dot > 0 && Schema.is(Source)(lead)
+		? Option.some({ source: lead, name: name.slice(dot + 1) })
+		: Option.none();
+};
 
 /** A list of packages split into names and releases, each sorted, releases one per repository. */
 export const splitPackages = (packages: ReadonlyArray<Package>) => ({

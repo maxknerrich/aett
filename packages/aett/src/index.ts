@@ -193,12 +193,15 @@ type On<Name extends string> = Name | ReadonlyArray<Name>;
 
 /** What any entry can add to the machines it is on. */
 interface Content {
-	/** Packages, each pinned by the fleet. */
+	/**
+	 * Packages by name, whose source aett picks and pins: on Linux
+	 * llm-agents.nix, nixpkgs or nixpkgs unstable; on a Mac a Homebrew cask
+	 * first, then those, then a Homebrew formula. A name led by its source
+	 * takes it from there: "nixpkgs.git", "unstable.zed-editor",
+	 * "llm-agents.claude-code", "cask.raycast", "brew.mas". Homebrew's reach
+	 * only Macs. Or a release().
+	 */
 	readonly packages?: ReadonlyArray<Package>;
-	/** GUI applications from Homebrew casks, unpinned. They reach only Macs. */
-	readonly apps?: ReadonlyArray<string>;
-	/** Homebrew formulae, unpinned, for what nixpkgs lacks on a Mac. They reach only Macs. */
-	readonly brews?: ReadonlyArray<string>;
 }
 
 // Every plugin a fleet knows: aett's and its own.
@@ -212,7 +215,7 @@ type Instances<P, Machines> = WithRole<
 	P extends { readonly roles: ReadonlyArray<infer R> } ? R : Role
 >;
 
-// The options a plugin's entry takes besides on, packages, apps and brews.
+// The options a plugin's entry takes besides on and packages.
 type OptionsOf<P> = P extends Plugin<string, infer Options> ? Options : never;
 
 // The entry a plugin takes in `services`, as a machine, machines, or an object.

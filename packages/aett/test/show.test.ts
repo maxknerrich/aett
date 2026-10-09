@@ -10,7 +10,7 @@ import { computer, fleet, hypervisor, release, server } from "../src/index.ts";
 const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
 
 describe("describeFleet", () => {
-	it("prints each machine with its services, endpoints, packs, packages by source, apps and home trees", () => {
+	it("prints each machine with its services, endpoints, packs, packages by source and home trees", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
@@ -23,8 +23,11 @@ describe("describeFleet", () => {
 					backup: "hades",
 					dev: {
 						on: "fawkes",
-						packages: ["git", release({ github: "o/vp", asset: "vp-{target}", bin: "vp" })],
-						apps: ["ghostty"],
+						packages: [
+							"git",
+							"cask.ghostty",
+							release({ github: "o/vp", asset: "vp-{target}", bin: "vp" }),
+						],
 					},
 				},
 			}),
@@ -41,7 +44,10 @@ describe("describeFleet", () => {
 		const pins: Pins = {
 			inputs: { nodes: { root: {} }, root: "root", version: 7 },
 			releases: { "o/vp": { asset: "vp-{target}", bin: "vp", version: "v1.0.0", assets: {} } },
-			packages: { git: "nixpkgs", kopia: "nixpkgs" },
+			packages: {
+				git: { darwin: "nixpkgs" },
+				kopia: { linux: "nixpkgs", darwin: "nixpkgs" },
+			},
 		};
 
 		expect(describeFleet(declared, state, pins)).toBe(
@@ -57,8 +63,7 @@ describe("describeFleet", () => {
 				"fawkes  computer, a Mac · not on the tailnet yet",
 				"        services  tailscale, backup client of hades",
 				"        packs     dev",
-				"        packages  git, kopia (nixpkgs) · tailscale (not pinned yet) · vp v1.0.0 (o/vp)",
-				"        apps      ghostty",
+				"        packages  ghostty (cask) · git, kopia (nixpkgs) · tailscale (not pinned yet) · vp v1.0.0 (o/vp)",
 				"        home      home/default/, home/dev/",
 			].join("\n"),
 		);

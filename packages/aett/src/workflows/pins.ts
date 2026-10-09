@@ -3,14 +3,17 @@ import { GitHub } from "../adapters/github.ts";
 import type { Fleet } from "../domain/fleet.ts";
 import {
 	assetNames,
+	familyOf,
 	inputChanges,
 	mergeInputs,
 	pinFits,
 	Pins,
 	platforms,
 	type ReleasePin,
+	sourceOf,
 } from "../domain/pins.ts";
-import type { Release, Source } from "../domain/packages.ts";
+import { explicitSource, type Family, type Release, type Source } from "../domain/packages.ts";
+import { Homebrew } from "../adapters/homebrew.ts";
 import type { State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 import { loadFleet, readState } from "./load.ts";
@@ -106,11 +109,12 @@ const resolveRelease = Effect.fn("resolveRelease")(function* (release: Release, 
 });
 
 // The flake inputs a package comes from: its source's, and for nixpkgs that of each channel the
-// machines listing it are on.
-const inputsOf = (fleet: Fleet, name: string, source: Source) =>
+// machines listing it are on. Homebrew's come unpinned, and aett update upgrades them on the Mac.
+const inputsOf = (fleet: Fleet, name: string, source: Source): ReadonlyArray<string> =>
 	Match.value(source).pipe(
 		Match.when("llm-agents", () => ["llm-agents"]),
 		Match.when("unstable", () => ["nixpkgs-unstable"]),
+		Match.whenOr("cask", "brew", () => []),
 		Match.orElse(() => [
 			...new Set(
 				fleet.machines.flatMap(({ packages, channel }) =>
@@ -121,13 +125,17 @@ const inputsOf = (fleet: Fleet, name: string, source: Source) =>
 	);
 
 /**
- * Picks a source for each package name `pinned` lacks, on the platform of a
- * machine that lists it: llm-agents.nix, else nixpkgs, else nixpkgs unstable.
- * Names only on machines whose platform aett doesn't know yet wait. A name no
- * source has is an error.
+ * Picks a source for each package name the pins lack on Linux or on Macs, on
+ * the platform of a machine there that lists it. On Linux: llm-agents.nix,
+ * else nixpkgs, else nixpkgs unstable. On a Mac a Homebrew cask comes first,
+ * so an app lands in /Applications and updates itself, and a Homebrew formula
+ * last. Names led by their source need no pick, and names only on machines
+ * whose platform aett doesn't know yet wait. A name no source has is an
+ * error.
  */
 const pickSources = Effect.fn("pickSources")(function* (fleet: Fleet, state: State, pins: Pins) {
 	const engine = yield* Engine;
+	const homebrew = yield* Homebrew;
 
 	const wanted = fleet.machines.flatMap(({ name, packages, channel }) => {
 		const platform = state.machines.get(name)?.platform;
@@ -135,13 +143,16 @@ const pickSources = Effect.fn("pickSources")(function* (fleet: Fleet, state: Sta
 		return platform === undefined
 			? []
 			: packages.flatMap((pkg) =>
-					pins.packages[pkg] === undefined ? [{ pkg, platform, channel }] : [],
+					Option.isNone(explicitSource(pkg)) &&
+					pins.packages[pkg]?.[familyOf(platform)] === undefined
+						? [{ pkg, platform, channel }]
+						: [],
 				);
 	});
 
-	// Looked up once per name, for the first machine that lists it, in one evaluation per platform and channel.
+	// Looked up once per name and family, for the first machine that lists it, in one evaluation per platform and channel.
 	const byTarget = Map.groupBy(
-		[...new Map(wanted.map((want) => [want.pkg, want])).values()],
+		[...new Map(wanted.map((want) => [`${want.pkg} ${familyOf(want.platform)}`, want])).values()],
 		({ platform, channel }) => `${platform} ${channel}`,
 	);
 
@@ -156,9 +167,34 @@ const pickSources = Effect.fn("pickSources")(function* (fleet: Fleet, state: Sta
 	);
 
 	const found = yield* Effect.forEach(groups, ({ platform, channel, names }) =>
-		engine
-			.packageSources(pins.inputs, platform, channel, names)
-			.pipe(Effect.map((sources) => ({ platform, sources: [...sources] }))),
+		Effect.gen(function* () {
+			const mac = familyOf(platform) === "darwin";
+			const casks = mac ? yield* homebrew.existing("cask", names) : new Set<string>();
+			const rest = names.filter((name) => !casks.has(name));
+			const nix = yield* engine.packageSources(pins.inputs, platform, channel, rest);
+
+			const fromNix = (name: string): Option.Option<Source> =>
+				Option.flatten(Option.fromUndefinedOr(nix.get(name)));
+
+			const formulae = mac
+				? yield* homebrew.existing(
+						"formula",
+						rest.filter((name) => Option.isNone(fromNix(name))),
+					)
+				: new Set<string>();
+
+			const sources = names.map((name) => {
+				const source: Option.Option<Source> = casks.has(name)
+					? Option.some("cask")
+					: Option.orElse(fromNix(name), () =>
+							formulae.has(name) ? Option.some("brew") : Option.none(),
+						);
+
+				return [name, source] as const;
+			});
+
+			return { platform, sources };
+		}),
 	);
 
 	const missing = found.flatMap(({ platform, sources }) =>
@@ -167,14 +203,14 @@ const pickSources = Effect.fn("pickSources")(function* (fleet: Fleet, state: Sta
 
 	if (missing.length > 0) {
 		return yield* new PinsError({
-			message: `No source has ${missing.join(", ")}: not llm-agents.nix, nixpkgs or nixpkgs unstable. Check the name, or declare a release().`,
+			message: `No source has ${missing.join(", ")}: not llm-agents.nix, nixpkgs, nixpkgs unstable, nor on a Mac a Homebrew cask or formula. Check the name, lead it by its source, such as "brew.owner/tap/name", or declare a release().`,
 		});
 	}
 
-	return Object.fromEntries(
-		found.flatMap(({ sources }) =>
-			sources.flatMap(([name, source]) =>
-				Option.toArray(Option.map(source, (picked) => [name, picked] as const)),
+	return found.flatMap(({ platform, sources }) =>
+		sources.flatMap(([name, source]) =>
+			Option.toArray(
+				Option.map(source, (picked) => ({ name, family: familyOf(platform), source: picked })),
 			),
 		),
 	);
@@ -268,18 +304,31 @@ export const completePins = Effect.fn("completePins")(function* (
 		packages: start.packages,
 	});
 
-	const names = new Set(fleet.machines.flatMap(({ packages }) => packages));
+	// Names led by their source need no pin.
+	const names = new Set(
+		fleet.machines.flatMap(({ packages }) =>
+			packages.filter((pkg) => Option.isNone(explicitSource(pkg))),
+		),
+	);
+
+	const fresh = Map.groupBy(picked, ({ name }) => name);
 
 	const packages = Object.fromEntries(
-		Object.entries({ ...start.packages, ...picked })
-			.filter(([name]) => names.has(name))
-			.toSorted(([a], [b]) => a.localeCompare(b)),
+		[...names]
+			.toSorted()
+			.map((name) => [
+				name,
+				Object.fromEntries([
+					...Object.entries(start.packages[name] ?? {}),
+					...(fresh.get(name) ?? []).map(({ family, source }) => [family, source] as const),
+				]),
+			]),
 	);
 
 	const pins = { inputs: lock, releases, packages } satisfies Pins;
 	const dropped = Object.keys(start.releases).filter((github) => releases[github] === undefined);
 	const forgotten = Object.keys(start.packages).filter((name) => !names.has(name));
-	const newlyPicked = Object.entries(picked);
+	const newlyPicked = picked;
 
 	if (
 		Option.isNone(recorded) ||
@@ -300,9 +349,11 @@ export const completePins = Effect.fn("completePins")(function* (
 	}
 
 	yield* Effect.forEach(
-		Map.groupBy(newlyPicked, ([, source]) => source),
-		([source, picks]) =>
-			Console.log(`Pinned ${picks.map(([name]) => name).join(", ")} from ${source}.`),
+		Map.groupBy(newlyPicked, ({ source, family }) => `${source} ${family}`),
+		([, picks]) =>
+			Console.log(
+				`Pinned ${picks.map(({ name }) => name).join(", ")} from ${picks[0]?.source ?? ""}${picks[0]?.family === "darwin" ? " on Macs" : ""}.`,
+			),
 	);
 
 	return pins;
@@ -322,13 +373,22 @@ export const update = Effect.fn("update")(function* (root: string, names: Readon
 	const declared = declaredReleases(fleet);
 	const pins = yield* completePins(root, fleet, yield* readState(root, fleet));
 
-	// A package moves with the inputs it comes from.
+	// A package moves with the inputs it comes from, on Linux and on Macs.
 	const inputsFor = (name: string): ReadonlyArray<string> => {
-		const source = pins.packages[name];
-
 		if (inputs.includes(name)) return [name];
 
-		return source === undefined ? [] : inputsOf(fleet, name, source);
+		const families: ReadonlyArray<Family> = ["linux", "darwin"];
+
+		return [
+			...new Set(
+				families.flatMap((family) =>
+					Option.match(sourceOf(pins, name, family), {
+						onNone: () => [],
+						onSome: ({ source }) => inputsOf(fleet, name, source),
+					}),
+				),
+			),
+		];
 	};
 
 	const unknown = names.filter(

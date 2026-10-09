@@ -21,7 +21,13 @@ const disk = "/dev/disk/by-id/nvme-test";
 const pins: Pins = {
 	inputs: { nodes: { root: {} }, root: "root", version: 7 },
 	releases: {},
-	packages: { git: "nixpkgs", "claude-code": "llm-agents", kopia: "nixpkgs", tailscale: "nixpkgs" },
+	packages: {
+		git: { linux: "nixpkgs", darwin: "nixpkgs" },
+		"claude-code": { linux: "llm-agents" },
+		kopia: { linux: "nixpkgs", darwin: "nixpkgs" },
+		tailscale: { linux: "nixpkgs", darwin: "nixpkgs" },
+		ghostty: { linux: "nixpkgs", darwin: "cask" },
+	},
 };
 
 const none = { secrets: [], fingerprints: new Map<string, string>() };
@@ -142,12 +148,12 @@ describe("fleetJson", () => {
 		});
 	});
 
-	it("gives a NAS its pools and a Mac its platform and whether apply may zap its apps", () => {
+	it("gives a NAS its pools and a Mac its platform, its Homebrew packages and whether apply may zap", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
 				machines: { vault: nas(), fawkes: computer({ os: "macos" }) },
-				services: { mac: { on: "fawkes", apps: ["ghostty"] } },
+				services: { mac: { on: "fawkes", packages: ["ghostty", "git", "brew.mas"] } },
 			}),
 		);
 
@@ -165,9 +171,9 @@ describe("fleetJson", () => {
 
 		expect(machines["vault"]).toMatchObject({ role: "nas", pools, unlock: false });
 		expect(machines["fawkes"]).toMatchObject({
-			apps: ["ghostty"],
+			packages: { nixpkgs: ["git", "tailscale"] },
 			darwin: { system: "aarch64-darwin" },
-			homebrew: { zap: true },
+			homebrew: { zap: true, casks: ["ghostty"], brews: ["mas"] },
 		});
 	});
 

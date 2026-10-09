@@ -13,7 +13,7 @@ const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(decla
 const vp = release({ github: "voidzero-dev/vite-plus", asset: "vp-{target}.tar.gz", bin: "vp" });
 
 describe("decodeFleet", () => {
-	it("puts entries on the machines they name, packs on every machine but hypervisors without on", () => {
+	it("puts entries on the machines they name, packs on every machine but hypervisors without on, and Homebrew's packages only on Macs", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
@@ -26,18 +26,17 @@ describe("decodeFleet", () => {
 				services: {
 					backup: "kronos",
 					tools: { packages: ["git", vp] },
-					dev: { on: ["zeus", "fawkes"], packages: ["claude-code"], apps: ["ghostty"] },
+					dev: { on: ["zeus", "fawkes"], packages: ["claude-code", "cask.ghostty"] },
 				},
 			}),
 		);
 
 		expect(
-			declared.machines.map(({ name, user, packages, releases, apps, services, home }) => ({
+			declared.machines.map(({ name, user, packages, releases, services, home }) => ({
 				name,
 				user,
 				packages,
 				releases: releases.map(({ bin }) => bin),
-				apps,
 				services,
 				home,
 			})),
@@ -47,7 +46,6 @@ describe("decodeFleet", () => {
 				user: false,
 				packages: ["kopia", "tailscale"],
 				releases: [],
-				apps: [],
 				services: [
 					{ name: "tailscale", instance: true },
 					{ name: "backup", instance: true },
@@ -59,7 +57,6 @@ describe("decodeFleet", () => {
 				user: true,
 				packages: ["claude-code", "git", "kopia", "tailscale"],
 				releases: ["vp"],
-				apps: [],
 				services: [
 					{ name: "tailscale", instance: true },
 					{ name: "backup", instance: false },
@@ -71,7 +68,6 @@ describe("decodeFleet", () => {
 				user: true,
 				packages: ["git", "kopia", "tailscale"],
 				releases: ["vp"],
-				apps: [],
 				services: [
 					{ name: "tailscale", instance: true },
 					{ name: "backup", instance: false },
@@ -81,9 +77,8 @@ describe("decodeFleet", () => {
 			{
 				name: "fawkes",
 				user: true,
-				packages: ["claude-code", "git", "kopia", "tailscale"],
+				packages: ["cask.ghostty", "claude-code", "git", "kopia", "tailscale"],
 				releases: ["vp"],
-				apps: ["ghostty"],
 				services: [
 					{ name: "tailscale", instance: true },
 					{ name: "backup", instance: false },
@@ -163,7 +158,7 @@ describe("decodeFleet", () => {
 		expect(good.services.get("whoami")?.options).toEqual({ greeting: "hi" });
 		expect(problems(wrong)).toContain("services.whoami.greeting: Expected string, got 1");
 		expect(problems(wrong)).toContain(
-			"services.tools.extra: Unexpected key; a pack takes on, packages, apps and brews",
+			"services.tools.extra: Unexpected key; a pack takes on and packages",
 		);
 		expect(problems(misplaced)).toContain(
 			"services.whoami.on: whoami can't run on fawkes, which is a Mac",

@@ -9,6 +9,7 @@ import { Command } from "effect/cli";
 import metadata from "../../package.json" with { type: "json" };
 import { Assets } from "../adapters/assets.ts";
 import { GitHub } from "../adapters/github.ts";
+import { Homebrew } from "../adapters/homebrew.ts";
 import { Tailscale } from "../adapters/tailscale.ts";
 import { Secrets } from "../adapters/secrets.ts";
 import { Ssh } from "../adapters/ssh.ts";
@@ -47,6 +48,7 @@ fleetAett(directory).pipe(
 			"FleetError",
 			"GitHubError",
 			"HomeError",
+			"HomebrewError",
 			"InstallError",
 			"MacError",
 			"PinsError",
@@ -69,6 +71,7 @@ fleetAett(directory).pipe(
 	Effect.provide(GitHub.layer),
 	Effect.provide(Secrets.layer),
 	Effect.provide(Tailscale.layer),
+	Effect.provide(Homebrew.layer),
 	// The flake and the shipped plugins ship as source in the package, also next to dist/.
 	Effect.provide(
 		nixEngine(join(directory, "src", "engine", "nix", "flake"), join(directory, "plugins")),

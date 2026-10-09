@@ -1,5 +1,5 @@
 import { Match, Option, Predicate, Result, Schema, SchemaIssue } from "effect";
-import { Package, type Release, splitPackages } from "./packages.ts";
+import { explicitSource, Package, type Release, splitPackages } from "./packages.ts";
 import type { Plugin, Role as PluginRole } from "./plugin.ts";
 import { machineSecrets } from "./secrets.ts";
 import { shippedPlugins as shipped } from "./shipped.ts";
@@ -207,8 +207,6 @@ const PluginMetadata = Schema.Struct({
 const EntryBase = Schema.Struct({
 	on: Schema.optionalKey(Schema.Union([MachineName, Schema.Array(MachineName)])),
 	packages: Schema.optionalKey(Schema.Array(Package)),
-	apps: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
-	brews: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
 });
 
 export type Kind = "nixos" | "macos" | "vm";
@@ -256,10 +254,6 @@ export interface Machine {
 	readonly packages: ReadonlyArray<string>;
 	/** Packages from GitHub releases, one per repository. */
 	readonly releases: ReadonlyArray<Release>;
-	/** Homebrew casks; only Macs get any. */
-	readonly apps: ReadonlyArray<string>;
-	/** Homebrew formulae; only Macs get any. */
-	readonly brews: ReadonlyArray<string>;
 	/** The plugins on it, by name. */
 	readonly services: ReadonlyArray<Placement>;
 	/** The trees under home/ that land in its home: default, then each entry it is on. */
@@ -378,8 +372,6 @@ interface Entry {
 	/** The machines named in `on`; none means every machine it can be on. */
 	readonly on: Option.Option<ReadonlyArray<string>>;
 	readonly packages: ReadonlyArray<Package>;
-	readonly apps: ReadonlyArray<string>;
-	readonly brews: ReadonlyArray<string>;
 	readonly options: unknown;
 }
 
@@ -428,7 +420,7 @@ const decodeEntry = (
 					: Result.fail(
 							extra.map(
 								(key) =>
-									`${at}.${key}: Unexpected key; ${Option.isNone(plugin) ? "a pack" : name} takes on, packages, apps and brews`,
+									`${at}.${key}: Unexpected key; ${Option.isNone(plugin) ? "a pack" : name} takes on and packages`,
 							),
 						);
 			},
@@ -451,8 +443,6 @@ const decodeEntry = (
 			Predicate.isString(given) ? [given] : given,
 		),
 		packages: decoded.packages ?? [],
-		apps: decoded.apps ?? [],
-		brews: decoded.brews ?? [],
 		options: options.success,
 	});
 };
@@ -591,8 +581,6 @@ export const decodeFleet = (declaration: Declaration): Result.Result<Fleet, stri
 						plugin: Option.some(plugin),
 						on: Option.none(),
 						packages: [],
-						apps: [],
-						brews: [],
 						options: {},
 					},
 				]
@@ -725,17 +713,11 @@ const toMachine = (
 ): Machine => {
 	const mine = placed.flatMap(({ on, entry }) => (on.includes(machine.name) ? [entry] : []));
 	const { names, releases } = splitPackages(mine.flatMap(({ packages }) => packages));
-	const apps = [...new Set(mine.flatMap((entry) => entry.apps))].toSorted();
-	const brews = [...new Set(mine.flatMap((entry) => entry.brews))].toSorted();
+
 	const user = machine.role !== "hypervisor";
 	const { system } = machine;
 
-	const unsupported = [
-		system.desktop === undefined ? [] : ["desktops"],
-		apps.length + brews.length > 0 && machine.kind !== "macos" && machine.role === "computer"
-			? ["Homebrew apps and brews on NixOS"]
-			: [],
-	].flat();
+	const unsupported = [system.desktop === undefined ? [] : ["desktops"]].flat();
 
 	const placements = [...services].flatMap(([name, service]) => {
 		if (service.instances.includes(machine.name)) return [{ name, instance: true }];
@@ -761,10 +743,18 @@ const toMachine = (
 			disk: mebibytes(system.disk ?? "20 GiB"),
 		})),
 		user,
-		packages: [...new Set([...names, ...pluginPackages])].toSorted(),
+		// Homebrew's reach only Macs.
+		packages: [...new Set([...names, ...pluginPackages])]
+			.filter(
+				(name) =>
+					machine.kind === "macos" ||
+					!Option.exists(
+						explicitSource(name),
+						({ source }) => source === "cask" || source === "brew",
+					),
+			)
+			.toSorted(),
 		releases,
-		apps: machine.kind === "macos" ? apps : [],
-		brews: machine.kind === "macos" ? brews : [],
 		services: placements,
 		// Plugins on every machine have no entry, so no home tree follows them.
 		home: user

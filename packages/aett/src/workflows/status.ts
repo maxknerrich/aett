@@ -3,7 +3,7 @@ import { type Connection, Ssh, type SshError } from "../adapters/ssh.ts";
 import { guestsOf } from "../domain/fleet.ts";
 import type { Host } from "../domain/host.ts";
 import type { State } from "../domain/state.ts";
-import { pinFits } from "../domain/pins.ts";
+import { pinFits, sourceOf } from "../domain/pins.ts";
 import { Engine, type EngineError } from "../engine/engine.ts";
 import { emitAsIs, notBuilt } from "./compile.ts";
 import { pendingSecrets } from "./secrets.ts";
@@ -160,8 +160,10 @@ export const status = Effect.fn("status")(function* (root: string) {
 			// A package without a source yet is left out of the build until apply picks one.
 			const unsourced = [
 				...new Set(
-					included.flatMap(({ packages }) =>
-						packages.filter((pkg) => pins.packages[pkg] === undefined),
+					included.flatMap(({ packages, kind }) =>
+						packages.filter((pkg) =>
+							Option.isNone(sourceOf(pins, pkg, kind === "macos" ? "darwin" : "linux")),
+						),
 					),
 				),
 			];

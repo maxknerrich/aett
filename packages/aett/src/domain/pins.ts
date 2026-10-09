@@ -1,5 +1,5 @@
 import { DateTime, Effect, Option, Predicate, Schema } from "effect";
-import { type Release, Source } from "./packages.ts";
+import { explicitSource, type Family, type Release, Source, type Sourced } from "./packages.ts";
 
 // A value in a lock node's `locked` or `original`.
 const LockValue = Schema.Union([Schema.String, Schema.Number, Schema.Boolean]);
@@ -38,15 +38,17 @@ export interface ReleasePin extends Schema.Schema.Type<typeof ReleasePin> {}
 /**
  * state/pins.json: the fleet's own pins. `inputs` locks the engine's inputs,
  * `releases` pins each release source by its repository, and `packages`
- * records which source each package name comes from, picked the first time
- * aett saw it.
+ * records which source each package name comes from on Linux and on Macs,
+ * picked the first time aett saw it there. A name led by its source needs
+ * none.
  */
 export const Pins = Schema.Struct({
 	inputs: InputsLock,
 	releases: Schema.Record(Schema.String, ReleasePin),
-	packages: Schema.Record(Schema.String, Source).pipe(
-		Schema.withDecodingDefaultKey(Effect.succeed({})),
-	),
+	packages: Schema.Record(
+		Schema.String,
+		Schema.Struct({ linux: Schema.optionalKey(Source), darwin: Schema.optionalKey(Source) }),
+	).pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
 });
 
 export interface Pins extends Schema.Schema.Type<typeof Pins> {}
@@ -62,6 +64,19 @@ export const platforms = [
 export const Platform = Schema.Literals(platforms);
 
 export type Platform = (typeof platforms)[number];
+
+/** The family a platform picks package sources for. */
+export const familyOf = (platform: Platform): Family =>
+	platform.endsWith("-darwin") ? "darwin" : "linux";
+
+/** Where a package comes from on `family`: the source it is led by, or the one the pins picked. */
+export const sourceOf = (pins: Pins, name: string, family: Family): Option.Option<Sourced> =>
+	Option.orElse(explicitSource(name), () =>
+		Option.map(Option.fromUndefinedOr(pins.packages[name]?.[family]), (source) => ({
+			source,
+			name,
+		})),
+	);
 
 // What {target} stands for on each platform, best first: static musl builds just run.
 const targets: Record<Platform, ReadonlyArray<string>> = {
