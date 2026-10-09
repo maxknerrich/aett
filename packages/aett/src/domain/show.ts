@@ -84,6 +84,7 @@ export const describeFleet = (fleet: Fleet, state: State, pins: Pins) => {
 			["packs", entries.join(", ")],
 			["packages", packagesOf(machine, pins)],
 			["apps", machine.apps.join(", ")],
+			["brews", machine.brews.join(", ")],
 			["home", machine.home.map((name) => `home/${name}/`).join(", ")],
 			["blocked", machine.unsupported.map((what) => `${what} aren't supported yet`).join(", ")],
 		].filter(([, value]) => value !== "");

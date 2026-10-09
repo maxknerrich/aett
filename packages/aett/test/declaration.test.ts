@@ -163,7 +163,7 @@ describe("decodeFleet", () => {
 		expect(good.services.get("whoami")?.options).toEqual({ greeting: "hi" });
 		expect(problems(wrong)).toContain("services.whoami.greeting: Expected string, got 1");
 		expect(problems(wrong)).toContain(
-			"services.tools.extra: Unexpected key; a pack takes on, packages and apps",
+			"services.tools.extra: Unexpected key; a pack takes on, packages, apps and brews",
 		);
 		expect(problems(misplaced)).toContain(
 			"services.whoami.on: whoami can't run on fawkes, which is a Mac",

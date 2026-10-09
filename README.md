@@ -34,7 +34,7 @@ aett tailscale setup       # once: whether aett keeps your tailnet's policy for 
 
 Each NixOS machine joins the tailnet once, when aett installs it or a VM first starts: aett opens a login page in your browser and you approve it. It joins tagged with its role, such as `tag:server`. Your tailnet's policy has to list those tags, and grants let the fleet's machines reach each other's services. Give `aett tailscale setup` an OAuth client with Policy File: Write and aett adds them itself; without one, it shows you what to add. Macs are your own devices on the Tailscale app.
 
-On a Mac, `create` offers to add the Mac itself and adopts the apps Homebrew has on it. It keeps your new age key, which decrypts the fleet's secrets, in the login keychain. It also puts the key on the clipboard so you can save it in your password manager.
+On a Mac, `create` offers to add the Mac itself and adopts what Homebrew has on it: its casks as `apps`, the formulae you installed as `brews`. It keeps your new age key, which decrypts the fleet's secrets, in the login keychain. It also puts the key on the clipboard so you can save it in your password manager.
 
 ## The declaration
 
@@ -47,13 +47,13 @@ On a Mac, `create` offers to add the Mac itself and adopts the apps Homebrew has
 | `server()` | A headless machine, on bare metal or as a VM with `host`. |
 | `computer()` | A machine you sit at: NixOS, or a Mac with `os: "macos"`. |
 
-`services` puts things on machines. An entry is the machine it's on, a list of machines, or an object with `on`, `packages`, `apps` and the service's options. Without `on`, it's on every machine it can be on.
+`services` puts things on machines. An entry is the machine it's on, a list of machines, or an object with `on`, `packages`, `apps`, `brews` and the service's options. Without `on`, it's on every machine it can be on.
 
 - A name aett ships is that service: `backup` (Kopia), or `omintosh` (a keyboard-first Mac desktop). Tailscale is always on every machine.
 - A name from `plugins` is your own service.
-- Any other name is a pack of your own: packages, apps and dotfiles.
+- Any other name is a pack of your own: packages, apps, brews and dotfiles.
 
-`packages` takes names and `release({ github, asset, bin })`. The first time aett sees a name, it picks the source: llm-agents.nix, else nixpkgs on the machine's channel, else nixpkgs unstable. It pins that source in `state/pins.json`, and `aett update` moves the pins. `apps` are Homebrew casks on Macs, unpinned.
+`packages` takes names and `release({ github, asset, bin })`. The first time aett sees a name, it picks the source: llm-agents.nix, else nixpkgs on the machine's channel, else nixpkgs unstable. It pins that source in `state/pins.json`, and `aett update` moves the pins. `apps` are Homebrew casks on Macs and `brews` Homebrew formulae there, for what nixpkgs lacks on a Mac; both unpinned.
 
 Dotfiles live in `home/`. `home/default/` goes to every machine with your user, and `home/<entry>/` follows its entry. `{{host.name}}`, `{{host.color}}` and `{{home}}` are filled in on each machine.
 

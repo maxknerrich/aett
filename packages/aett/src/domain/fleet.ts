@@ -208,6 +208,7 @@ const EntryBase = Schema.Struct({
 	on: Schema.optionalKey(Schema.Union([MachineName, Schema.Array(MachineName)])),
 	packages: Schema.optionalKey(Schema.Array(Package)),
 	apps: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
+	brews: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
 });
 
 export type Kind = "nixos" | "macos" | "vm";
@@ -257,6 +258,8 @@ export interface Machine {
 	readonly releases: ReadonlyArray<Release>;
 	/** Homebrew casks; only Macs get any. */
 	readonly apps: ReadonlyArray<string>;
+	/** Homebrew formulae; only Macs get any. */
+	readonly brews: ReadonlyArray<string>;
 	/** The plugins on it, by name. */
 	readonly services: ReadonlyArray<Placement>;
 	/** The trees under home/ that land in its home: default, then each entry it is on. */
@@ -376,6 +379,7 @@ interface Entry {
 	readonly on: Option.Option<ReadonlyArray<string>>;
 	readonly packages: ReadonlyArray<Package>;
 	readonly apps: ReadonlyArray<string>;
+	readonly brews: ReadonlyArray<string>;
 	readonly options: unknown;
 }
 
@@ -424,7 +428,7 @@ const decodeEntry = (
 					: Result.fail(
 							extra.map(
 								(key) =>
-									`${at}.${key}: Unexpected key; ${Option.isNone(plugin) ? "a pack" : name} takes on, packages and apps`,
+									`${at}.${key}: Unexpected key; ${Option.isNone(plugin) ? "a pack" : name} takes on, packages, apps and brews`,
 							),
 						);
 			},
@@ -448,6 +452,7 @@ const decodeEntry = (
 		),
 		packages: decoded.packages ?? [],
 		apps: decoded.apps ?? [],
+		brews: decoded.brews ?? [],
 		options: options.success,
 	});
 };
@@ -587,6 +592,7 @@ export const decodeFleet = (declaration: Declaration): Result.Result<Fleet, stri
 						on: Option.none(),
 						packages: [],
 						apps: [],
+						brews: [],
 						options: {},
 					},
 				]
@@ -720,13 +726,14 @@ const toMachine = (
 	const mine = placed.flatMap(({ on, entry }) => (on.includes(machine.name) ? [entry] : []));
 	const { names, releases } = splitPackages(mine.flatMap(({ packages }) => packages));
 	const apps = [...new Set(mine.flatMap((entry) => entry.apps))].toSorted();
+	const brews = [...new Set(mine.flatMap((entry) => entry.brews))].toSorted();
 	const user = machine.role !== "hypervisor";
 	const { system } = machine;
 
 	const unsupported = [
 		system.desktop === undefined ? [] : ["desktops"],
-		apps.length > 0 && machine.kind !== "macos" && machine.role === "computer"
-			? ["apps on NixOS"]
+		apps.length + brews.length > 0 && machine.kind !== "macos" && machine.role === "computer"
+			? ["Homebrew apps and brews on NixOS"]
 			: [],
 	].flat();
 
@@ -757,6 +764,7 @@ const toMachine = (
 		packages: [...new Set([...names, ...pluginPackages])].toSorted(),
 		releases,
 		apps: machine.kind === "macos" ? apps : [],
+		brews: machine.kind === "macos" ? brews : [],
 		services: placements,
 		// Plugins on every machine have no entry, so no home tree follows them.
 		home: user

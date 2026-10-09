@@ -197,6 +197,8 @@ interface Content {
 	readonly packages?: ReadonlyArray<Package>;
 	/** GUI applications from Homebrew casks, unpinned. They reach only Macs. */
 	readonly apps?: ReadonlyArray<string>;
+	/** Homebrew formulae, unpinned, for what nixpkgs lacks on a Mac. They reach only Macs. */
+	readonly brews?: ReadonlyArray<string>;
 }
 
 // Every plugin a fleet knows: aett's and its own.
@@ -210,7 +212,7 @@ type Instances<P, Machines> = WithRole<
 	P extends { readonly roles: ReadonlyArray<infer R> } ? R : Role
 >;
 
-// The options a plugin's entry takes besides on, packages and apps.
+// The options a plugin's entry takes besides on, packages, apps and brews.
 type OptionsOf<P> = P extends Plugin<string, infer Options> ? Options : never;
 
 // The entry a plugin takes in `services`, as a machine, machines, or an object.

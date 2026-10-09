@@ -45,8 +45,12 @@ in
       type = types.listOf types.attrs;
       default = [ ];
     };
-    # Homebrew casks; only Macs install them.
+    # Homebrew casks and formulae; only Macs install them.
     apps = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+    };
+    brews = mkOption {
       type = types.listOf types.str;
       default = [ ];
     };

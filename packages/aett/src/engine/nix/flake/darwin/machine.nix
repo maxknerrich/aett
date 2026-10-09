@@ -53,6 +53,7 @@ in
     homebrew = {
       enable = true;
       casks = cfg.apps;
+      brews = cfg.brews;
       # Apps come unpinned: apply installs what is missing, and aett update upgrades them.
       onActivation.cleanup = if config.aett.homebrew.zap then "zap" else "none";
     };

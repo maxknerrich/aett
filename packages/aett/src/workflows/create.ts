@@ -209,7 +209,7 @@ export const create = Effect.fn("create")(function* (
 	// The Mac aett runs on brings the apps it has, if fleet.ts declares it.
 	const adopted = yield* Effect.transposeOption(
 		Option.map(included, (named) =>
-			Effect.map(installedApps, (apps): Adopted => ({ mac: named, apps })),
+			Effect.map(installedApps, (installed): Adopted => ({ mac: named, ...installed })),
 		),
 	);
 

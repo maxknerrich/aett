@@ -324,13 +324,23 @@ export const upgradeApps = Effect.fn("upgradeApps")(function* (name: string, bre
 	return yield* brewOnTerminal(["bundle", "install", `--file=${file}`, "--upgrade"]);
 }, Effect.scoped);
 
-/** The casks Homebrew has on this Mac, which aett create adopts as its apps. */
-export const installedApps = runBrew(["list", "--cask", "-1"]).pipe(
-	Effect.map(({ stdout }) =>
-		stdout
-			.split("\n")
-			.map((line) => line.trim())
-			.filter((line) => line !== ""),
-	),
-	Effect.orElseSucceed((): ReadonlyArray<string> => []),
-);
+// The names brew prints one per line.
+const listed = (args: ReadonlyArray<string>) =>
+	runBrew(args).pipe(
+		Effect.map(({ stdout }) =>
+			stdout
+				.split("\n")
+				.map((line) => line.trim())
+				.filter((line) => line !== ""),
+		),
+		Effect.orElseSucceed((): ReadonlyArray<string> => []),
+	);
+
+/**
+ * What aett create adopts from this Mac: the casks Homebrew has, as its
+ * apps, and the formulae installed on request, as its brews.
+ */
+export const installedApps = Effect.all({
+	apps: listed(["list", "--cask", "-1"]),
+	brews: listed(["leaves", "--installed-on-request"]),
+});

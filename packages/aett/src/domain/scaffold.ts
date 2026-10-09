@@ -65,10 +65,11 @@ const entry = ({ name, role, mac, encrypted }: NewMachine) => {
 	return `\t\t${key(name)}: ${role}(${config}),\n`;
 };
 
-/** A Mac's apps that create adopts: the casks Homebrew has on it. */
+/** What create adopts from the Mac it runs on: the casks Homebrew has there, and the formulae installed on request. */
 export interface Adopted {
 	readonly mac: string;
 	readonly apps: ReadonlyArray<string>;
+	readonly brews: ReadonlyArray<string>;
 }
 
 // The pack a Mac's adopted apps go into: named after the Mac, unless that name is aett's own.
@@ -89,8 +90,8 @@ export const fleetSource = (
 
 	const services = Option.match(adopted, {
 		onNone: () => "",
-		onSome: ({ mac, apps }) =>
-			`\tservices: {\n\t\t${key(packName(mac))}: { on: ${JSON.stringify(mac)}, apps: [${apps.map((app) => JSON.stringify(app)).join(", ")}] },\n\t},\n`,
+		onSome: ({ mac, apps, brews }) =>
+			`\tservices: {\n\t\t${key(packName(mac))}: { on: ${JSON.stringify(mac)}, apps: [${apps.map((app) => JSON.stringify(app)).join(", ")}]${brews.length === 0 ? "" : `, brews: [${brews.map((brew) => JSON.stringify(brew)).join(", ")}]`} },\n\t},\n`,
 	});
 
 	return `import { ${imports.join(", ")} } from "aett"\n\nexport default fleet({\n\tuser: ${JSON.stringify(user)},\n\tmachines: {${machines.length === 0 ? "" : `\n${machines.map(entry).join("")}\t`}},\n${services}})\n`;

@@ -73,6 +73,7 @@ const base = (fleet: Fleet, machine: Machine, state: State, extras: Extras, pins
 			),
 		),
 		apps: machine.apps,
+		brews: machine.brews,
 		tailnet: tailnetOf(state, machine.name),
 		user: fleet.user.pipe(
 			Option.filter(() => machine.user),
