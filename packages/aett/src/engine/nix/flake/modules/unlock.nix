@@ -82,6 +82,13 @@ in
       # Intel Wi-Fi's operation modes, which iwlwifi loads once it knows the card.
       "iwlmvm"
       "iwldvm"
+      # The ciphers WPA2 and WPA3 encrypt with, which the kernel loads when a card asks: without them
+      # the card associates but can't install the network's key.
+      "ccm"
+      "ctr"
+      "cmac"
+      "gcm"
+      "ghash-generic"
     ];
 
     boot.initrd.secrets."/etc/aett/wpa_supplicant.conf" = "${directory}/wpa_supplicant.conf";
