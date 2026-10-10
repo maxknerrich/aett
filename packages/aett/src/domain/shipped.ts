@@ -47,8 +47,9 @@ export const omintosh = plugin({
 
 /**
  * T3 Code's server, which runs coding agents and serves the T3 Code app over
- * HTTPS on the tailnet. The entry names the machines; on each, `t3-pair`
- * prints the link that pairs a device.
+ * HTTPS on the tailnet. It brings no agents: it drives those the machine's
+ * packages install, such as pi. The entry names the machines; on each,
+ * `t3-pair` prints the link that pairs a device.
  */
 export const t3code = plugin({
 	name: "t3code",

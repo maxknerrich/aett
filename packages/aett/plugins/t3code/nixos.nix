@@ -1,6 +1,7 @@
 # T3 Code's server, which runs coding agents and serves the T3 Code app. It runs as the fleet's user,
 # with the agents' logins and the projects in that user's home, on 127.0.0.1:3773, which aett's Caddy
 # serves at https://<machine>.<tailnet>.ts.net:3773. `t3-pair` prints the link that pairs a device.
+# It brings no agents: it drives those the machine's packages install, such as pi.
 #
 # The stable channel is T3 Code as llm-agents.nix pins it. The nightly channel is T3 Code's own build,
 # which the service installs the first time and updates on every start, run through nix-ld.
@@ -13,7 +14,8 @@
 let
   cfg = config.aett;
   user = cfg.user.name;
-  t3code = cfg.pkgs.t3code;
+  # Without the agents llm-agents.nix bundles with it.
+  t3code = cfg.pkgs.t3code.override { providerPackages = [ ]; };
   port = 3773;
   nightly = (cfg.services.t3code.options.channel or "stable") == "nightly";
   home = "/home/${user}";
@@ -57,15 +59,17 @@ in
     wantedBy = [ "multi-user.target" ];
     after = [ "network-online.target" ];
     wants = [ "network-online.target" ];
-    # The agents and terminals it starts find what the user's login shell finds, and the agents T3 Code
-    # drives, which llm-agents.nix pins either way.
+    # The agents and terminals it starts find what the user's login shell finds; the nightly's
+    # installer also finds curl.
     environment.PATH = lib.mkForce (
-      lib.concatStringsSep ":" [
-        (lib.makeBinPath (t3code.providerPackages ++ lib.optional nightly pkgs.curl))
-        "/run/wrappers/bin"
-        "/etc/profiles/per-user/${user}/bin"
-        "/run/current-system/sw/bin"
-      ]
+      lib.concatStringsSep ":" (
+        lib.optional nightly "${pkgs.curl}/bin"
+        ++ [
+          "/run/wrappers/bin"
+          "/etc/profiles/per-user/${user}/bin"
+          "/run/current-system/sw/bin"
+        ]
+      )
     );
     serviceConfig = {
       User = user;
