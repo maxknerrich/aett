@@ -160,8 +160,8 @@ describe("decodeFleet", () => {
 			user: "mkn",
 			machines,
 			services: {
-				// @ts-expect-error t3code takes no settings
-				t3code: { web: { port: 1 } },
+				// @ts-expect-error cli-proxy takes no settings
+				"cli-proxy": { web: { port: 1 } },
 			},
 		});
 
@@ -203,7 +203,7 @@ describe("decodeFleet", () => {
 
 		expect(problems(greeting, [whoami])).toBe("services.whoami.greeting: Expected string, got 1");
 		expect(problems(settings)).toBe(
-			"services.t3code.port: Unexpected key; t3code takes no settings",
+			"services.cli-proxy.port: Unexpected key; cli-proxy takes no settings",
 		);
 		expect(problems(unknown)).toBe(
 			"services.nope: aett ships no service named nope, and the fleet has no services/nope/",

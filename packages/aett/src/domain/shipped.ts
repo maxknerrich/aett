@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 import { type Plugin, plugin } from "./plugin.ts";
 
 // The plugins aett ships. Their modules and dotfiles live in the package's plugins/<name>/.
@@ -51,6 +52,8 @@ export const omintosh = plugin({
  */
 export const t3code = plugin({
 	name: "t3code",
+	/** stable, the default, is T3 Code as llm-agents.nix pins it; nightly is T3 Code's own build, which updates itself on every start. */
+	options: Schema.Struct({ channel: Schema.optionalKey(Schema.Literals(["stable", "nightly"])) }),
 	roles: ["server", "computer"],
 	systems: ["nixos"],
 	package: "t3code",
