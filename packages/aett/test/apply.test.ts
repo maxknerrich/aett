@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { applyTargets } from "../src/domain/apply.ts";
 import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
 import type { State } from "../src/domain/state.ts";
-import { computer, fleet, hypervisor, server } from "../src/index.ts";
+import { fleet, hypervisor, mac, server, vm } from "../src/index.ts";
 
 // The fleet aett works with for a declaration.
 const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
@@ -15,8 +15,8 @@ const declared = loaded(
 			box: hypervisor(),
 			fresh: server(),
 			web: server(),
-			vm: server({ host: "box" }),
-			waiting: server({ host: "fresh" }),
+			vm: vm({ host: "box" }),
+			waiting: vm({ host: "fresh" }),
 		},
 	}),
 );
@@ -66,9 +66,7 @@ describe("applyTargets", () => {
 	});
 
 	it("rejects a machine whose declared disks differ from its install", () => {
-		const encrypted = loaded(
-			fleet({ machines: { box: hypervisor({ system: { encrypted: true } }) } }),
-		);
+		const encrypted = loaded(fleet({ machines: { box: hypervisor({ encrypted: true }) } }));
 
 		expect(applyTargets(encrypted, state, Option.none(), Option.none())).toEqual(
 			Result.fail(
@@ -91,9 +89,7 @@ describe("applyTargets", () => {
 	});
 
 	it("applies a Mac only on the Mac itself, after every other machine", () => {
-		const withMac = loaded(
-			fleet({ user: "mkn", machines: { web: server(), fawkes: computer({ os: "macos" }) } }),
-		);
+		const withMac = loaded(fleet({ user: "mkn", machines: { web: server(), fawkes: mac() } }));
 
 		expect(applyTargets(withMac, state, Option.none(), Option.none())).toEqual(
 			Result.succeed({

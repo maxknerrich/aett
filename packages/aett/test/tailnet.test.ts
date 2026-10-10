@@ -2,10 +2,12 @@ import { Option, Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
 import { mergePolicy, policyNeeds } from "../src/domain/tailnet.ts";
-import { computer, fleet, hypervisor, nas, plugin, server } from "../src/index.ts";
+import { fleet, hypervisor, mac, nas, vm } from "../src/index.ts";
+import { plugin } from "../src/domain/plugin.ts";
 
 // The fleet aett works with for a declaration.
-const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
+const loaded = (declaration: Declaration, own: Parameters<typeof decodeFleet>[1] = []) =>
+	Result.getOrThrow(decodeFleet(declaration, own));
 
 const needs = {
 	tags: ["tag:server", "tag:unlock"],
@@ -19,13 +21,17 @@ describe("policyNeeds", () => {
 				user: "mkn",
 				machines: {
 					kronos: hypervisor(),
-					hades: server({ host: "kronos" }),
+					hades: vm({ host: "kronos" }),
 					vault: nas(),
-					fawkes: computer({ os: "macos" }),
+					fawkes: mac(),
 				},
-				services: { backup: "hades", wiki: "vault" },
-				plugins: [plugin({ name: "wiki", endpoints: { page: { port: 8080, web: true } } })],
+				services: {
+					backup: { server: "hades" },
+					// @ts-expect-error wiki comes from services/wiki/, which the type knows once aett generates it
+					wiki: "vault",
+				},
 			}),
+			[plugin({ name: "wiki", endpoints: { page: { port: 8080, web: true } } })],
 		);
 
 		expect(policyNeeds(declared)).toEqual({

@@ -54,9 +54,8 @@ const packagesOf = (machine: Machine, pins: Pins) => {
 };
 
 /**
- * The fleet by machine, for aett show: what each machine is, its services
- * with their endpoints, the entries it is on, its packages, apps and home
- * trees. It reads only fleet.ts, state and the pins.
+ * The fleet by machine, for aett show: what each machine is, its tags, its
+ * services with their endpoints, its packages and its dotfiles. It reads only fleet.ts, state and the pins.
  */
 export const describeFleet = (fleet: Fleet, state: State, pins: Pins) => {
 	const width = Math.max(0, ...fleet.machines.map(({ name }) => name.length));
@@ -88,12 +87,10 @@ export const describeFleet = (fleet: Fleet, state: State, pins: Pins) => {
 	};
 
 	const lines = fleet.machines.flatMap((machine) => {
-		const entries = machine.home.filter((name) => name !== "default" && !fleet.services.has(name));
-
 		const details = [
+			["tags", machine.tags.join(", ")],
 			["services", services(machine)],
 			["endpoints", endpoints(machine)],
-			["packs", entries.join(", ")],
 			["packages", packagesOf(machine, pins)],
 			["dotfiles", machine.home.map((name) => `dotfiles/${name}/`).join(", ")],
 			["blocked", machine.unsupported.map((what) => `${what} aren't supported yet`).join(", ")],

@@ -1,141 +1,114 @@
-import { Predicate } from "effect";
+import { Predicate, type Schema } from "effect";
 import type { Channel } from "./domain/fleet.ts";
-import type { Plugin, Role } from "./domain/plugin.ts";
+import type { Role } from "./domain/plugin.ts";
 import type { shipped } from "./domain/shipped.ts";
 
 export { Schema } from "effect";
 export type { Channel } from "./domain/fleet.ts";
-export { plugin } from "./domain/plugin.ts";
-export type { Endpoint, Plugin, Role, Secret, State } from "./domain/plugin.ts";
+export { service } from "./domain/plugin.ts";
+export type { Endpoint, Plugin as Service, Role, Secret, State } from "./domain/plugin.ts";
 
-/** A size such as "32 GiB". */
-export type Size = `${number} ${"MiB" | "GiB" | "TiB"}`;
+interface Tagged<Tag extends string> {
+	/** Words that services and packages target instead of machines, such as "dev". */
+	readonly tags?: ReadonlyArray<Tag>;
+}
 
-/** Settings of a bare-metal NixOS machine. */
-export interface NixosSystem {
+/** A bare-metal NixOS machine's settings. */
+export interface NixosSettings<Tag extends string = string> extends Tagged<Tag> {
 	/** Puts the btrfs partition inside LUKS; the passphrase is typed at the console or sent with aett machine unlock. */
 	readonly encrypted?: boolean;
 	/** Its nixpkgs: stable for servers and hypervisors, unstable for computers, unless set. */
 	readonly channel?: Channel;
 }
 
-/** Settings of a NAS. Its pools root and tank are always inside LUKS. */
-export interface NasSystem {
-	readonly channel?: Channel;
-}
-
-/** Settings of a VM. Its host builds its system and shares its Nix store with it. */
-export interface VmSystem {
-	/** Defaults to 2. */
-	readonly cpu?: number;
-	/** Defaults to "2 GiB"; at least "512 MiB". */
-	readonly memory?: Size;
-	/** The size of the volume that holds /home, /var/lib and /var/log. Counts when the volume is made. Defaults to "20 GiB"; at least "1 GiB". */
-	readonly disk?: Size;
-	readonly channel?: Channel;
-}
-
-/** Settings of a bare-metal NixOS computer. */
-export interface ComputerSystem extends NixosSystem {
+/** A bare-metal NixOS computer's settings. */
+export interface ComputerSettings<Tag extends string = string> extends NixosSettings<Tag> {
 	/** Values arrive with graphical NixOS. */
 	readonly desktop?: string;
 }
 
-// `Settings` with every other kind's settings ruled out. TypeScript checks extra keys
-// against all members of a union, so without this `memory` would pass next to `encrypted`.
-type Only<Settings, Others> = Settings & {
-	readonly [Key in Exclude<keyof Others, keyof Settings>]?: never;
-};
-
-type AnySystem = ComputerSystem & VmSystem;
-
-interface BareMetal<System> {
-	readonly os?: "nixos";
-	readonly host?: never;
-	readonly system?: Only<System, AnySystem>;
+/** A NAS's settings. Its pools root and tank are always inside LUKS. */
+export interface NasSettings<Tag extends string = string> extends Tagged<Tag> {
+	readonly channel?: Channel;
 }
 
-interface Vm {
-	/** The hypervisor, NAS or bare-metal server the VM runs on. */
-	readonly host: string;
-	readonly os?: never;
-	readonly system?: Only<VmSystem, AnySystem>;
-}
-
-interface Mac {
-	readonly os: "macos";
-	readonly host?: never;
+/** A Mac's settings. */
+export interface MacSettings<Tag extends string = string> extends Tagged<Tag> {
 	/** Its nixpkgs and nix-darwin: unstable unless set to stable. */
-	readonly system?: { readonly channel?: Channel };
+	readonly channel?: Channel;
 }
 
-// Rejects keys a config doesn't know, at its top level and in its system. Inferring a
-// generic skips TypeScript's usual check for unknown keys in object literals.
-type Known<Config> = {
-	readonly [Key in Exclude<keyof Config, "role" | "os" | "host" | "system">]: never;
-} & (Config extends { readonly system: infer System }
-	? { readonly system: { readonly [Key in Exclude<keyof System, keyof AnySystem>]: never } }
-	: unknown);
-
-// The function picks the role, so its config can't name one.
-interface NoRole {
-	readonly role?: never;
+/** A VM's settings. Its host builds its system and shares its Nix store with it. */
+export interface VmSettings<
+	Host extends string = string,
+	Tag extends string = string,
+> extends Tagged<Tag> {
+	/** The hypervisor, NAS or bare-metal server it runs on. */
+	readonly host: Host;
+	/** Defaults to 2. */
+	readonly cpu?: number;
+	/** In GiB. Defaults to 2; at least 0.5. */
+	readonly memory?: number;
+	/** The GiB of the volume that holds /home, /var/lib and /var/log. Counts when the volume is made. Defaults to 20; at least 1. */
+	readonly disk?: number;
+	readonly channel?: Channel;
 }
 
-export type HypervisorConfig = BareMetal<NixosSystem>;
+// Each function's result feeds no inference back: inside fleet({ machines }), the type fleet() expects
+// would otherwise give a machine without tags every tag there is.
 
-export type NasConfig = BareMetal<NasSystem>;
-
-export type ServerConfig = BareMetal<NixosSystem> | Vm;
-
-export type ComputerConfig = BareMetal<ComputerSystem> | Mac;
-
-/** An appliance that only runs VMs, like Proxmox. Packs never reach it; services can run on it. */
-export function hypervisor(): { readonly role: "hypervisor" };
-export function hypervisor<const Config extends HypervisorConfig>(
-	config: Config & Known<Config> & NoRole,
-): Config & { readonly role: "hypervisor" };
-export function hypervisor(config: HypervisorConfig = {}) {
-	return { ...config, role: "hypervisor" as const };
-}
+/** An appliance that only runs VMs, like Proxmox. Packages never reach it; services can run on it. */
+export const hypervisor = <const Tag extends string = never>(
+	settings: NixosSettings<Tag> = {},
+): NoInfer<NixosSettings<Tag> & { readonly role: "hypervisor" }> => ({
+	...settings,
+	role: "hypervisor",
+});
 
 /**
  * Storage that runs services directly and can host VMs. Its two pools, root
  * and tank, are btrfs mirrors inside LUKS; install asks which disks form each.
  * Bulk state lands on tank.
  */
-export function nas(): { readonly role: "nas" };
-export function nas<const Config extends NasConfig>(
-	config: Config & Known<Config> & NoRole,
-): Config & { readonly role: "nas" };
-export function nas(config: NasConfig = {}) {
-	return { ...config, role: "nas" as const };
-}
+export const nas = <const Tag extends string = never>(
+	settings: NasSettings<Tag> = {},
+): NoInfer<NasSettings<Tag> & { readonly role: "nas" }> => ({ ...settings, role: "nas" });
 
-/** A headless machine reached over SSH, on bare metal or as a VM with `host`. */
-export function server(): { readonly role: "server" };
-export function server<const Config extends ServerConfig>(
-	config: Config & Known<Config> & NoRole,
-): Config & { readonly role: "server" };
-export function server(config: ServerConfig = {}) {
-	return { ...config, role: "server" as const };
-}
+/** A headless bare-metal NixOS machine reached over SSH. */
+export const server = <const Tag extends string = never>(
+	settings: NixosSettings<Tag> = {},
+): NoInfer<NixosSettings<Tag> & { readonly role: "server" }> => ({ ...settings, role: "server" });
 
-/** A machine someone sits in front of: bare-metal NixOS, or a Mac with `os: "macos"`. Always graphical. */
-export function computer(): { readonly role: "computer" };
-export function computer<const Config extends ComputerConfig>(
-	config: Config & Known<Config> & NoRole,
-): Config & { readonly role: "computer" };
-export function computer(config: ComputerConfig = {}) {
-	return { ...config, role: "computer" as const };
-}
+/** A bare-metal NixOS machine someone sits in front of. */
+export const computer = <const Tag extends string = never>(
+	settings: ComputerSettings<Tag> = {},
+): NoInfer<ComputerSettings<Tag> & { readonly role: "computer" }> => ({
+	...settings,
+	role: "computer",
+});
 
-// A machine as a role function returns it: its role with that role's config.
-type Declared =
-	| (HypervisorConfig & { readonly role: "hypervisor" })
-	| (NasConfig & { readonly role: "nas" })
-	| (ServerConfig & { readonly role: "server" })
-	| (ComputerConfig & { readonly role: "computer" });
+/** A Mac, which nix-darwin takes over in place. */
+export const mac = <const Tag extends string = never>(
+	settings: MacSettings<Tag> = {},
+): NoInfer<MacSettings<Tag> & { readonly role: "computer"; readonly os: "macos" }> => ({
+	...settings,
+	role: "computer",
+	os: "macos",
+});
+
+/** A server VM on a hypervisor, a NAS or a bare-metal server. */
+export const vm = <const Host extends string, const Tag extends string = never>(
+	settings: VmSettings<Host, Tag>,
+): NoInfer<VmSettings<Host, Tag> & { readonly role: "server" }> => ({
+	...settings,
+	role: "server",
+});
+
+// A machine as the functions above return it.
+type Machine = { readonly role: "hypervisor" | "nas" | "server" | "computer" } & Tagged<string> & {
+		readonly host?: string;
+		readonly os?: "macos";
+	};
 
 // The machines a VM can run on: hypervisors, NASes and bare-metal servers.
 type Hosts<Machines> = {
@@ -154,7 +127,18 @@ type CheckedHosts<Machines> = {
 		: unknown;
 };
 
-/** A tool from a GitHub release, for a `packages` list. */
+// Every tag a machine carries.
+type TagsOf<Machines> = {
+	[Name in keyof Machines]: Machines[Name] extends Tagged<infer Tag> ? Tag : never;
+}[keyof Machines];
+
+/** Where something goes: a machine, a tag, or every machine it fits with "default". */
+export type Target<Machines> = "default" | (keyof Machines & string) | TagsOf<Machines>;
+
+// A target or several.
+type Targets<Machines> = Target<Machines> | ReadonlyArray<Target<Machines>>;
+
+/** A tool from a GitHub release, for a packages list. */
 export interface Release {
 	/** The repository, "owner/name". */
 	readonly github: string;
@@ -169,11 +153,12 @@ export interface Release {
 }
 
 /**
- * Declares a tool from a GitHub release for a `packages` list. aett pins its
- * version and hash in state/pins.json; aett update moves it.
+ * Declares a tool from a GitHub release for a packages list, for one aett
+ * doesn't know by name. aett pins its version and hash in state/pins.json;
+ * aett update moves it.
  *
  * ```ts
- * release({ github: "voidzero-dev/vite-plus", asset: "vp-{target}.tar.gz", bin: "vp" })
+ * release({ github: "owner/tool", asset: "tool-{target}.tar.gz", bin: "tool" })
  * ```
  */
 export const release = (source: Release): Release => source;
@@ -185,6 +170,13 @@ export const release = (source: Release): Release => source;
  */
 // oxlint-disable-next-line typescript/no-empty-interface -- the fleet's generated declaration fills it in.
 export interface Registries {}
+
+/**
+ * The fleet's own services, from services/<name>/. aett writes them into the
+ * fleet's .aett/services.d.ts whenever it reads the fleet.
+ */
+// oxlint-disable-next-line typescript/no-empty-interface -- the fleet's generated declaration fills it in.
+export interface Services {}
 
 /** The registries a package can come from, as a name leads it: nixpkgs.git. */
 export type RegistryName = "nixpkgs" | "unstable" | "llm-agents" | "cask" | "brew";
@@ -201,6 +193,9 @@ export type Registry<R extends RegistryName> = {
  * A package: a name aett picks the source of the first time it sees it and
  * pins in state/pins.json, completed from every registry once generated; a
  * registry's package, such as nixpkgs.git or cask.raycast; or a release().
+ * On Linux llm-agents.nix comes first, then nixpkgs on the machine's channel,
+ * then nixpkgs unstable; on a Mac a Homebrew cask, then those, then a
+ * Homebrew formula. Homebrew's reach only Macs.
  */
 // `string & {}` keeps any name allowed without losing the completion of the known ones.
 export type Package = NamesIn<RegistryName> | (string & {}) | Release;
@@ -231,111 +226,100 @@ Object.assign(globalThis, {
 	brew: registry("brew"),
 });
 
-// The names of the machines whose role is one of `Roles`.
-type WithRole<Machines, Roles> = {
-	[Name in keyof Machines]: Machines[Name] extends { readonly role: Roles } ? Name : never;
+// The fleet's own services, each with its folder's name; none until aett generates them.
+type OwnServices = {
+	[Name in keyof Services]: Services[Name] & { readonly name: Name };
+}[keyof Services];
+
+// Every service a fleet can place: aett's and its own.
+type AllServices =
+	| (typeof shipped)[number]
+	// oxlint-disable-next-line typescript/no-redundant-type-constituents -- never until the fleet's declaration fills Services in.
+	| OwnServices;
+
+// The options a service takes, any of them; unknown for a service without.
+type OptionsOf<S> = S extends { readonly options: Schema.Decoder<infer Options> }
+	? Partial<Options>
+	: unknown;
+
+// The settings a service takes per target: its options, or an empty object for a service without.
+type SettingsOf<S> =
+	unknown extends OptionsOf<S> ? { readonly [key: string]: never } : OptionsOf<S>;
+
+// The roles a service's instances may have.
+type RolesOf<S> = S extends { readonly roles: ReadonlyArray<infer R> } ? R : Role;
+
+// The machines a service's server can be.
+type ServersOf<S, Machines> = {
+	[Name in keyof Machines]: Machines[Name] extends { readonly role: RolesOf<S> } ? Name : never;
 }[keyof Machines] &
 	string;
 
-// One machine or several.
-type On<Name extends string> = Name | ReadonlyArray<Name>;
+// What a service's entry is: a server and whom to leave out for a service with clients; else
+// targets, or settings by target.
+type EntryOf<S, Machines> = S extends { readonly clients: true }
+	? {
+			readonly server: ServersOf<S, Machines>;
+			readonly exclude?: Targets<Machines>;
+		} & OptionsOf<S>
+	: Targets<Machines> | { readonly [T in Target<Machines>]?: SettingsOf<S> };
 
-/** What any entry can add to the machines it is on. */
-interface Content {
-	/**
-	 * Packages by name, whose source aett picks and pins: on Linux
-	 * llm-agents.nix, nixpkgs or nixpkgs unstable; on a Mac a Homebrew cask
-	 * first, then those, then a Homebrew formula. A name led by its source
-	 * takes it from there: "nixpkgs.git", "unstable.zed-editor",
-	 * "llm-agents.claude-code", "cask.raycast", "brew.mas". Homebrew's reach
-	 * only Macs. Or a release().
-	 */
-	readonly packages?: ReadonlyArray<Package>;
-}
+/** The fleet's services by name: aett's, or its own from services/<name>/. */
+export type ServicesOf<Machines> = {
+	readonly [S in AllServices as S extends { readonly always: true } ? never : S["name"]]?: EntryOf<
+		S,
+		Machines
+	>;
+};
 
-// Every plugin a fleet knows: aett's and its own.
-type AllPlugins<Plugins> =
-	| (typeof shipped)[number]
-	| (Plugins extends ReadonlyArray<infer P> ? P : never);
+// A group of packages: its targets and their packages.
+type Group<Machines> = { readonly [T in Target<Machines>]?: ReadonlyArray<Package> };
 
-// The machines a plugin's instances can be.
-type Instances<P, Machines> = WithRole<
-	Machines,
-	P extends { readonly roles: ReadonlyArray<infer R> } ? R : Role
->;
-
-// The options a plugin's entry takes besides on and packages.
-type OptionsOf<P> = P extends Plugin<string, infer Options> ? Options : never;
-
-// The entry a plugin takes in `services`, as a machine, machines, or an object.
-type PluginEntry<P, Machines> = P extends { readonly always: true }
-	? never
-	: P extends { readonly single: true }
-		? Instances<P, Machines> | (Content & { readonly on: Instances<P, Machines> } & OptionsOf<P>)
-		:
-				| On<Instances<P, Machines>>
-				| (Content & { readonly on?: On<Instances<P, Machines>> } & OptionsOf<P>);
-
-// A pack of the fleet's own: content for every machine but hypervisors, or for those it is on.
-type PackEntry<Machines> =
-	| On<WithRole<Machines, "nas" | "server" | "computer">>
-	| (Content & { readonly on?: On<WithRole<Machines, "nas" | "server" | "computer">> });
-
-// What an entry must be: a machine or a list of them out of the allowed ones, or an object without
-// keys the entry type lacks, which a generic's inference would let pass. The machines are checked
-// apart, because a string intersected with an object type of optional keys accepts any string.
-type Exact<Value, Allowed> = Value extends string | ReadonlyArray<unknown>
-	? Value extends Allowed
-		? unknown
-		: Extract<Allowed, string | ReadonlyArray<unknown>>
-	: Allowed & {
-			readonly [
-				Key in Exclude<keyof Value, keyof Exclude<Allowed, string | ReadonlyArray<unknown>>>
-			]: never;
-		};
-
-// The names of plugins.
-type NameOf<P> = P extends { readonly name: infer Name } ? Name : never;
-
-// Each entry checked against what its name is: one of the plugins, or else a pack.
-type CheckedServices<Services, Machines, Plugins> = {
-	readonly [Name in keyof Services]: Name extends NameOf<AllPlugins<Plugins>>
-		? Exact<
-				Services[Name],
-				PluginEntry<Extract<AllPlugins<Plugins>, { readonly name: Name }>, Machines>
-			>
-		: Exact<Services[Name], PackEntry<Machines>>;
+// Each key of packages: a target with its packages, or a group of its own name, which takes targets only.
+type CheckedPackages<Packages, Machines> = {
+	readonly [Key in keyof Packages]: Key extends Target<Machines>
+		? ReadonlyArray<Package>
+		: Group<Machines> & {
+				readonly [Extra in Exclude<keyof Packages[Key], Target<Machines>>]: never;
+			};
 };
 
 /**
- * Declares the fleet; fleet.ts default-exports the result. `user` names the
+ * Declares the fleet; fleet.ts default-exports the result. `user` is the
  * fleet's one person, whom every machine but a hypervisor has. `machines` is
- * hardware, keyed by hostname. `services` puts things on them: a known name
- * is a service aett ships or a plugin from `plugins`, any other name is a
- * pack of your own. An entry is the machine it is on, a list of them, or an
- * object with `on`, `packages` and a service's options; without `on`
- * it is on every machine it can be. `dotfiles/<name>/` follows its entry, and
- * `dotfiles/default/` goes to every machine with the user.
+ * hardware with tags. `services` places services: a target, a list of them,
+ * or settings by target, where `default` applies first, then tags, then the
+ * machine; a service with clients, such as backup, names its server.
+ * `packages` lists packages by target, or under a group's name by target.
+ * Dotfiles follow the same targets: dotfiles/default/, dotfiles/<tag>/ and
+ * dotfiles/<machine>/.
  *
  * ```ts
  * export default fleet({
  * 	user: "mkn",
- * 	machines: { kronos: hypervisor(), hades: server({ host: "kronos" }) },
- * 	services: { backup: "kronos", tools: { packages: ["git", "claude-code"] } },
+ * 	machines: {
+ * 		astraeus: hypervisor({ encrypted: true }),
+ * 		zeus: vm({ host: "astraeus", cpu: 6, memory: 16, disk: 200, tags: ["dev"] }),
+ * 	},
+ * 	services: { t3code: "zeus" },
+ * 	packages: { dev: ["git", "gh"], agents: { zeus: ["pi", "vite-plus"] } },
  * })
  * ```
  */
 export const fleet = <
-	const Machines extends { readonly [name: string]: Declared },
-	const Services extends { readonly [name: string]: unknown },
-	const Plugins extends ReadonlyArray<Plugin> = readonly [],
->(declaration: {
+	const Machines extends { readonly [name: string]: Machine },
+	const Packages extends { readonly [key: string]: unknown } = Record<never, never>,
+>(
+	declaration: FleetDeclaration<Machines, Packages>,
+	// The result's type feeds no inference back, so a call around fleet() can't widen its machines.
+): NoInfer<FleetDeclaration<Machines, Packages>> => declaration;
+
+/** What fleet() takes: its machines, and services and packages checked against them. */
+// A type alias, not an interface, so a declaration still reads as the plain record aett decodes.
+export type FleetDeclaration<Machines, Packages> = {
 	/** The login name of the fleet's user, whom every machine but a hypervisor has. */
 	readonly user?: string;
-	readonly machines: Machines &
-		CheckedHosts<Machines> & { readonly [Name in keyof Machines]: Known<Machines[Name]> };
-	readonly services?: Services &
-		CheckedServices<NoInfer<Services>, NoInfer<Machines>, NoInfer<Plugins>>;
-	/** Plugins of your own, each placed by the entry of its name in `services`. */
-	readonly plugins?: Plugins;
-}) => declaration;
+	readonly machines: Machines & CheckedHosts<Machines>;
+	readonly services?: ServicesOf<NoInfer<Machines>>;
+	readonly packages?: Packages & CheckedPackages<NoInfer<Packages>, NoInfer<Machines>>;
+};

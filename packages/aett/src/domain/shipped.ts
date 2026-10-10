@@ -65,8 +65,8 @@ export const t3code = plugin({
  * Claude- and Gemini-compatible APIs over HTTPS on the tailnet, without
  * client keys. It keeps the logins in the fleet's user's home.
  */
-export const cliProxyApi = plugin({
-	name: "cli-proxy-api",
+export const cliProxy = plugin({
+	name: "cli-proxy",
 	roles: ["server", "computer"],
 	systems: ["nixos"],
 	package: "cli-proxy-api",
@@ -76,7 +76,7 @@ export const cliProxyApi = plugin({
 });
 
 /** Every plugin aett ships. */
-export const shipped = [tailscale, backup, omintosh, t3code, cliProxyApi] as const;
+export const shipped = [tailscale, backup, omintosh, t3code, cliProxy] as const;
 
 /** The plugins aett ships, as any plugin. */
 export const shippedPlugins: ReadonlyArray<Plugin> = shipped;

@@ -51,12 +51,12 @@ export interface State {
 /**
  * A service aett can put on machines: its options, its Nix modules and what
  * the rest of aett reads from it. A fleet's `services` entry of the same name
- * places it. `plugin()` declares one; aett ships tailscale, backup and
- * omintosh.
+ * places it. aett ships tailscale, backup, omintosh, t3code and cli-proxy; a
+ * fleet's own live in services/<name>/, declared by `service()`.
  */
 export interface Plugin<Name extends string = string, Options = unknown> {
 	readonly name: Name;
-	/** What its entry takes besides `on` and `packages`, which its modules read. */
+	/** The settings its entry takes per target, which its modules read. */
 	readonly options?: Schema.Decoder<Options>;
 	/**
 	 * A directory with `nixos.nix` and `darwin.nix`, the modules aett imports on
@@ -90,21 +90,26 @@ export interface Plugin<Name extends string = string, Options = unknown> {
 	readonly clients?: boolean;
 }
 
+/** Declares a service aett ships. */
+export const plugin = <const Definition extends Plugin>(definition: Definition) => definition;
+
 /**
- * Declares a plugin for `fleet({ plugins: [...] })`. Its name is the key its
- * entry has in `services`.
+ * Declares a service of the fleet's own, as the default export of
+ * services/<name>/service.ts, next to its nixos.nix, darwin.nix and dotfiles/.
+ * Its name is the folder's. A folder without service.ts is a service without
+ * settings.
  *
  * ```ts
- * export const whoami = plugin({
- * 	name: "whoami",
+ * export default service({
  * 	options: Schema.Struct({ greeting: Schema.optional(Schema.String) }),
- * 	directory: new URL("./whoami", import.meta.url),
  * 	endpoints: { web: { port: 8080, web: true } },
  * 	health: "curl -fsS http://127.0.0.1:8080",
  * })
  * ```
  */
-export const plugin = <const Definition extends Plugin>(definition: Definition) => definition;
+export const service = <const Definition extends Omit<Plugin, "name" | "directory">>(
+	definition: Definition,
+) => definition;
 
 /** A rule the tailnet's policy needs so machines reach a plugin's endpoints: who, where, which ports. */
 export interface Grant {

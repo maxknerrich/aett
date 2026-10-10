@@ -1,103 +1,78 @@
-import { Option, Result } from "effect";
+import { Option, Result, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
-import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
-import { computer, fleet, hypervisor, nas, plugin, release, Schema, server } from "../src/index.ts";
+import { type Declaration, decodeFleet, PluginMetadata } from "../src/domain/fleet.ts";
+import { plugin } from "../src/domain/plugin.ts";
+import { computer, fleet, hypervisor, mac, nas, server, vm } from "../src/index.ts";
 
 // What decodeFleet reports for a declaration it has to reject.
-const problems = (declaration: Declaration) =>
-	Result.getOrThrow(Result.flip(decodeFleet(declaration)));
+const problems = (declaration: Declaration, own: Parameters<typeof decodeFleet>[1] = []) =>
+	Result.getOrThrow(Result.flip(decodeFleet(declaration, own)));
 
 // The fleet aett works with for a declaration it accepts.
-const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
+const loaded = (declaration: Declaration, own: Parameters<typeof decodeFleet>[1] = []) =>
+	Result.getOrThrow(decodeFleet(declaration, own));
 
-const vp = release({ github: "voidzero-dev/vite-plus", asset: "vp-{target}.tar.gz", bin: "vp" });
+// A service of the fleet's own with settings, which only servers run.
+const whoami = plugin({
+	name: "whoami",
+	options: Schema.Struct({
+		greeting: Schema.optionalKey(Schema.String),
+		loud: Schema.optionalKey(Schema.Boolean),
+	}),
+	roles: ["server"],
+	endpoints: { web: { port: 8080, web: true } },
+});
 
 describe("decodeFleet", () => {
-	it("takes Homebrew's names, such as 1password, as package names", () => {
-		expect(
-			Result.isSuccess(
-				decodeFleet(
-					fleet({
-						user: "mkn",
-						machines: { fawkes: computer({ os: "macos" }) },
-						services: { mac: { packages: ["1password", "firefox@developer-edition", "brew.mas"] } },
-					}),
-				),
-			),
-		).toBe(true);
-	});
-
-	it("puts entries on the machines they name, packs on every machine but hypervisors without on, and Homebrew's packages only on Macs", () => {
+	it("puts packages on targets and groups: machines, tags and default, Homebrew's only on Macs, none on hypervisors", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
 				machines: {
-					kronos: hypervisor({ system: { encrypted: true } }),
-					zeus: server({ host: "kronos", system: { memory: "8 GiB" } }),
+					kronos: hypervisor({ encrypted: true }),
+					zeus: vm({ host: "kronos", memory: 8, tags: ["dev"] }),
 					vault: nas(),
-					fawkes: computer({ os: "macos" }),
+					fawkes: mac({ tags: ["dev"] }),
 				},
-				services: {
-					backup: "kronos",
-					tools: { packages: ["git", vp] },
-					dev: { on: ["zeus", "fawkes"], packages: ["claude-code", "cask.ghostty"] },
+				packages: {
+					default: ["git"],
+					dev: ["claude-code", "cask.ghostty", "vite-plus"],
+					fawkes: ["1password", "firefox@developer-edition", "brew.mas"],
+					agents: { zeus: ["pi"] },
 				},
 			}),
 		);
 
 		expect(
-			declared.machines.map(({ name, user, packages, releases, services, home }) => ({
+			declared.machines.map(({ name, packages, releases, home }) => ({
 				name,
-				user,
 				packages,
 				releases: releases.map(({ bin }) => bin),
-				services,
 				home,
 			})),
 		).toEqual([
-			{
-				name: "kronos",
-				user: false,
-				packages: ["kopia", "tailscale"],
-				releases: [],
-				services: [
-					{ name: "tailscale", instance: true },
-					{ name: "backup", instance: true },
-				],
-				home: [],
-			},
+			{ name: "kronos", packages: ["tailscale"], releases: [], home: [] },
 			{
 				name: "zeus",
-				user: true,
-				packages: ["claude-code", "git", "kopia", "tailscale"],
+				packages: ["claude-code", "git", "pi", "tailscale"],
 				releases: ["vp"],
-				services: [
-					{ name: "tailscale", instance: true },
-					{ name: "backup", instance: false },
-				],
-				home: ["default", "dev", "tools"],
+				home: ["default", "dev", "zeus"],
 			},
-			{
-				name: "vault",
-				user: true,
-				packages: ["git", "kopia", "tailscale"],
-				releases: ["vp"],
-				services: [
-					{ name: "tailscale", instance: true },
-					{ name: "backup", instance: false },
-				],
-				home: ["default", "tools"],
-			},
+			{ name: "vault", packages: ["git", "tailscale"], releases: [], home: ["default", "vault"] },
 			{
 				name: "fawkes",
-				user: true,
-				packages: ["cask.ghostty", "claude-code", "git", "kopia", "tailscale"],
-				releases: ["vp"],
-				services: [
-					{ name: "tailscale", instance: true },
-					{ name: "backup", instance: false },
+				packages: [
+					"1password",
+					"brew.mas",
+					"cask.ghostty",
+					"claude-code",
+					"firefox@developer-edition",
+					"git",
+					"tailscale",
+					"vite-plus",
 				],
-				home: ["default", "dev", "tools"],
+				releases: [],
+				home: ["default", "dev", "fawkes"],
 			},
 		]);
 
@@ -107,210 +82,244 @@ describe("decodeFleet", () => {
 		);
 	});
 
-	it("makes clients of the machines with the user or a service's state, not of bare hypervisors", () => {
+	it("places a service on targets with settings merged per machine: default, then tags, then the machine", () => {
+		const declared = loaded(
+			fleet({
+				user: "mkn",
+				machines: {
+					web: server({ tags: ["public"] }),
+					api: server(),
+					fawkes: mac(),
+				},
+				services: {
+					// @ts-expect-error whoami comes from services/whoami/, unknown until aett generates it
+					whoami: { default: { greeting: "hi" }, public: { loud: true }, web: { greeting: "hey" } },
+					t3code: ["web", "api"],
+				},
+			}),
+			[whoami],
+		);
+
+		const settings = (machine: string) =>
+			declared.machines
+				.find(({ name }) => name === machine)
+				?.services.find(({ name }) => name === "whoami")?.options;
+
+		// default reaches every server; fawkes is a Mac, which whoami doesn't run on.
+		expect(declared.services.get("whoami")?.instances).toEqual(["web", "api"]);
+		expect(settings("web")).toEqual({ greeting: "hey", loud: true });
+		expect(settings("api")).toEqual({ greeting: "hi" });
+		expect(declared.services.get("t3code")?.instances).toEqual(["web", "api"]);
+		expect(declared.machines[0]?.home).toEqual(["default", "public", "whoami", "t3code", "web"]);
+	});
+
+	it("gives a service with clients its server and every other machine with the user, but those excluded", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
 				machines: {
 					kronos: hypervisor(),
-					astraeus: hypervisor(),
-					hades: server({ host: "kronos" }),
+					vault: nas(),
+					zeus: vm({ host: "kronos" }),
+					hermes: vm({ host: "kronos", tags: ["throwaway"] }),
+					fawkes: mac(),
 				},
-				services: { backup: "hades" },
+				services: { backup: { server: "vault", exclude: "throwaway" } },
 			}),
 		);
 
-		expect(declared.services.get("backup")?.instances).toEqual(["hades"]);
-		expect(declared.services.get("backup")?.clients).toEqual([]);
+		expect(declared.services.get("backup")?.instances).toEqual(["vault"]);
+		expect(declared.services.get("backup")?.clients).toEqual(["zeus", "fawkes"]);
 	});
 
-	it("checks entries against what their name is: a plugin's options, or a pack's keys", () => {
-		const whoami = plugin({
-			name: "whoami",
-			options: Schema.Struct({ greeting: Schema.optionalKey(Schema.String) }),
-			roles: ["server"],
-			endpoints: { web: { port: 8080, web: true } },
-		});
+	it("checks services: their names, settings and machines", () => {
+		const machines = { kronos: hypervisor(), web: server(), fawkes: mac() };
 
-		const machines = { kronos: hypervisor(), web: server(), fawkes: computer({ os: "macos" }) };
-
-		const good = loaded(
-			fleet({
-				user: "mkn",
-				machines,
-				plugins: [whoami],
-				services: { whoami: { on: "web", greeting: "hi" } },
-			}),
-		);
-
-		const wrong = fleet({
+		const greeting = fleet({
 			user: "mkn",
 			machines,
-			plugins: [whoami],
 			services: {
-				// @ts-expect-error whoami's greeting is a string
-				whoami: { on: "web", greeting: 1 },
-				// @ts-expect-error a pack has no options
-				tools: { packages: ["git"], extra: true },
+				// @ts-expect-error whoami comes from services/whoami/, so the type knows it once aett generates it
+				whoami: { web: { greeting: 1 } },
 			},
 		});
 
-		const misplaced = fleet({
+		const settings = fleet({
 			user: "mkn",
 			machines,
-			plugins: [whoami],
 			services: {
-				// @ts-expect-error whoami runs on servers
-				whoami: "fawkes",
-				// @ts-expect-error packs never reach hypervisors
-				tools: ["kronos"],
-				// @ts-expect-error backup runs on one machine
-				backup: ["web", "kronos"],
+				// @ts-expect-error t3code takes no settings
+				t3code: { web: { port: 1 } },
 			},
 		});
 
-		expect(good.services.get("whoami")?.options).toEqual({ greeting: "hi" });
-		expect(problems(wrong)).toContain("services.whoami.greeting: Expected string, got 1");
-		expect(problems(wrong)).toContain(
-			"services.tools.extra: Unexpected key; a pack takes on and packages",
-		);
-		expect(problems(misplaced)).toContain(
-			"services.whoami.on: whoami can't run on fawkes, which is a Mac",
-		);
-		expect(problems(misplaced)).toContain(
-			"services.tools.on: kronos is a hypervisor, which runs nothing but VMs and services",
-		);
-		expect(problems(misplaced)).toContain("services.backup.on: backup runs on exactly one machine");
-	});
-
-	it("rejects entries for machines that don't exist, tailscale, and plugins named like aett's", () => {
 		const unknown = fleet({
 			user: "mkn",
-			machines: { web: server() },
-			// @ts-expect-error on names only declared machines
-			services: { tools: { on: "nope" } },
+			machines,
+			services: {
+				// @ts-expect-error there is no such service
+				nope: "web",
+			},
+		});
+
+		const backup = fleet({
+			user: "mkn",
+			machines,
+			services: {
+				// @ts-expect-error backup names its server
+				backup: "web",
+			},
 		});
 
 		const tailscale = fleet({
-			machines: { web: server() },
 			user: "mkn",
-			// @ts-expect-error tailscale is on every machine
-			services: { tailscale: "web" },
+			machines,
+			services: {
+				// @ts-expect-error tailscale is on every machine
+				tailscale: "web",
+			},
 		});
 
-		const clash = fleet({
+		const target = fleet({
 			user: "mkn",
-			machines: { web: server() },
-			plugins: [plugin({ name: "backup" })],
+			machines,
+			services: {
+				// @ts-expect-error a target is a machine, a tag or default
+				t3code: "nowhere",
+			},
 		});
 
-		const users = plugin({ name: "users", secrets: { mkn: { generate: "password" } } });
-
-		const collision = fleet({
-			user: "mkn",
-			machines: { web: server() },
-			plugins: [users],
-			services: { users: "web" },
-		});
-
-		const escaping = fleet({
-			user: "mkn",
-			machines: { web: server() },
-			plugins: [
-				plugin({ name: "hello", secrets: { "../../users/mkn": { generate: "password" } } }),
-			],
-		});
-
-		expect(problems(collision)).toBe(
-			"services: users/mkn is the name of two secrets; rename the plugin or its secret",
+		expect(problems(greeting, [whoami])).toBe("services.whoami.greeting: Expected string, got 1");
+		expect(problems(settings)).toBe(
+			"services.t3code.port: Unexpected key; t3code takes no settings",
 		);
-		expect(problems(escaping)).toContain("plugins.0.secrets");
-		expect(problems(unknown)).toBe('services.tools.on: There is no machine named "nope"');
+		expect(problems(unknown)).toBe(
+			"services.nope: aett ships no service named nope, and the fleet has no services/nope/",
+		);
+		expect(problems(fleet({ user: "mkn", machines, services: { t3code: "fawkes" } }))).toBe(
+			"services.t3code: t3code can't run on fawkes, which is a Mac",
+		);
+		expect(problems(backup)).toBe(
+			'services.backup: Expected { server: "<machine>" }, the machine it runs on',
+		);
 		expect(problems(tailscale)).toBe(
 			"services.tailscale: tailscale is on every machine already and takes no entry",
 		);
-		expect(problems(clash)).toBe("plugins.0.name: aett already knows a plugin named backup");
+		expect(problems(target)).toBe('services.t3code: There is no machine or tag named "nowhere"');
 	});
 
-	it("rejects a VM whose host can't run VMs", () => {
+	it("checks packages: a target takes a list, a group its targets, and a hypervisor none", () => {
 		const declared = fleet({
 			user: "mkn",
-			machines: {
-				mac: computer({ os: "macos" }),
-				// @ts-expect-error a VM runs on a hypervisor, a NAS or a bare-metal server
-				vm: server({ host: "mac" }),
+			machines: { kronos: hypervisor(), web: server() },
+			packages: {
+				// @ts-expect-error a group takes targets and their packages
+				wbe: ["git"],
+				kronos: ["git"],
+				// @ts-expect-error a group's keys are targets
+				tools: { nowhere: ["git"] },
 			},
 		});
 
-		expect(problems(declared)).toBe(
-			"machines.vm.host: mac is a computer; a VM runs on a hypervisor, a NAS or a bare-metal server",
+		expect(problems(declared)).toContain(
+			'packages.wbe: There is no machine or tag named "wbe". A group of that name takes targets and their packages, such as wbe: { zeus: ["git"] }',
 		);
-		expect(
-			loaded(fleet({ user: "mkn", machines: { vault: nas(), vm: server({ host: "vault" }) } }))
-				.machines[1]?.vm,
-		).toEqual(Option.some({ host: "vault", cpu: 2, memory: 2048, disk: 20480 }));
+		expect(problems(declared)).toContain(
+			"packages.kronos: kronos is a hypervisor, which runs only VMs and services",
+		);
+		expect(problems(declared)).toContain(
+			'packages.tools.nowhere: There is no machine or tag named "nowhere"',
+		);
 	});
 
-	it("rejects settings that don't fit the machine", () => {
-		const bareMetal = fleet({
+	it("rejects own services named like aett's, secret names that clash or escape, and tags named like machines", () => {
+		const users = plugin({ name: "users", secrets: { mkn: { generate: "password" } } });
+
+		expect(
+			problems(fleet({ user: "mkn", machines: { web: server() } }), [plugin({ name: "backup" })]),
+		).toBe("services/backup/: aett already ships a service named backup");
+		expect(
+			problems(
+				// @ts-expect-error users comes from services/users/
+				fleet({ user: "mkn", machines: { web: server() }, services: { users: "web" } }),
+				[users],
+			),
+		).toBe("services: users/mkn is the name of two secrets; rename the service or its secret");
+		expect(
+			Result.isFailure(
+				Schema.decodeUnknownResult(PluginMetadata)(
+					{ name: "hello", secrets: { "../../users/mkn": { generate: "password" } } },
+					{ onExcessProperty: "error" },
+				),
+			),
+		).toBe(true);
+		expect(
+			problems(fleet({ user: "mkn", machines: { web: server(), api: server({ tags: ["web"] }) } })),
+		).toBe("machines.api.tags: web is a machine's name");
+	});
+
+	it("rejects a VM whose host can't run VMs, and settings that don't fit the machine", () => {
+		const host = fleet({
+			user: "mkn",
+			machines: {
+				fawkes: mac(),
+				// @ts-expect-error a VM runs on a hypervisor, a NAS or a bare-metal server
+				box: vm({ host: "fawkes" }),
+			},
+		});
+
+		const settings = fleet({
 			user: "mkn",
 			machines: {
 				// @ts-expect-error memory is for VMs
-				box: server({ system: { memory: "8 GiB" } }),
+				box: server({ memory: 8 }),
 				// @ts-expect-error a NAS is always encrypted
-				vault: nas({ system: { encrypted: true } }),
-			},
-		});
-
-		const mac = fleet({
-			user: "mkn",
-			machines: {
+				vault: nas({ encrypted: true }),
 				// @ts-expect-error a Mac has no disk settings
-				mac: computer({ os: "macos", system: { encrypted: true } }),
-			},
-		});
-
-		const inline = fleet({
-			user: "mkn",
-			machines: {
-				// @ts-expect-error a machine written out by hand gets the same checks
-				box: { ...server(), system: { memory: "8 GiB" } },
-				// @ts-expect-error machines are hardware; packages go in services
-				web: { ...server(), packages: ["git"] },
+				fawkes: mac({ encrypted: true }),
 			},
 		});
 
 		const small = fleet({
-			machines: { host: hypervisor(), vm: server({ host: "host", system: { memory: "256 MiB" } }) },
 			user: "mkn",
+			machines: { kronos: hypervisor(), box: vm({ host: "kronos", memory: 0.25 }) },
 		});
 
-		expect(problems(bareMetal)).toContain("machines.box.system.memory: Unexpected key");
-		expect(problems(bareMetal)).toContain("machines.vault.system.encrypted: Unexpected key");
-		expect(problems(mac)).toContain(
-			"machines.mac.system.encrypted: Unexpected key with value true",
+		expect(problems(host)).toBe(
+			"machines.box.host: fawkes is a computer; a VM runs on a hypervisor, a NAS or a bare-metal server",
 		);
-		expect(problems(small)).toContain("machines.vm.system.memory: Expected at least 512 MiB");
-		expect(problems(inline)).toContain("machines.box.system.memory: Unexpected key");
-		expect(problems(inline)).toContain("machines.web.packages: Unexpected key");
+		expect(problems(settings)).toContain("machines.box.memory: Unexpected key");
+		expect(problems(settings)).toContain("machines.vault.encrypted: Unexpected key");
+		expect(problems(settings)).toContain(
+			"machines.fawkes.encrypted: Unexpected key with value true",
+		);
+		expect(problems(small)).toContain(
+			"machines.box.memory: Expected a value greater than or equal to 0.5",
+		);
+		expect(
+			loaded(
+				fleet({ user: "mkn", machines: { vault: nas(), box: vm({ host: "vault", disk: 200 }) } }),
+			).machines[1]?.vm,
+		).toEqual(Option.some({ host: "vault", cpu: 2, memory: 2048, disk: 204800 }));
 	});
 
-	it("requires the fleet's user once a machine but a hypervisor exists, and says stacks are gone", () => {
+	it("requires the fleet's user, says stacks and plugins are gone, and rejects keys and names it doesn't know", () => {
 		expect(problems(fleet({ machines: { web: server() } }))).toBe(
 			'fleet(): user is required, because every machine but a hypervisor has the fleet\'s user. Name it, such as user: "you".',
 		);
 		expect(Result.isSuccess(decodeFleet(fleet({ machines: { kronos: hypervisor() } })))).toBe(true);
-		expect(problems({ machines: {}, stacks: {} })).toContain("fleet(): stacks are gone.");
-	});
-
-	it("rejects a machine name that isn't a hostname and keys fleet() doesn't know", () => {
+		expect(problems({ machines: {}, plugins: [] })).toContain(
+			"fleet(): stacks and plugins are gone.",
+		);
 		expect(problems(fleet({ user: "mkn", machines: { Box: server() } }))).toContain(
 			"machines.Box: Expected a lowercase hostname label",
 		);
-
-		// @ts-expect-error fleet() takes user, machines, services and plugins
+		// @ts-expect-error fleet() takes user, machines, services and packages
 		expect(problems(fleet({ machines: {}, extra: true }))).toContain(
 			"fleet().extra: Unexpected key",
 		);
+		expect(
+			Result.isSuccess(decodeFleet(fleet({ user: "mkn", machines: { desk: computer() } }))),
+		).toBe(true);
 	});
 });

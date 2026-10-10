@@ -4,7 +4,7 @@ import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
 import type { Pins } from "../src/domain/pins.ts";
 import type { Operator, State } from "../src/domain/state.ts";
 import { fleetJson } from "../src/engine/nix/fleet-json.ts";
-import { computer, fleet, hypervisor, nas, server } from "../src/index.ts";
+import { computer, fleet, hypervisor, mac, nas, server, vm } from "../src/index.ts";
 
 // The fleet aett works with for a declaration.
 const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
@@ -42,8 +42,8 @@ describe("fleetJson", () => {
 					fresh: server(),
 					discovered: server(),
 					vault: nas(),
-					fawkes: computer({ os: "macos" }),
-					desk: computer({ system: { desktop: "gnome" } }),
+					fawkes: mac(),
+					desk: computer({ desktop: "gnome" }),
 				},
 			}),
 		);
@@ -72,10 +72,11 @@ describe("fleetJson", () => {
 			fleet({
 				user: "mkn",
 				machines: {
-					box: hypervisor({ system: { encrypted: true } }),
-					web: server({ system: { channel: "unstable" } }),
+					box: hypervisor({ encrypted: true }),
+					web: server({ channel: "unstable" }),
 				},
-				services: { backup: "web", tools: { packages: ["git", "claude-code", "htop"] } },
+				services: { backup: { server: "web" } },
+				packages: { default: ["git", "claude-code", "htop"] },
 			}),
 		);
 
@@ -152,8 +153,8 @@ describe("fleetJson", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
-				machines: { vault: nas(), fawkes: computer({ os: "macos" }) },
-				services: { mac: { on: "fawkes", packages: ["ghostty", "git", "brew.mas"] } },
+				machines: { vault: nas(), fawkes: mac() },
+				packages: { fawkes: ["ghostty", "git", "brew.mas"] },
 			}),
 		);
 
@@ -184,8 +185,8 @@ describe("fleetJson", () => {
 				machines: {
 					box: hypervisor(),
 					fresh: hypervisor(),
-					vm: server({ host: "box", system: { cpu: 4, memory: "8 GiB" } }),
-					waiting: server({ host: "fresh" }),
+					vm: vm({ host: "box", cpu: 4, memory: 8 }),
+					waiting: vm({ host: "fresh" }),
 				},
 			}),
 		);

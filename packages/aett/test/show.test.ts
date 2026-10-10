@@ -4,31 +4,28 @@ import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
 import type { Pins } from "../src/domain/pins.ts";
 import { describeFleet } from "../src/domain/show.ts";
 import type { State } from "../src/domain/state.ts";
-import { computer, fleet, hypervisor, release, server } from "../src/index.ts";
+import { fleet, hypervisor, mac, release, vm } from "../src/index.ts";
 
 // The fleet aett works with for a declaration.
 const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
 
 describe("describeFleet", () => {
-	it("prints each machine with its services, endpoints, packs, packages by source and dotfiles", () => {
+	it("prints each machine with its tags, services, endpoints, packages by source and dotfiles", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
 				machines: {
-					kronos: hypervisor({ system: { encrypted: true } }),
-					hades: server({ host: "kronos" }),
-					fawkes: computer({ os: "macos" }),
+					kronos: hypervisor({ encrypted: true }),
+					hades: vm({ host: "kronos" }),
+					fawkes: mac({ tags: ["dev"] }),
 				},
-				services: {
-					backup: "hades",
-					dev: {
-						on: "fawkes",
-						packages: [
-							"git",
-							"cask.ghostty",
-							release({ github: "o/vp", asset: "vp-{target}", bin: "vp" }),
-						],
-					},
+				services: { backup: { server: "hades" } },
+				packages: {
+					fawkes: [
+						"git",
+						"cask.ghostty",
+						release({ github: "o/vp", asset: "vp-{target}", bin: "vp" }),
+					],
 				},
 			}),
 		);
@@ -59,12 +56,12 @@ describe("describeFleet", () => {
 				"        services  tailscale, backup",
 				"        endpoints backup repository hades.example.ts.net:51515",
 				"        packages  kopia (nixpkgs) · tailscale (not pinned yet)",
-				"        dotfiles  dotfiles/default/, dotfiles/backup/",
+				"        dotfiles  dotfiles/default/, dotfiles/backup/, dotfiles/hades/",
 				"fawkes  computer, a Mac · not on the tailnet yet",
+				"        tags      dev",
 				"        services  tailscale, backup client of hades",
-				"        packs     dev",
 				"        packages  ghostty (cask) · git, kopia (nixpkgs) · tailscale (not pinned yet) · vp v1.0.0 (o/vp)",
-				"        dotfiles  dotfiles/default/, dotfiles/dev/",
+				"        dotfiles  dotfiles/default/, dotfiles/dev/, dotfiles/fawkes/",
 			].join("\n"),
 		);
 	});

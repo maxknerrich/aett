@@ -1,9 +1,11 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { Console, Effect, FileSystem, Option, Path, type PlatformError, Schema } from "effect";
-import { Declaration, decodeFleet, type Fleet } from "../domain/fleet.ts";
+import { Declaration, decodeFleet, type Fleet, PluginMetadata } from "../domain/fleet.ts";
+import type { Plugin } from "../domain/plugin.ts";
 import { MachineRecord, Operator, type State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
+import { writeServices } from "./registries.ts";
 
 /** A problem with the fleet repository: fleet.ts or the state next to it. */
 export class FleetError extends Schema.TaggedError<FleetError>()("FleetError", {
@@ -85,8 +87,69 @@ export const loadFleet = Effect.fn("loadFleet")(function* (root: string) {
 		),
 	);
 
-	return yield* Effect.fromResult(decodeFleet(declaration)).pipe(
+	const own = yield* ownServices(root);
+
+	yield* writeServices(
+		root,
+		own.map(({ plugin, defined }) => ({ name: plugin.name, defined })),
+	);
+
+	return yield* Effect.fromResult(
+		decodeFleet(
+			declaration,
+			own.map(({ plugin }) => plugin),
+		),
+	).pipe(
 		Effect.mapError((problems) => new FleetError({ message: `fleet.ts is invalid:\n${problems}` })),
+	);
+});
+
+/**
+ * The fleet's own services: each folder in services/, named after it, with
+ * its modules and dotfiles there and the definition its service.ts
+ * default-exports, if it has one.
+ */
+const ownServices = Effect.fn("ownServices")(function* (root: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const directory = path.join(root, "services");
+
+	if (!(yield* fs.exists(directory))) return [];
+
+	const folders = yield* Effect.filter(yield* fs.readDirectory(directory), (name) =>
+		fs.stat(path.join(directory, name)).pipe(Effect.map(({ type }) => type === "Directory")),
+	);
+
+	return yield* Effect.forEach(folders.toSorted(), (name) =>
+		Effect.gen(function* () {
+			const folder = path.join(directory, name);
+			const file = path.join(folder, "service.ts");
+			const defined = yield* fs.exists(file);
+
+			const definition = defined
+				? (yield* Effect.tryPromise({
+						try: () => import(pathToFileURL(file).href),
+						catch: (cause) =>
+							new FleetError({
+								message: `Could not load services/${name}/service.ts: ${cause instanceof Error ? cause.message : String(cause)}`,
+							}),
+					})).default
+				: {};
+
+			// Strict, so a secret whose name would leave its directory is an error, not dropped.
+			const plugin: Plugin = yield* Schema.decodeUnknownEffect(PluginMetadata)(
+				{ ...definition, name, directory: folder },
+				{ errors: "all", onExcessProperty: "error" },
+			).pipe(
+				Effect.catchTag("SchemaError", (error) =>
+					Effect.fail(
+						new FleetError({ message: `services/${name}/ is invalid: ${error.message}` }),
+					),
+				),
+			);
+
+			return { plugin, defined };
+		}),
 	);
 });
 

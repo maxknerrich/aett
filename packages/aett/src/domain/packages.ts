@@ -29,6 +29,14 @@ export const Release = Schema.Struct({
 
 export interface Release extends Schema.Schema.Type<typeof Release> {}
 
+/**
+ * Tools aett knows by name that no Nix source has, from their GitHub
+ * releases. On a Mac the name goes to Homebrew like any other.
+ */
+export const knownReleases: ReadonlyMap<string, Release> = new Map([
+	["vite-plus", { github: "voidzero-dev/vite-plus", asset: "vp-{target}.tar.gz", bin: "vp" }],
+]);
+
 /** A package as an entry lists it: a name or a release(). */
 export const Package = Schema.Union([PackagePath, Release]);
 

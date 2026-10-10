@@ -2,7 +2,7 @@ import { Option, Result } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
 import { machineSecrets } from "../src/domain/secrets.ts";
-import { computer, fleet, hypervisor, server } from "../src/index.ts";
+import { fleet, hypervisor, mac, vm } from "../src/index.ts";
 
 // The fleet aett works with for a declaration.
 const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
@@ -14,11 +14,11 @@ describe("machineSecrets", () => {
 				user: "mkn",
 				machines: {
 					kronos: hypervisor(),
-					hades: server({ host: "kronos" }),
-					zeus: server({ host: "kronos" }),
-					fawkes: computer({ os: "macos" }),
+					hades: vm({ host: "kronos" }),
+					zeus: vm({ host: "kronos" }),
+					fawkes: mac(),
 				},
-				services: { backup: "hades" },
+				services: { backup: { server: "hades" } },
 			}),
 		);
 

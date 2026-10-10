@@ -51,7 +51,7 @@ describe("fleetSource", () => {
 		);
 	});
 
-	it("declares each machine by its role and what Homebrew has on the Mac in a pack named after it", () => {
+	it("declares each machine by its function and what Homebrew has on the Mac as its packages", () => {
 		expect(
 			fleetSource(
 				"mkn",
@@ -69,35 +69,23 @@ describe("fleetSource", () => {
 			),
 		).toBe(
 			[
-				'import { computer, fleet, hypervisor, nas, server } from "aett"',
+				'import { fleet, hypervisor, mac, nas, server } from "aett"',
 				"",
 				"export default fleet({",
 				'\tuser: "mkn",',
 				"\tmachines: {",
-				"\t\tkronos: hypervisor({ system: { encrypted: true } }),",
+				"\t\tkronos: hypervisor({ encrypted: true }),",
 				"\t\tvault: nas(),",
 				'\t\t"web-1": server(),',
-				'\t\tfawkes: computer({ os: "macos" }),',
+				"\t\tfawkes: mac(),",
 				"\t},",
-				"\tservices: {",
-				'\t\tfawkes: { on: "fawkes", packages: ["ghostty", "raycast", "brew.mas"] },',
+				"\tpackages: {",
+				'\t\tfawkes: ["ghostty", "raycast", "brew.mas"],',
 				"\t},",
 				"})",
 				"",
 			].join("\n"),
 		);
-	});
-});
-
-describe("fleetSource adopting a Mac named like one of aett's entries", () => {
-	it("puts its apps in a pack named apps instead", () => {
-		expect(
-			fleetSource(
-				"mkn",
-				[newMachine("backup", "computer", { mac: true })],
-				Option.some({ mac: "backup", apps: ["ghostty"], brews: [] }),
-			),
-		).toContain('\t\tapps: { on: "backup", packages: ["ghostty"] },');
 	});
 });
 

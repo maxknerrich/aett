@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
 import { allocate, guestInterface, sshConfig } from "../src/domain/network.ts";
 import type { MachineState, State } from "../src/domain/state.ts";
-import { fleet, hypervisor, server } from "../src/index.ts";
+import { fleet, hypervisor, server, vm } from "../src/index.ts";
 
 // The fleet aett works with for a declaration.
 const loaded = (declaration: Declaration) => Result.getOrThrow(decodeFleet(declaration));
@@ -24,9 +24,9 @@ const declared = loaded(
 		machines: {
 			kronos: hypervisor(),
 			nas: server(),
-			zeus: server({ host: "kronos" }),
-			hades: server({ host: "kronos" }),
-			web: server({ host: "nas" }),
+			zeus: vm({ host: "kronos" }),
+			hades: vm({ host: "kronos" }),
+			web: vm({ host: "nas" }),
 		},
 	}),
 );

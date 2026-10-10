@@ -43,11 +43,12 @@ const base = (fleet: Fleet, machine: Machine, state: State, extras: Extras, pins
 		({ name, readers }) => readers.includes(machine.name) && extras.secrets.includes(name),
 	);
 
-	const services = machine.services.flatMap(({ name, instance }) =>
+	const services = machine.services.flatMap(({ name, instance, options }) =>
 		Option.toArray(
 			Option.map(Option.fromUndefinedOr(fleet.services.get(name)), (service) => ({
 				name,
 				instance,
+				options,
 				service,
 			})),
 		),
@@ -88,11 +89,11 @@ const base = (fleet: Fleet, machine: Machine, state: State, extras: Extras, pins
 		),
 		secrets: secrets.map(({ name, file }) => ({ name, file })),
 		services: Object.fromEntries(
-			services.map(({ name, instance, service }) => [
+			services.map(({ name, instance, options, service }) => [
 				name,
 				{
 					instance,
-					options: service.options,
+					options,
 					peers: [...service.instances, ...service.clients].map((peer) => ({
 						name: peer,
 						instance: service.instances.includes(peer),
