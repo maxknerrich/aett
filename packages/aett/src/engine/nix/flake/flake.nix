@@ -211,7 +211,10 @@
             pkgs.findutils
           ];
           text = ''
-            work=$(mktemp -d)
+            # On the disk that holds /nix: the initrd is over a gigabyte, more than a root in memory may
+            # have room for. kexec keeps its own copy once loaded.
+            work=$(mktemp -d -p /nix/var)
+            trap 'rm -rf "$work"' EXIT
             install -d -m 0700 "$work/aett/root/.ssh"
             install -m 0600 "$1" "$work/aett/root/.ssh/authorized_keys"
             # NetworkManager's profile directories, a runtime profile shadowing a persistent one and that
