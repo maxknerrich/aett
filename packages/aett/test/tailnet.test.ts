@@ -1,0 +1,124 @@
+import { Option, Result } from "effect";
+import { describe, expect, it } from "vite-plus/test";
+import { type Declaration, decodeFleet } from "../src/domain/fleet.ts";
+import { mergePolicy, policyNeeds } from "../src/domain/tailnet.ts";
+import { fleet, hypervisor, mac, nas, vm } from "../src/index.ts";
+import { plugin } from "../src/domain/plugin.ts";
+
+// The fleet aett works with for a declaration.
+const loaded = (declaration: Declaration, own: Parameters<typeof decodeFleet>[1] = []) =>
+	Result.getOrThrow(decodeFleet(declaration, own));
+
+const needs = {
+	tags: ["tag:server", "tag:unlock"],
+	grants: [{ src: ["tag:server"], dst: ["tag:server"], ip: ["tcp:51515"] }],
+};
+
+describe("policyNeeds", () => {
+	it("tags NixOS machines by role, lets the owner's devices SSH to them, grants plugins' endpoints by tag and Macs as members, and web endpoints to the whole tailnet", () => {
+		const declared = loaded(
+			fleet({
+				user: "mkn",
+				machines: {
+					kronos: hypervisor(),
+					hades: vm({ host: "kronos" }),
+					vault: nas(),
+					fawkes: mac(),
+				},
+				services: {
+					backup: { server: "hades" },
+					// @ts-expect-error wiki comes from services/wiki/, which the type knows once aett generates it
+					wiki: "vault",
+				},
+			}),
+			[plugin({ name: "wiki", endpoints: { page: { port: 8080, web: true } } })],
+		);
+
+		expect(policyNeeds(declared)).toEqual({
+			tags: ["tag:hypervisor", "tag:nas", "tag:server"],
+			grants: [
+				{
+					src: ["autogroup:member"],
+					dst: ["tag:hypervisor", "tag:nas", "tag:server"],
+					ip: ["tcp:22"],
+				},
+				{
+					src: ["tag:nas", "tag:server", "autogroup:member"],
+					dst: ["tag:server"],
+					ip: ["tcp:51515"],
+				},
+				{ src: ["*"], dst: ["tag:nas"], ip: ["tcp:8080"] },
+			],
+		});
+	});
+});
+
+describe("mergePolicy", () => {
+	it("adds missing tags and grants on lines of their own, leaving the rest as it was", () => {
+		const policy = `// The tailnet's policy.
+{
+	"tagOwners": {
+		"tag:server": ["autogroup:admin"], // servers
+	},
+	"grants": [
+		{"src": ["autogroup:member"], "dst": ["*"], "ip": ["*"]},
+	],
+}
+`;
+
+		expect(mergePolicy(policy, needs)).toEqual(
+			Result.succeed(
+				Option.some(`// The tailnet's policy.
+{
+	"tagOwners": {
+		"tag:server": ["autogroup:admin"], // servers
+		"tag:unlock": ["autogroup:admin"],
+	},
+	"grants": [
+		{"src": ["autogroup:member"], "dst": ["*"], "ip": ["*"]},
+		{"src": ["tag:server"], "dst": ["tag:server"], "ip": ["tcp:51515"]},
+	],
+}
+`),
+			),
+		);
+	});
+
+	it("starts tagOwners and grants a policy lacks, and changes nothing once a policy covers the needs", () => {
+		const merged = mergePolicy(`{\n  "acls": []\n}\n`, needs);
+
+		expect(merged).toEqual(
+			Result.succeed(
+				Option.some(`{
+  "acls": [],
+  "tagOwners": {
+    "tag:server": ["autogroup:admin"],
+    "tag:unlock": ["autogroup:admin"]
+  },
+  "grants": [
+    {"src": ["tag:server"], "dst": ["tag:server"], "ip": ["tcp:51515"]}
+  ]
+}
+`),
+			),
+		);
+
+		expect(
+			mergePolicy(
+				`{"tagOwners": {"tag:server": [], "tag:unlock": []}, "grants": [{"src": ["*"], "dst": ["*"], "ip": ["*"]}]}`,
+				needs,
+			),
+		).toEqual(Result.succeed(Option.none()));
+
+		// A grant limited to some devices' posture covers nothing.
+		expect(
+			Result.map(
+				mergePolicy(
+					`{"tagOwners": {"tag:server": [], "tag:unlock": []}, "grants": [{"src": ["*"], "dst": ["*"], "ip": ["*"], "srcPosture": ["posture:latest"]}]}`,
+					needs,
+				),
+				Option.isSome,
+			),
+		).toEqual(Result.succeed(true));
+	});
+});

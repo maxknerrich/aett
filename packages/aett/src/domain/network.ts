@@ -45,8 +45,8 @@ export const allocate = (
 	const records = [...state.machines];
 
 	const vms = fleet.machines
-		.flatMap(({ name, vm, home }) =>
-			Option.toArray(Option.map(vm, ({ host }) => ({ name, host, home: home.length > 0 }))),
+		.flatMap(({ name, vm, user }) =>
+			Option.toArray(Option.map(vm, ({ host }) => ({ name, host, home: user }))),
 		)
 		.toSorted((a, b) => a.name.localeCompare(b.name));
 
@@ -165,29 +165,38 @@ export const bridgeAddress = (subnet: string | undefined) =>
 	Option.map(subnetIndex(subnet), (index) => ({ address: `10.100.${index}.1`, prefixLength: 24 }));
 
 /**
- * state/ssh_config: a Host block per guest with a home, which reaches its SSH
- * through the port its host forwards on the LAN and checks its key against
- * aett's known hosts at `knownHosts`. The forwards are IPv4 only, so it keeps
- * SSH off the host's IPv6 addresses. The operator includes it from
- * ~/.ssh/config. Empty when no guest has a home.
+ * state/ssh_config: a Host block per machine with the fleet's user, which
+ * logs in as the user at the machine's tailnet address, which works without
+ * MagicDNS, or for a guest not on the tailnet yet through the port its host
+ * forwards on the LAN, and checks the
+ * machine's key against aett's known hosts at `knownHosts`. Macs are left
+ * out. The operator includes it from ~/.ssh/config. Empty when no machine
+ * has the user.
  */
 export const sshConfig = (fleet: Fleet, state: State, knownHosts: string) => {
-	const blocks = fleet.machines.flatMap(({ name, vm, home }) => {
+	const blocks = fleet.machines.flatMap(({ name, vm, user, kind }) => {
 		const recorded = state.machines.get(name);
+
+		const route = Option.match(Option.fromUndefinedOr(recorded?.tailnet), {
+			onSome: (tailnet) => Option.some([`\tHostName ${tailnet}`]),
+			onNone: () =>
+				Option.zipWith(
+					Option.map(vm, ({ host }) => host),
+					Option.fromUndefinedOr(recorded?.forwards),
+					(host, { ssh }) => [`\tHostName ${host}.local`, `\tPort ${ssh}`, "\tAddressFamily inet"],
+				),
+		});
 
 		return Option.toArray(
 			Option.all({
-				user: fleet.user,
-				host: Option.map(vm, ({ host }) => host),
-				forwards: Option.filter(Option.fromUndefinedOr(recorded?.forwards), () => home.length > 0),
+				user: Option.filter(fleet.user, () => user && kind !== "macos"),
+				route,
 			}),
-		).map(({ user, host, forwards }) =>
+		).map(({ user: login, route: lines }) =>
 			[
 				`Host ${name}`,
-				`\tHostName ${host}.local`,
-				`\tPort ${forwards.ssh}`,
-				"\tAddressFamily inet",
-				`\tUser ${user}`,
+				...lines,
+				`\tUser ${login}`,
 				`\tHostKeyAlias ${name}`,
 				`\tUserKnownHostsFile ${sshConfigPath(knownHosts)}`,
 			].join("\n"),
@@ -196,5 +205,5 @@ export const sshConfig = (fleet: Fleet, state: State, knownHosts: string) => {
 
 	return blocks.length === 0
 		? ""
-		: `# Written by aett: the fleet's VMs through their hosts' forwards. Include it from ~/.ssh/config.\n\n${blocks.join("\n\n")}\n`;
+		: `# Written by aett: the fleet's machines, over the tailnet. Include it from ~/.ssh/config.\n\n${blocks.join("\n\n")}\n`;
 };

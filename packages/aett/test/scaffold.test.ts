@@ -45,28 +45,42 @@ describe("parseMachineFlag", () => {
 });
 
 describe("fleetSource", () => {
-	it("declares no machines with only fleet() imported", () => {
-		expect(fleetSource([])).toBe(
-			'import { fleet } from "aett"\n\nexport default fleet({\n\tmachines: {},\n})\n',
+	it("declares the user and no machines with only fleet() imported", () => {
+		expect(fleetSource("mkn", [], Option.none())).toBe(
+			'import { fleet } from "aett"\n\nexport default fleet({\n\tuser: "mkn",\n\tmachines: {},\n})\n',
 		);
 	});
 
-	it("declares each machine by its role, importing only the roles it uses", () => {
+	it("declares each machine by its function and what Homebrew has on the Mac as its packages", () => {
 		expect(
-			fleetSource([
-				newMachine("kronos", "hypervisor", { encrypted: true }),
-				newMachine("web-1", "server"),
-				newMachine("fawkes", "computer", { mac: true }),
-			]),
+			fleetSource(
+				"mkn",
+				[
+					newMachine("kronos", "hypervisor", { encrypted: true }),
+					newMachine("vault", "nas", { encrypted: true }),
+					newMachine("web-1", "server"),
+					newMachine("fawkes", "computer", { mac: true }),
+				],
+				Option.some({
+					mac: "fawkes",
+					apps: ["ghostty", "raycast", "tailscale-app"],
+					brews: ["mas"],
+				}),
+			),
 		).toBe(
 			[
-				'import { computer, fleet, hypervisor, server } from "aett"',
+				'import { fleet, hypervisor, mac, nas, server } from "aett"',
 				"",
 				"export default fleet({",
+				'\tuser: "mkn",',
 				"\tmachines: {",
-				"\t\tkronos: hypervisor({ system: { encrypted: true } }),",
+				"\t\tkronos: hypervisor({ encrypted: true }),",
+				"\t\tvault: nas(),",
 				'\t\t"web-1": server(),',
-				'\t\tfawkes: computer({ os: "macos" }),',
+				"\t\tfawkes: mac(),",
+				"\t},",
+				"\tpackages: {",
+				'\t\tfawkes: ["ghostty", "raycast", "brew.mas"],',
 				"\t},",
 				"})",
 				"",

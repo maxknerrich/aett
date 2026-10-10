@@ -1,8 +1,24 @@
 {
 	"name": "create-aett",
-	"version": "0.0.0",
-	"private": true,
+	"version": "0.1.0",
 	"description": "Start an aett fleet: npm create aett, pnpm create aett or vp create aett.",
+	"keywords": [
+		"fleet",
+		"homelab",
+		"nix",
+		"nix-darwin",
+		"nixos",
+		"tailscale"
+	],
+	"homepage": "https://github.com/maxknerrich/aett",
+	"bugs": "https://github.com/maxknerrich/aett/issues",
+	"license": "MIT",
+	"author": "Max Knerrich",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/maxknerrich/aett.git",
+		"directory": "packages/create-aett"
+	},
 	"bin": {
 		"create-aett": "./dist/main.js"
 	},
@@ -10,10 +26,16 @@
 		"dist"
 	],
 	"type": "module",
+	"publishConfig": {
+		"access": "public"
+	},
 	"scripts": {
 		"build": "vp pack"
 	},
 	"dependencies": {
-		"aett": "workspace:*"
+		"aett": "workspace:^"
+	},
+	"engines": {
+		"node": ">=24.11.0"
 	}
 }

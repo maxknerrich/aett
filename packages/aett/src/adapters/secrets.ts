@@ -22,6 +22,9 @@ const SopsRecipients = Schema.Struct({
 	}),
 });
 
+/** The login keychain's service name for a fleet's age key: aett-<fleet>, the fleet's directory name. */
+export const keychainService = (fleet: string) => `aett-${fleet}`;
+
 export class SecretsError extends Schema.TaggedError<SecretsError>()("SecretsError", {
 	message: Schema.String,
 }) {}
@@ -42,6 +45,11 @@ export class Secrets extends Context.Service<
 			recipients: ReadonlyArray<string>,
 			produce: Effect.Effect<string, E, R>,
 		) => Effect.Effect<string, E | SecretsError | EngineError | PlatformError.PlatformError, R>;
+		/** Decrypts the secret `file`, which must exist. */
+		readonly read: (
+			root: string,
+			file: string,
+		) => Effect.Effect<string, SecretsError | EngineError | PlatformError.PlatformError>;
 		/** Stores `plaintext` as the secret `file`, encrypted to `recipients`, replacing what it held. */
 		readonly write: (
 			root: string,
@@ -135,22 +143,53 @@ export class Secrets extends Context.Service<
 			const keyVariable = yield* Config.option(Config.Redacted("SOPS_AGE_KEY")).pipe(Effect.orDie);
 			const keyCommand = yield* Config.option(Config.String("SOPS_AGE_KEY_CMD")).pipe(Effect.orDie);
 
-			// The operator's private age key: SOPS_AGE_KEY, else what SOPS_AGE_KEY_CMD prints. The
-			// command runs only once a secret needs decrypting, and at most once per run.
-			const ageKey = yield* Effect.cached(
+			// The operator's private age key: SOPS_AGE_KEY, else what SOPS_AGE_KEY_CMD prints, else on a
+			// Mac the fleet's entry in the login keychain, which aett create made. The command and the
+			// keychain are asked only once a secret needs decrypting, and at most once per run.
+			const lookup = (root: string) =>
 				Option.match(keyVariable, {
 					onSome: Effect.succeedSome,
-					onNone: () => Effect.transposeOption(Option.map(keyCommand, keyFromCommand)),
-				}),
-			);
+					onNone: () =>
+						Option.match(keyCommand, {
+							onSome: (command) => Effect.map(keyFromCommand(command), Option.some),
+							onNone: () => keychainKey(root),
+						}),
+				});
+
+			const lookups = new Map<string, ReturnType<typeof lookup>>();
+
+			const ageKey = Effect.fnUntraced(function* (root: string) {
+				const known = lookups.get(root) ?? (yield* Effect.cached(lookup(root)));
+
+				lookups.set(root, known);
+
+				return yield* known;
+			});
+
+			// The fleet's age key from the login keychain, where aett create stores it as aett-<fleet>.
+			const keychainKey = Effect.fnUntraced(function* (root: string) {
+				if (process.platform !== "darwin") return Option.none<Redacted.Redacted>();
+
+				const result = yield* run(
+					ChildProcess.make(
+						"/usr/bin/security",
+						["find-generic-password", "-s", keychainService(path.basename(root)), "-w"],
+						{ stdin: "ignore" },
+					),
+				);
+
+				return result.exitCode === 0 && result.stdout.trim() !== ""
+					? Option.some(Redacted.make(result.stdout.trim()))
+					: Option.none();
+			});
 
 			const decrypt = Effect.fn("Secrets.decrypt")(function* (root: string, file: string) {
-				const key = yield* Effect.flatMap(ageKey, (found) =>
+				const key = yield* Effect.flatMap(ageKey(root), (found) =>
 					Effect.fromOption(
 						found,
 						() =>
 							new SecretsError({
-								message: `${file} is encrypted. Set SOPS_AGE_KEY to the private half of your age key in state/operator.json (AGE-SECRET-KEY-1…), or SOPS_AGE_KEY_CMD to a command that prints it.`,
+								message: `${file} is encrypted. Set SOPS_AGE_KEY to the private half of your age key in state/operator.json (AGE-SECRET-KEY-1…), or SOPS_AGE_KEY_CMD to a command that prints it${process.platform === "darwin" ? `, or keep it in the login keychain as ${keychainService(path.basename(root))}` : ""}.`,
 							}),
 					),
 				);
@@ -163,7 +202,7 @@ export class Secrets extends Context.Service<
 				// sops exits with 128 when none of its keys opens the file.
 				if (result.exitCode === 128) {
 					return yield* new SecretsError({
-						message: `The key from ${Option.isSome(keyVariable) ? "SOPS_AGE_KEY" : "SOPS_AGE_KEY_CMD"} cannot decrypt ${file}. It must be the private half of an age key in state/operator.json, and one that was there when ${file} was written.`,
+						message: `The key from ${Option.isSome(keyVariable) ? "SOPS_AGE_KEY" : Option.isSome(keyCommand) ? "SOPS_AGE_KEY_CMD" : "the keychain"} cannot decrypt ${file}. It must be the private half of an age key in state/operator.json, and one that was there when ${file} was written.`,
 					});
 				}
 
@@ -257,7 +296,7 @@ export class Secrets extends Context.Service<
 				return true;
 			});
 
-			return Secrets.of({ ensure, write, recipients, share });
+			return Secrets.of({ ensure, read: decrypt, write, recipients, share });
 		}),
 	);
 }

@@ -30,6 +30,47 @@ export const layoutPreview = (machine: Machine, disk: Disk) =>
 		"/     tmpfs, capped at 1 GB, empty on every boot",
 	].join("\n");
 
+/** The disks of a NAS's two pools. */
+export interface Pools {
+	readonly root: ReadonlyArray<Disk>;
+	readonly tank: ReadonlyArray<Disk>;
+}
+
+/**
+ * Why the disks chosen for a NAS's pools can't be them, if they can't: each
+ * pool mirrors at least two disks, and no disk is chosen twice, under any of
+ * its names.
+ */
+export const poolProblem = ({ root, tank }: Pools) => {
+	const disks = [...root, ...tank];
+
+	const repeated = disks.find(
+		({ names }, index) =>
+			disks.findIndex((other) => other.names.some((name) => names.includes(name))) < index,
+	);
+
+	if (repeated !== undefined) return Option.some(`${repeated.byId} is chosen twice.`);
+
+	if (root.length < 2) return Option.some("The root pool mirrors at least two disks.");
+
+	return tank.length < 2
+		? Option.some("The tank pool mirrors at least two disks.")
+		: Option.none<string>();
+};
+
+/** The read-only preview install shows for a NAS before it asks to erase the disks; it mirrors nas.nix. */
+export const nasPreview = (machine: Machine, { root, tank }: Pools) =>
+	[
+		`${machine.name} · every disk inside LUKS, one passphrase for all`,
+		"root  btrfs RAID1, an ESP on each disk",
+		...root.map((disk) => `      ${diskLabel(disk)}`),
+		"      ├─ @nix      /nix",
+		"      └─ @persist  /persist",
+		"tank  btrfs RAID1, /tank, where bulk state lands",
+		...tank.map((disk) => `      ${diskLabel(disk)}`),
+		"/     tmpfs, capped at 1 GB, empty on every boot",
+	].join("\n");
+
 /**
  * Whether a disk passphrase can be typed at the console and survives disko,
  * which passes it through `echo -n`: not empty, no control characters (the

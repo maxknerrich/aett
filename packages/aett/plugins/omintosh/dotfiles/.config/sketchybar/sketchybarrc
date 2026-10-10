@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# omintosh's bar. A file at dotfiles/omintosh/.config/sketchybar/sketchybarrc in the fleet replaces it.
+sketchybar --bar position=top height=38 topmost=window show_in_fullscreen=off \
+  color=0xff000000 \
+  padding_left=6 padding_right=8
+sketchybar --default icon.font='.AppleSystemUIFont:Medium:12.0' \
+  label.font='.AppleSystemUIFont:Medium:13.0' \
+  icon.color=0xffe6edf3 \
+  label.color=0xffe6edf3 \
+  background.drawing=off
+sketchybar --add item workspace.1 left \
+  --set workspace.1 \
+    icon=1 icon.drawing=on label.drawing=off \
+    icon.font='.AppleSystemUIFont:Medium:12.0' icon.align=center icon.width=26 align=center \
+    icon.color=0xff8b949e \
+    icon.padding_left=0 icon.padding_right=0 width=30 \
+    padding_left=0 padding_right=0 \
+    background.height=29 background.corner_radius=7 \
+    background.color=0x00000000 background.border_width=0 \
+    click_script='/opt/homebrew/bin/rift-cli execute workspace switch 0'
+
+sketchybar --add item workspace.2 left \
+  --set workspace.2 \
+    icon=2 icon.drawing=on label.drawing=off \
+    icon.font='.AppleSystemUIFont:Medium:12.0' icon.align=center icon.width=26 align=center \
+    icon.color=0xff8b949e \
+    icon.padding_left=0 icon.padding_right=0 width=30 \
+    padding_left=0 padding_right=0 \
+    background.height=29 background.corner_radius=7 \
+    background.color=0x00000000 background.border_width=0 \
+    click_script='/opt/homebrew/bin/rift-cli execute workspace switch 1'
+
+sketchybar --add item workspace.3 left \
+  --set workspace.3 \
+    icon=3 icon.drawing=on label.drawing=off \
+    icon.font='.AppleSystemUIFont:Medium:12.0' icon.align=center icon.width=26 align=center \
+    icon.color=0xff8b949e \
+    icon.padding_left=0 icon.padding_right=0 width=30 \
+    padding_left=0 padding_right=0 \
+    background.height=29 background.corner_radius=7 \
+    background.color=0x00000000 background.border_width=0 \
+    click_script='/opt/homebrew/bin/rift-cli execute workspace switch 2'
+
+sketchybar --add item workspace.4 left \
+  --set workspace.4 \
+    icon=4 icon.drawing=on label.drawing=off \
+    icon.font='.AppleSystemUIFont:Medium:12.0' icon.align=center icon.width=26 align=center \
+    icon.color=0xff8b949e \
+    icon.padding_left=0 icon.padding_right=0 width=30 \
+    padding_left=0 padding_right=0 \
+    background.height=29 background.corner_radius=7 \
+    background.color=0x00000000 background.border_width=0 \
+    click_script='/opt/homebrew/bin/rift-cli execute workspace switch 3'
+
+sketchybar --add item workspace.5 left \
+  --set workspace.5 \
+    icon=5 icon.drawing=on label.drawing=off \
+    icon.font='.AppleSystemUIFont:Medium:12.0' icon.align=center icon.width=26 align=center \
+    icon.color=0xff8b949e \
+    icon.padding_left=0 icon.padding_right=0 width=30 \
+    padding_left=0 padding_right=0 \
+    background.height=29 background.corner_radius=7 \
+    background.color=0x00000000 background.border_width=0 \
+    click_script='/opt/homebrew/bin/rift-cli execute workspace switch 4'
+
+# Rift updates workspace icons through the helper using background.image=app.<bundle-id>.
+sketchybar --set workspace.1 \
+  script="$CONFIG_DIR/plugins/workspace.sh" \
+  --subscribe workspace.1 system_woke display_change
+sketchybar --add item clock right \
+  --set clock icon.drawing=off label.font='.AppleSystemUIFont:Medium:13.0' \
+    label.width=130 label.align=right padding_left=0 padding_right=0 \
+    update_freq=10 script="$CONFIG_DIR/plugins/clock.sh" \
+  --subscribe clock system_woke
+sketchybar --update
+

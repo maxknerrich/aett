@@ -1,5 +1,10 @@
 # The aett installer image: a minimal NixOS live system that `aett machine install` drives over SSH.
-{ lib, pkgs, ... }:
+{
+  lib,
+  pkgs,
+  revision,
+  ...
+}:
 {
   networking.hostName = "aett-installer";
 
@@ -33,7 +38,7 @@
       (( ''${#code} == 8 ))
       echo "root:$code" | chpasswd
       mkdir -p /run/issue.d
-      printf '\n  aett installer code: \e[1m%s\e[0m\n\n' "$code" > /run/issue.d/aett.issue
+      printf '\n  aett installer ${revision}, code: \e[1m%s\e[0m\n\n' "$code" > /run/issue.d/aett.issue
     '';
   };
 
@@ -46,6 +51,26 @@
   services.openssh.settings = {
     PermitRootLogin = "yes";
     PasswordAuthentication = true;
+  };
+
+  # Marks the installer, so aett tells it apart from a system it replaced through kexec.
+  environment.etc."aett-installer".text = revision;
+
+  # Booted through kexec from a running machine, the installer finds an archive with /aett in its
+  # initrd: the operators' SSH keys, which log in instead of the code, and the networks the machine
+  # knew, its Wi-Fi and its fixed addresses. This carries them into the live system.
+  boot.initrd.systemd.services.aett-carry = {
+    description = "Carry the operators' keys and networks into the installer";
+    wantedBy = [ "initrd.target" ];
+    requires = [ "sysroot.mount" ];
+    after = [ "sysroot.mount" ];
+    before = [ "initrd.target" ];
+    unitConfig = {
+      DefaultDependencies = false;
+      ConditionPathExists = "/aett";
+    };
+    serviceConfig.Type = "oneshot";
+    script = "cp -a /aett/. /sysroot/";
   };
 
   services.avahi = {
@@ -63,6 +88,16 @@
     pkgs.nixos-facter
     (pkgs.writeShellScriptBin "aett-code" "cat /run/issue.d/aett.issue")
   ];
+
+  # A laptop that serves with its lid closed would otherwise fall asleep mid-install.
+  services.logind.settings.Login = {
+    HandleLidSwitch = "ignore";
+    HandleLidSwitchExternalPower = "ignore";
+    HandleLidSwitchDocked = "ignore";
+  };
+
+  # Wi-Fi cards need their firmware, which the kexec installer's netboot-minimal leaves out.
+  hardware.enableRedistributableFirmware = lib.mkForce true;
 
   # aett installs btrfs; leaving out ZFS keeps the image smaller.
   boot.supportedFilesystems.zfs = lib.mkForce false;

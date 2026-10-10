@@ -20,7 +20,7 @@
 
     # A directory added to the list later, such as /home, exists before a switch mounts it.
     system.activationScripts.aett-persist = lib.concatMapStrings (dir: ''
-      mkdir -p /persist${dir}
+      mkdir -p ${lib.escapeShellArg "/persist${dir}"}
     '') config.aett.persist;
   };
 }

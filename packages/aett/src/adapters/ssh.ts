@@ -16,6 +16,8 @@ import { Engine, type EngineError } from "../engine/engine.ts";
 
 export class SshError extends Schema.TaggedError<SshError>()("SshError", {
 	message: Schema.String,
+	// A remote command's exit code, or ssh's own 255 when the connection failed or dropped.
+	exitCode: Schema.optionalKey(Schema.Number),
 }) {}
 
 /** An SSH connection to root on one host. Every command reuses its one master connection. */
@@ -31,6 +33,8 @@ export interface Connection {
 	readonly run: (command: string, input?: string) => Effect.Effect<string, SshError>;
 	/** Runs a shell command like `run`, streaming its stderr to the terminal, for long commands such as builds. */
 	readonly stream: (command: string) => Effect.Effect<string, SshError>;
+	/** Set on the Mac aett runs on, where commands run as the operator, not as root over SSH. */
+	readonly local?: boolean;
 }
 
 /** Quotes an argument for a remote shell command. */
@@ -69,6 +73,19 @@ export class Ssh extends Context.Service<
 		readonly installer: (
 			host: Host,
 			code: Redacted.Redacted,
+		) => Effect.Effect<
+			Connection,
+			SshError | EngineError | PlatformError.PlatformError,
+			Scope.Scope
+		>;
+		/**
+		 * Logs in as root with the operators' keys from the SSH agent to a
+		 * machine aett is about to install, whatever runs on it: another Linux it
+		 * switches into the installer, or that installer. Its host key changes
+		 * with every boot, so it is not checked.
+		 */
+		readonly takeover: (
+			host: Host,
 		) => Effect.Effect<
 			Connection,
 			SshError | EngineError | PlatformError.PlatformError,
@@ -187,6 +204,7 @@ export class Ssh extends Context.Service<
 							return yield* new SshError({
 								message:
 									`${command} failed on ${formatHost(host)} with exit code ${result.exitCode}.\n${tail}`.trim(),
+								exitCode: result.exitCode,
 							});
 						}
 
@@ -228,6 +246,22 @@ export class Ssh extends Context.Service<
 				});
 			});
 
+			const takeover = Effect.fn("Ssh.takeover")(function* (host: Host) {
+				return yield* open(host, yield* temporaryDirectory, {
+					target: "the machine",
+					options: [
+						"BatchMode=yes",
+						"ConnectTimeout=10",
+						"PasswordAuthentication=no",
+						"KbdInteractiveAuthentication=no",
+						"IdentityFile=none",
+						"StrictHostKeyChecking=no",
+						"UserKnownHostsFile=/dev/null",
+					],
+					env: {},
+				});
+			});
+
 			const machine = Effect.fn("Ssh.machine")(function* (
 				name: string,
 				host: Host,
@@ -266,7 +300,7 @@ export class Ssh extends Context.Service<
 				});
 			});
 
-			return Ssh.of({ installer, machine, guest });
+			return Ssh.of({ installer, takeover, machine, guest });
 		}),
 	);
 }

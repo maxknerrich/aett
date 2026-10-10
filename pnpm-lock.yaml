@@ -173,6 +173,9 @@ catalogs:
     effect:
       specifier: 4.0.0-rc.118
       version: 4.0.0-rc.118
+    jsonc-parser:
+      specifier: 3.3.1
+      version: 3.3.1
     typescript:
       specifier: 6.0.3
       version: 6.0.3
@@ -203,6 +206,10 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.0-rc.118(effect@4.0.0-rc.118)
+      jsonc-parser:
+        specifier: 'catalog:'
+        version: 3.3.1
+    devDependencies:
       effect:
         specifier: 'catalog:'
         version: 4.0.0-rc.118
@@ -210,7 +217,7 @@ importers:
   packages/create-aett:
     dependencies:
       aett:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../aett
 
 packages:
@@ -916,6 +923,9 @@ packages:
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
+
+  jsonc-parser@3.3.1:
+    resolution: {integrity: sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ==}
 
   lightningcss-android-arm64@1.33.0:
     resolution: {integrity: sha512-gEpRTalKdosp4Bb8qWtc2iOgE5SeIHlpS1up9bFq2wAyYhl1UdTObYiHe98zEM9SQvSoqQZ1IQD0JNpg3Ml5pg==}
@@ -1691,6 +1701,8 @@ snapshots:
     optional: true
 
   js-tokens@4.0.0: {}
+
+  jsonc-parser@3.3.1: {}
 
   lightningcss-android-arm64@1.33.0:
     optional: true

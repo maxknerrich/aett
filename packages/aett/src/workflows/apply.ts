@@ -1,16 +1,21 @@
+import { userInfo } from "node:os";
 import { Console, Effect, Option, Schema } from "effect";
 import { Prompt } from "effect/cli";
 import type { Connection } from "../adapters/ssh.ts";
 import { applyTargets } from "../domain/apply.ts";
+import { describeChanges } from "../domain/changes.ts";
 import { type Fleet, guestsOf } from "../domain/fleet.ts";
 import { type Entry, resolveHome } from "../domain/home.ts";
-import type { Host } from "../domain/host.ts";
 import type { State } from "../domain/state.ts";
 import { type Build, Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
-import { applyHome, HomeError, planHome, readSets } from "./home.ts";
+import { applyHome, HomeError, planHome, readHomes } from "./home.ts";
 import { placeGuestKeys } from "./identity.ts";
+import { loadFleet, readState, updateRecord } from "./load.ts";
+import { applyMac, prepareMac, thisMac } from "./mac.ts";
 import { connectGuest, connectMachine, recordTailnet } from "./reach.ts";
+import { approver, syncPolicy } from "./tailscale.ts";
+import { tagOf } from "../domain/tailnet.ts";
 
 export class ApplyError extends Schema.TaggedError<ApplyError>()("ApplyError", {
 	message: Schema.String,
@@ -18,7 +23,6 @@ export class ApplyError extends Schema.TaggedError<ApplyError>()("ApplyError", {
 
 /** The answers `aett apply` takes as flags. */
 export interface ApplyOptions {
-	readonly host: Option.Option<Host>;
 	readonly yes: boolean;
 }
 
@@ -34,29 +38,74 @@ interface Run {
 
 /**
  * Brings machines to their declared systems: the named one, or else every
- * machine aett can apply to, hosts before their guests. Everything is
- * evaluated before any machine is contacted, and the first machine that
- * fails stops the run.
+ * machine aett can apply to, hosts before their guests, and the Mac aett
+ * runs on. The tailnet's policy gets what the fleet needs first, and a guest
+ * joins the tailnet once it runs. Everything is evaluated
+ * before any machine is contacted, and the first machine that fails stops
+ * the run. A machine that joined during the run was built without its
+ * address, as were its peers, so the run goes once more.
  */
 export const apply = Effect.fn("apply")(function* (
 	root: string,
 	name: Option.Option<string>,
 	options: ApplyOptions,
 ) {
-	const engine = yield* Engine;
+	const declared = yield* loadFleet(root);
+	const local = Option.map(yield* thisMac(declared, name, options.yes), ({ name: mac }) => mac);
 
-	if (Option.isSome(options.host) && Option.isNone(name)) {
+	// The Mac's home is synced as the one running aett, which must be the fleet's user.
+	const running = userInfo().username;
+
+	if (Option.isSome(local) && !Option.contains(declared.user, running)) {
 		return yield* new ApplyError({
-			message:
-				"--host names one machine's address. Pass the machine too: aett apply <name> --host …",
+			message: `aett applies ${local.value} as ${Option.getOrElse(declared.user, () => "the fleet's user")}, the fleet's user, but runs as ${running}. Run it as that user, without sudo.`,
 		});
 	}
 
-	const { build, fleet, state } = yield* emit(root);
-
-	const { targets, skipped } = yield* Effect.fromResult(applyTargets(fleet, state, name)).pipe(
-		Effect.mapError((message) => new ApplyError({ message })),
+	yield* Effect.forEach(Option.toArray(local), (mac) =>
+		Effect.flatMap(readState(root, declared), (recorded) => prepareMac(root, recorded, mac)),
 	);
+
+	const built = yield* emit(root);
+
+	const { targets, skipped } = yield* Effect.fromResult(
+		applyTargets(built.fleet, built.state, name, local),
+	).pipe(Effect.mapError((message) => new ApplyError({ message })));
+
+	yield* syncPolicy(root, built.fleet);
+
+	yield* Effect.forEach(skipped, ({ name: machine, reason }) =>
+		Console.log(`${machine} ${reason}, skipping it.`),
+	);
+
+	yield* applyBuild(root, built, targets, local, options.yes);
+
+	const after = yield* readState(root, built.fleet);
+
+	const joined = targets.filter(
+		(machine) =>
+			built.state.machines.get(machine)?.tailnet === undefined &&
+			after.machines.get(machine)?.tailnet !== undefined,
+	);
+
+	if (joined.length === 0) return yield* Effect.void;
+
+	yield* Console.log(
+		`${joined.join(", ")} joined the tailnet, so aett builds again with where${Option.isSome(name) ? ". Apply the fleet's other machines too, so its peers know" : ""}.`,
+	);
+
+	return yield* applyBuild(root, yield* emit(root), targets, local, options.yes);
+});
+
+// Evaluates the targets from one build, then applies them in order.
+const applyBuild = Effect.fn("applyBuild")(function* (
+	root: string,
+	{ build, fleet, state }: { readonly build: Build; readonly fleet: Fleet; readonly state: State },
+	targets: ReadonlyArray<string>,
+	local: Option.Option<string>,
+	yes: boolean,
+) {
+	const engine = yield* Engine;
 
 	const hosts = new Map(
 		fleet.machines.flatMap(({ name: machine, vm }) =>
@@ -64,27 +113,17 @@ export const apply = Effect.fn("apply")(function* (
 		),
 	);
 
-	if (Option.isSome(options.host) && targets.some((target) => hosts.has(target))) {
-		return yield* new ApplyError({
-			message: `--host names a bare-metal machine's address. aett reaches a VM through its host.`,
-		});
-	}
-
-	yield* Effect.forEach(skipped, ({ name: machine, reason }) =>
-		Console.log(`${machine} ${reason}, skipping it.`),
+	yield* Effect.forEach(
+		targets.filter((machine) => !Option.contains(local, machine)),
+		(machine) =>
+			Console.log(`Evaluating ${machine}…`).pipe(Effect.andThen(engine.evaluate(build, machine))),
 	);
 
-	yield* Effect.forEach(targets, (machine) =>
-		Console.log(`Evaluating ${machine}…`).pipe(Effect.andThen(engine.evaluate(build, machine))),
-	);
-
-	const sets = yield* readSets(root);
+	const sets = yield* readHomes(root, fleet);
 
 	const homes = new Map(
 		yield* Effect.forEach(
-			fleet.machines.filter(
-				({ name: machine, home }) => targets.includes(machine) && home.length > 0,
-			),
+			fleet.machines.filter(({ name: machine, user }) => targets.includes(machine) && user),
 			({ name: machine, home }) =>
 				Effect.fromResult(resolveHome(sets, home)).pipe(
 					Effect.mapError(
@@ -95,47 +134,82 @@ export const apply = Effect.fn("apply")(function* (
 		),
 	);
 
-	const run: Run = { root, build, fleet, state, homes, yes: options.yes };
+	const run: Run = { root, build, fleet, state, homes, yes };
 
 	return yield* Effect.forEach(
 		targets,
-		(machine) => {
-			const host = hosts.get(machine);
+		(machine) =>
+			Effect.gen(function* () {
+				const host = hosts.get(machine);
 
-			return host === undefined
-				? applyMachine(run, machine, options.host)
-				: applyGuest(run, machine, host);
-		},
+				if (Option.contains(local, machine)) return yield* applyLocalMac(run, machine);
+
+				return host === undefined
+					? yield* applyMachine(run, machine)
+					: yield* applyGuest(run, machine, host);
+			}),
 		{ discard: true },
 	);
+});
+
+// Applies the Mac aett runs on, making the build again once if the operator's answer about
+// removing undeclared apps changed it.
+const applyLocalMac = Effect.fn("applyLocalMac")(function* (run: Run, name: string) {
+	const machine = run.fleet.machines.find((declared) => declared.name === name);
+	const user = Option.getOrUndefined(run.fleet.user);
+
+	if (machine === undefined || user === undefined) return;
+
+	const home = Option.fromUndefinedOr(run.homes.get(name));
+
+	if (yield* applyMac(run.root, run.build, run.state, machine, user, home, run.yes)) {
+		const again = yield* emit(run.root);
+
+		yield* applyMac(run.root, again.build, again.state, machine, user, home, run.yes);
+	}
 });
 
 // Builds a bare-metal machine's system on it and, once the operator agrees, switches to it. A
 // host's guests get their host keys first, so the ones the switch starts find their identity, and
 // the guests fleet.ts dropped stop once the host runs its new system.
-const applyMachine = Effect.fn("applyMachine")(function* (
-	run: Run,
-	name: string,
-	host: Option.Option<Host>,
-) {
+const applyMachine = Effect.fn("applyMachine")(function* (run: Run, name: string) {
 	const engine = yield* Engine;
-	const connection = yield* connectMachine(run.root, run.state, name, host);
+	const connection = yield* connectMachine(run.root, run.state, name);
 
 	const guests = guestsOf(run.fleet, name).filter((guest) => run.build.machines.includes(guest));
 
 	yield* placeGuestKeys(run.root, connection, guests, run.state.operator.ageKeys);
 
+	// An encrypted machine's initrd answers on its LAN: at the address it has now, with the Wi-Fi
+	// networks it knows now, which the boot loader puts into the initrd.
+	const unlock = run.state.machines.get(name)?.unlock;
+	const wifi = unlock !== undefined && (yield* engine.unlockWifi(connection));
+
+	yield* Effect.forEach(Option.toArray(yield* engine.lanAddress(connection)), (address) =>
+		unlock === undefined || unlock.address === address
+			? Effect.void
+			: updateRecord(run.root, name, { unlock: { address } }),
+	);
+
 	const system = yield* engine.buildSystem(run.build, name, connection);
 	const current = yield* engine.currentSystem(connection);
 
 	if (system === current) {
+		if (wifi) {
+			yield* Console.log(`Putting ${name}'s Wi-Fi networks into its initrd…`);
+			yield* engine.refreshBoot(connection);
+		}
+
 		yield* Console.log(`${name} is up to date.`);
 		yield* settle(run, name, connection);
 
 		return yield* stopDroppedGuests(run, name, connection);
 	}
 
-	const changes = yield* engine.changes(connection, current, system);
+	const changes = describeChanges(
+		yield* engine.changes(connection, current, system),
+		run.fleet.machines.find((machine) => machine.name === name)?.packages ?? [],
+	);
 
 	yield* Console.log(
 		changes === ""
@@ -155,10 +229,29 @@ const applyMachine = Effect.fn("applyMachine")(function* (
 	return yield* stopDroppedGuests(run, name, connection);
 }, Effect.scoped);
 
-// What follows once a machine runs its declared system: its home synced and its tailnet address recorded.
+// What follows once a machine runs its declared system: it is on the tailnet, which a guest joins
+// here the first time, once the operator approves it, and its home is synced.
 const settle = Effect.fn("settle")(function* (run: Run, name: string, connection: Connection) {
+	const engine = yield* Engine;
+
+	yield* Effect.forEach(
+		run.fleet.machines.filter((machine) => machine.name === name),
+		({ role }) =>
+			Effect.gen(function* () {
+				const tag = tagOf(role);
+				const joined = yield* engine.join(connection, name, tag, yield* approver(name));
+
+				yield* recordTailnet(run.root, run.state, name, joined);
+
+				if (!joined.tags.includes(tag)) {
+					yield* Console.log(
+						`${name} is on the tailnet with ${joined.tags.join(", ") || "no tag"}, but fleet.ts makes it a ${role}. Give it ${tag} instead at https://login.tailscale.com/admin/machines, so the fleet's grants apply to it.`,
+					);
+				}
+			}),
+	);
+
 	yield* syncHome(run, name, connection);
-	yield* recordTailnet(run.root, run.state, name, connection);
 });
 
 // Syncs the machine's dotfile sets into the user's home, asking first when files change.
@@ -213,7 +306,7 @@ const stopDroppedGuests = Effect.fn("stopDroppedGuests")(function* (
 // what it boots with changed.
 const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, host: string) {
 	const engine = yield* Engine;
-	const connection = yield* connectMachine(run.root, run.state, host, Option.none());
+	const connection = yield* connectMachine(run.root, run.state, host);
 
 	yield* placeGuestKeys(run.root, connection, [name], run.state.operator.ageKeys);
 
@@ -224,9 +317,7 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 	}
 
 	// The guest's LAN forwards are part of its host's system, which applying the guest leaves alone.
-	const homed = run.fleet.machines.some(
-		(machine) => machine.name === name && machine.home.length > 0,
-	);
+	const homed = run.fleet.machines.some((machine) => machine.name === name && machine.user);
 
 	if (
 		homed &&
@@ -279,7 +370,10 @@ const applyGuest = Effect.fn("applyGuest")(function* (run: Run, name: string, ho
 		return yield* settleGuest;
 	}
 
-	const changes = yield* engine.changes(connection, current, system);
+	const changes = describeChanges(
+		yield* engine.changes(connection, current, system),
+		run.fleet.machines.find((machine) => machine.name === name)?.packages ?? [],
+	);
 
 	yield* Console.log(
 		changes === ""

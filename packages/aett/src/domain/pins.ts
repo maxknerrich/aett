@@ -1,5 +1,5 @@
-import { DateTime, Option, Predicate, Schema } from "effect";
-import type { Release } from "./stacks.ts";
+import { DateTime, Effect, Option, Predicate, Schema } from "effect";
+import { explicitSource, type Family, type Release, Source, type Sourced } from "./packages.ts";
 
 // A value in a lock node's `locked` or `original`.
 const LockValue = Schema.Union([Schema.String, Schema.Number, Schema.Boolean]);
@@ -36,25 +36,54 @@ export const ReleasePin = Schema.Struct({
 export interface ReleasePin extends Schema.Schema.Type<typeof ReleasePin> {}
 
 /**
- * state/pins.json: the fleet's own pins. `inputs` locks the engine's inputs;
- * `releases` pins each release source by its repository.
+ * state/pins.json: the fleet's own pins. `inputs` locks the engine's inputs,
+ * `releases` pins each release source by its repository, and `packages`
+ * records which source each package name comes from on Linux and on Macs,
+ * picked the first time aett saw it there. A name led by its source needs
+ * none.
  */
 export const Pins = Schema.Struct({
 	inputs: InputsLock,
 	releases: Schema.Record(Schema.String, ReleasePin),
+	packages: Schema.Record(
+		Schema.String,
+		Schema.Struct({ linux: Schema.optionalKey(Source), darwin: Schema.optionalKey(Source) }),
+	).pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
 });
 
 export interface Pins extends Schema.Schema.Type<typeof Pins> {}
 
-/** The platforms aett resolves release assets for. */
-export const platforms = ["x86_64-linux", "aarch64-linux"] as const;
+/** The platforms aett builds machines for, and resolves release assets for. */
+export const platforms = [
+	"x86_64-linux",
+	"aarch64-linux",
+	"aarch64-darwin",
+	"x86_64-darwin",
+] as const;
+
+export const Platform = Schema.Literals(platforms);
 
 export type Platform = (typeof platforms)[number];
+
+/** The family a platform picks package sources for. */
+export const familyOf = (platform: Platform): Family =>
+	platform.endsWith("-darwin") ? "darwin" : "linux";
+
+/** Where a package comes from on `family`: the source it is led by, or the one the pins picked. */
+export const sourceOf = (pins: Pins, name: string, family: Family): Option.Option<Sourced> =>
+	Option.orElse(explicitSource(name), () =>
+		Option.map(Option.fromUndefinedOr(pins.packages[name]?.[family]), (source) => ({
+			source,
+			name,
+		})),
+	);
 
 // What {target} stands for on each platform, best first: static musl builds just run.
 const targets: Record<Platform, ReadonlyArray<string>> = {
 	"x86_64-linux": ["x86_64-unknown-linux-musl", "x86_64-unknown-linux-gnu"],
 	"aarch64-linux": ["aarch64-unknown-linux-musl", "aarch64-unknown-linux-gnu"],
+	"aarch64-darwin": ["aarch64-apple-darwin"],
+	"x86_64-darwin": ["x86_64-apple-darwin"],
 };
 
 /**

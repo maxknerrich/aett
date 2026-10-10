@@ -1,9 +1,11 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { Console, Effect, FileSystem, Option, Path, type PlatformError, Schema } from "effect";
-import { Declaration, decodeFleet, type Fleet } from "../domain/fleet.ts";
+import { Declaration, decodeFleet, type Fleet, PluginMetadata } from "../domain/fleet.ts";
+import type { Plugin } from "../domain/plugin.ts";
 import { MachineRecord, Operator, type State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
+import { writeServices } from "./registries.ts";
 
 /** A problem with the fleet repository: fleet.ts or the state next to it. */
 export class FleetError extends Schema.TaggedError<FleetError>()("FleetError", {
@@ -85,8 +87,69 @@ export const loadFleet = Effect.fn("loadFleet")(function* (root: string) {
 		),
 	);
 
-	return yield* Effect.fromResult(decodeFleet(declaration)).pipe(
+	const own = yield* ownServices(root);
+
+	yield* writeServices(
+		root,
+		own.map(({ plugin, defined }) => ({ name: plugin.name, defined })),
+	);
+
+	return yield* Effect.fromResult(
+		decodeFleet(
+			declaration,
+			own.map(({ plugin }) => plugin),
+		),
+	).pipe(
 		Effect.mapError((problems) => new FleetError({ message: `fleet.ts is invalid:\n${problems}` })),
+	);
+});
+
+/**
+ * The fleet's own services: each folder in services/, named after it, with
+ * its modules and dotfiles there and the definition its service.ts
+ * default-exports, if it has one.
+ */
+const ownServices = Effect.fn("ownServices")(function* (root: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const directory = path.join(root, "services");
+
+	if (!(yield* fs.exists(directory))) return [];
+
+	const folders = yield* Effect.filter(yield* fs.readDirectory(directory), (name) =>
+		fs.stat(path.join(directory, name)).pipe(Effect.map(({ type }) => type === "Directory")),
+	);
+
+	return yield* Effect.forEach(folders.toSorted(), (name) =>
+		Effect.gen(function* () {
+			const folder = path.join(directory, name);
+			const file = path.join(folder, "service.ts");
+			const defined = yield* fs.exists(file);
+
+			const definition = defined
+				? (yield* Effect.tryPromise({
+						try: () => import(pathToFileURL(file).href),
+						catch: (cause) =>
+							new FleetError({
+								message: `Could not load services/${name}/service.ts: ${cause instanceof Error ? cause.message : String(cause)}`,
+							}),
+					})).default
+				: {};
+
+			// Strict, so a secret whose name would leave its directory is an error, not dropped.
+			const plugin: Plugin = yield* Schema.decodeUnknownEffect(PluginMetadata)(
+				{ ...definition, name, directory: folder },
+				{ errors: "all", onExcessProperty: "error" },
+			).pipe(
+				Effect.catchTag("SchemaError", (error) =>
+					Effect.fail(
+						new FleetError({ message: `services/${name}/ is invalid: ${error.message}` }),
+					),
+				),
+			);
+
+			return { plugin, defined };
+		}),
 	);
 });
 
@@ -144,21 +207,79 @@ export const readState = Effect.fn("readState")(function* (root: string, fleet: 
 
 	const names = [...new Set([...fleet.machines.map(({ name }) => name), ...recorded])];
 
-	const machines = yield* Effect.forEach(names, (name) =>
+	const recordedMachines = yield* Effect.forEach(names, (name) =>
 		Effect.gen(function* () {
 			const directory = path.join(root, "state", name);
 			const recordFile = path.join(directory, "machine.json");
-			const facts = yield* engine.discovered(root, name);
+			const reported = yield* engine.discovered(root, name);
 
 			const record = (yield* fs.exists(recordFile))
 				? yield* readJson(recordFile, MachineRecord)
 				: {};
 
-			return [name, { ...record, facts }] as const;
+			return {
+				name,
+				record,
+				facts: Option.isSome(reported),
+				platform: Option.getOrUndefined(
+					Option.orElse(reported, () => Option.fromUndefinedOr(record.system)),
+				),
+			};
 		}),
 	);
 
+	// A VM runs on its host's platform.
+	const platforms = new Map(recordedMachines.map(({ name, platform }) => [name, platform]));
+
+	const hostOf = (name: string) =>
+		fleet.machines
+			.find((machine) => machine.name === name)
+			?.vm.pipe(
+				Option.map(({ host }) => host),
+				Option.getOrUndefined,
+			);
+
+	const machines = recordedMachines.map(({ name, record, facts, platform }) => {
+		const host = hostOf(name) ?? record.host;
+		const known = platform ?? (host === undefined ? undefined : platforms.get(host));
+
+		return [name, { ...record, facts, platform: known }] as const;
+	});
+
 	return { operator, machines: new Map(machines) } satisfies State;
+});
+
+/** Removes `keys` from state/<name>/machine.json, keeping the rest. */
+export const forgetRecord = Effect.fn("forgetRecord")(function* (
+	root: string,
+	name: string,
+	keys: ReadonlyArray<keyof typeof MachineRecord.Type>,
+) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const file = path.join(root, "state", name, "machine.json");
+
+	if (!(yield* fs.exists(file))) return;
+
+	const recorded = yield* fs.readFileString(file).pipe(
+		Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(MachineRecord))),
+		Effect.catchTag("SchemaError", (error) =>
+			Effect.fail(
+				new FleetError({ message: `state/${name}/machine.json is invalid: ${error.message}` }),
+			),
+		),
+	);
+
+	yield* fs.writeFileString(
+		file,
+		`${JSON.stringify(
+			Object.fromEntries(
+				Object.entries(recorded).filter(([key]) => !keys.some((forgotten) => forgotten === key)),
+			),
+			null,
+			"\t",
+		)}\n`,
+	);
 });
 
 /** Adds `changes` to state/<name>/machine.json, keeping what it records already. */

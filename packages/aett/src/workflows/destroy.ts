@@ -1,4 +1,4 @@
-import { Console, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Console, Effect, FileSystem, Path, Schema } from "effect";
 import { Prompt } from "effect/cli";
 import { forgetHost } from "../domain/host.ts";
 import { Engine } from "../engine/engine.ts";
@@ -13,7 +13,8 @@ export class DestroyError extends Schema.TaggedError<DestroyError>()("DestroyErr
  * Deletes a VM that fleet.ts no longer declares and that its host has
  * stopped: its state volume and identity on the host, then its host key, its
  * state and its known_hosts entry in the fleet. Asks for the name first
- * unless `yes`.
+ * unless `yes`. Its node stays on the tailnet until the operator removes it
+ * in the admin console.
  */
 export const destroy = Effect.fn("destroy")(function* (
 	root: string,
@@ -41,7 +42,7 @@ export const destroy = Effect.fn("destroy")(function* (
 	}
 
 	const knownHostsFile = path.join(root, "state", "known_hosts");
-	const connection = yield* connectMachine(root, state, host, Option.none());
+	const connection = yield* connectMachine(root, state, host);
 
 	if ((yield* engine.guestState(connection, name)) === "running") {
 		return yield* new DestroyError({
@@ -68,6 +69,8 @@ export const destroy = Effect.fn("destroy")(function* (
 		});
 	}
 
+	const node = state.machines.get(name)?.tailnetName;
+
 	yield* engine.removeGuest(connection, name);
 	// Only the guest's own key: secrets/<name>/ may also hold fleet secrets that share the name.
 	const secrets = path.join(root, "secrets", name);
@@ -88,6 +91,6 @@ export const destroy = Effect.fn("destroy")(function* (
 	}
 
 	return yield* Console.log(
-		`Destroyed ${name}. If it joined your tailnet, remove it in the Tailscale admin console too.`,
+		`Destroyed ${name}. Remove ${node ?? name} from the tailnet at https://login.tailscale.com/admin/machines too, if it joined, so a new ${name} gets its name.`,
 	);
 }, Effect.scoped);

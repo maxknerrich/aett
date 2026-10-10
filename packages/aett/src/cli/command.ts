@@ -9,7 +9,10 @@ import { destroy } from "../workflows/destroy.ts";
 import { fleetRoot } from "../workflows/load.ts";
 import { update } from "../workflows/pins.ts";
 import { setSecret } from "../workflows/secrets.ts";
+import { show } from "../workflows/show.ts";
 import { status } from "../workflows/status.ts";
+import { setupTailscale } from "../workflows/tailscale.ts";
+import { unlock } from "../workflows/unlock.ts";
 import { discover, install } from "../workflows/install.ts";
 
 const cwd = Effect.map(Effect.service(Path.Path), (path) => path.resolve());
@@ -56,6 +59,18 @@ const machine = Command.make("machine").pipe(
 					),
 					Flag.optional,
 				),
+				rootDisks: Flag.String("root-disk").pipe(
+					Flag.withDescription(
+						"A NAS: a disk of its root pool, by any of its /dev names. Repeat it for each; aett asks when there is none.",
+					),
+					Flag.atLeast(0),
+				),
+				tankDisks: Flag.String("tank-disk").pipe(
+					Flag.withDescription(
+						"A NAS: a disk of its tank pool, by any of its /dev names. Repeat it for each; aett asks when there is none.",
+					),
+					Flag.atLeast(0),
+				),
 				yes: Flag.Boolean("yes").pipe(
 					Flag.withDescription("Erase the disk without asking for the machine's name."),
 					Flag.withDefault(false),
@@ -82,6 +97,23 @@ const machine = Command.make("machine").pipe(
 			),
 		),
 		Command.make(
+			"unlock",
+			{
+				name: machineName,
+				host: Flag.String("host").pipe(
+					Flag.withDescription(
+						"The machine's address, if not the LAN address install recorded, such as over a VPN.",
+					),
+					Flag.optional,
+				),
+			},
+			({ name, host }) => Effect.flatMap(fleet, (root) => unlock(root, name, host)),
+		).pipe(
+			Command.withDescription(
+				"Open an encrypted machine waiting at boot: send its disk passphrase to its initrd on its LAN.",
+			),
+		),
+		Command.make(
 			"destroy",
 			{
 				name: Argument.String("name").pipe(
@@ -95,7 +127,18 @@ const machine = Command.make("machine").pipe(
 			({ name, yes }) => Effect.flatMap(fleet, (root) => destroy(root, name, { yes })),
 		).pipe(
 			Command.withDescription(
-				"Delete a VM that fleet.ts no longer declares: its volume on its host, its secrets and its state.",
+				"Delete a VM that fleet.ts no longer declares: its volume on its host, its secrets and its state. You remove its node in the Tailscale admin console.",
+			),
+		),
+	]),
+);
+
+const tailscale = Command.make("tailscale").pipe(
+	Command.withDescription("Connect the fleet to your tailnet."),
+	Command.withSubcommands([
+		Command.make("setup", {}, () => Effect.flatMap(fleet, setupTailscale)).pipe(
+			Command.withDescription(
+				"Say what the tailnet's policy needs, or store the OAuth client that lets aett add it.",
 			),
 		),
 	]),
@@ -108,7 +151,7 @@ const secret = Command.make("secret").pipe(
 			"set",
 			{
 				name: Argument.String("name").pipe(
-					Argument.withDescription("The secret, such as tailscale/auth-key."),
+					Argument.withDescription("The secret, such as users/<name>."),
 				),
 			},
 			({ name }) => Effect.flatMap(fleet, (root) => setSecret(root, name)),
@@ -134,6 +177,23 @@ export const command = (aett: AettPackage) =>
 						),
 						Argument.optional,
 					),
+					user: Flag.String("user").pipe(
+						Flag.withDescription(
+							"The fleet's user, your login name on its machines. aett asks when it is missing.",
+						),
+						Flag.optional,
+					),
+					keychain: Flag.Boolean("no-keychain").pipe(
+						Flag.withDescription("On a Mac, don't keep the age key in the login keychain."),
+						Flag.map((no) => !no),
+						Flag.withDefault(true),
+					),
+					showKey: Flag.Boolean("show-key").pipe(
+						Flag.withDescription(
+							"Print the age key instead of putting it on the clipboard, such as in an SSH session.",
+						),
+						Flag.withDefault(false),
+					),
 					sshKey: Flag.String("ssh-key").pipe(
 						Flag.withDescription(
 							"The operator's OpenSSH public key, as a key line or a .pub file. Defaults to a key from the SSH agent.",
@@ -142,12 +202,12 @@ export const command = (aett: AettPackage) =>
 					),
 					machines: Flag.String("machine").pipe(
 						Flag.withDescription(
-							"A first machine as name:role, or name:role:encrypted for an encrypted disk. Repeat it for more; aett asks when there is none.",
+							"A first machine as name:role, name:role:encrypted for an encrypted disk, or name:computer:macos. Repeat it for more; aett asks when there is none.",
 						),
 						Flag.filterMap(
 							parseMachineFlag,
 							() =>
-								"Expected name:role or name:role:encrypted, with role hypervisor, server or computer",
+								"Expected name:role, name:role:encrypted or name:computer:macos, with role hypervisor, nas, server or computer",
 						),
 						Flag.atLeast(0),
 					),
@@ -173,18 +233,20 @@ export const command = (aett: AettPackage) =>
 					"Write .aett/build/ from fleet.ts and state, and evaluate the machines it lists.",
 				),
 			),
+			Command.make("show", {}, () => Effect.flatMap(fleet, show)).pipe(
+				Command.withDescription(
+					"Print the fleet by machine: what each is, its services, packages and dotfiles.",
+				),
+			),
 			Command.make(
 				"apply",
 				{
 					name: Argument.String("name").pipe(
 						Argument.withDescription(
-							"The machine's name in fleet.ts. Defaults to every installed machine.",
+							"The machine's name in fleet.ts. Defaults to every installed machine, and the Mac aett runs on.",
 						),
 						Argument.optional,
 					),
-					host: hostFlag(
-						"The named bare-metal machine as host[:port]. Defaults to <name>.local.",
-					).pipe(Flag.optional),
 					yes: Flag.Boolean("yes").pipe(
 						Flag.withDescription("Switch without asking."),
 						Flag.withDefault(false),
@@ -193,7 +255,7 @@ export const command = (aett: AettPackage) =>
 				({ name, ...options }) => Effect.flatMap(fleet, (root) => apply(root, name, options)),
 			).pipe(
 				Command.withDescription(
-					"Build the declared system on installed machines and their VMs and switch to it.",
+					"Build the declared system on installed machines, their VMs and this Mac, and switch to it.",
 				),
 			),
 			Command.make("status", {}, () => Effect.flatMap(fleet, status)).pipe(
@@ -214,10 +276,11 @@ export const command = (aett: AettPackage) =>
 				({ names }) => Effect.flatMap(fleet, (root) => update(root, names)),
 			).pipe(
 				Command.withDescription(
-					"Move the fleet's pins in state/pins.json forward and print what changes.",
+					"Move the fleet's pins in state/pins.json forward and print what changes. On a Mac in the fleet, upgrade its apps too.",
 				),
 			),
 			machine,
+			tailscale,
 			secret,
 		]),
 	);

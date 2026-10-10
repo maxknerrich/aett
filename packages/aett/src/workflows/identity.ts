@@ -4,7 +4,7 @@ import { Secrets, SecretsError } from "../adapters/secrets.ts";
 import type { Connection } from "../adapters/ssh.ts";
 import { type Fleet } from "../domain/fleet.ts";
 import { trustHost } from "../domain/host.ts";
-import { AgePublicKey, SshPublicKey } from "../domain/state.ts";
+import { AgePublicKey, SshPublicKey, type State } from "../domain/state.ts";
 import { Engine } from "../engine/engine.ts";
 
 const isSshPublicKey = Schema.is(SshPublicKey);
@@ -142,12 +142,14 @@ export const ensureGuestKeys = Effect.fn("ensureGuestKeys")(function* (
 });
 
 /**
- * The age keys of the named machines that have a host key in aett's
- * known_hosts, derived from it with the pinned ssh-to-age: what sops-nix on
- * each machine decrypts with.
+ * The age keys of the named machines: a Mac's from state, the others' derived
+ * with the pinned ssh-to-age from their host key in aett's known_hosts. They
+ * are what sops-nix on each machine decrypts with. Machines without one yet
+ * are left out.
  */
 export const machineAgeKeys = Effect.fn("machineAgeKeys")(function* (
 	root: string,
+	state: State,
 	names: ReadonlyArray<string>,
 ) {
 	const path = yield* Path.Path;
@@ -155,7 +157,11 @@ export const machineAgeKeys = Effect.fn("machineAgeKeys")(function* (
 	const sshToAge = path.join(yield* (yield* Engine).tools, "ssh-to-age");
 	const known = yield* knownHostKeys(root);
 
-	return yield* Effect.forEach(
+	const macs = names.flatMap((name) =>
+		Option.toArray(Option.fromUndefinedOr(state.machines.get(name)?.age)),
+	);
+
+	const derived = yield* Effect.forEach(
 		names.flatMap((name) =>
 			Option.toArray(Option.map(Option.fromUndefinedOr(known.get(name)), (key) => ({ name, key }))),
 		),
@@ -177,4 +183,6 @@ export const machineAgeKeys = Effect.fn("machineAgeKeys")(function* (
 					),
 				),
 	);
+
+	return [...macs, ...derived];
 });

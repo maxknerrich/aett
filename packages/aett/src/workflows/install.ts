@@ -1,14 +1,25 @@
-import { Console, Effect, Option, Path, Redacted, Schema } from "effect";
+import { Console, Effect, FileSystem, Option, Path, Redacted, Schedule, Schema } from "effect";
 import { Prompt } from "effect/cli";
 import { Secrets } from "../adapters/secrets.ts";
-import { Ssh } from "../adapters/ssh.ts";
-import { type Disk, diskLabel, findDisk, isPassphrase, layoutPreview } from "../domain/disk.ts";
+import { type Connection, Ssh } from "../adapters/ssh.ts";
+import {
+	type Disk,
+	diskLabel,
+	findDisk,
+	isPassphrase,
+	layoutPreview,
+	nasPreview,
+	poolProblem,
+} from "../domain/disk.ts";
 import { type Fleet, guestsOf } from "../domain/fleet.ts";
 import { formatHost, type Host } from "../domain/host.ts";
+import { joinedFrom, tagOf } from "../domain/tailnet.ts";
 import { Engine } from "../engine/engine.ts";
 import { emit } from "./compile.ts";
 import { machineHostKey, trustHostKey } from "./identity.ts";
-import { loadFleet, readState, updateRecord } from "./load.ts";
+import { forgetRecord, loadFleet, readState, updateRecord } from "./load.ts";
+import { approver, syncPolicy } from "./tailscale.ts";
+import { unlockName } from "./unlock.ts";
 
 export class InstallError extends Schema.TaggedError<InstallError>()("InstallError", {
 	message: Schema.String,
@@ -23,6 +34,9 @@ export interface InstallerAccess {
 /** The answers `aett machine install` takes as flags instead of prompts. */
 export interface InstallOptions extends InstallerAccess {
 	readonly disk: Option.Option<string>;
+	/** A NAS's disks for each pool, by any of their /dev names; aett asks when they are missing. */
+	readonly rootDisks: ReadonlyArray<string>;
+	readonly tankDisks: ReadonlyArray<string>;
 	readonly yes: boolean;
 	readonly reinstall: boolean;
 	/** An encrypted machine's new disk passphrase. aett asks when it is missing and none is stored. */
@@ -41,15 +55,17 @@ export const discover = Effect.fn("discover")(function* (
 
 /**
  * Discovers the machine, lets the operator confirm its disk, makes or reads
- * its host key and disk passphrase, builds its system on the installer, erases
- * the disk (inside LUKS when declared encrypted), installs and reboots into the
- * new system.
+ * its host key and disk passphrase, builds its system on the installer, joins
+ * it to the tailnet once the operator approves it, erases the disk (inside
+ * LUKS when declared encrypted), installs and reboots into the new system.
  */
 export const install = Effect.fn("install")(function* (
 	root: string,
 	name: string,
 	options: InstallOptions,
 ) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
 	const engine = yield* Engine;
 	const fleet = yield* loadFleet(root);
 	const machine = yield* installable(fleet, name);
@@ -68,7 +84,10 @@ export const install = Effect.fn("install")(function* (
 		});
 	}
 
-	const connection = yield* connect(options);
+	// The installed machine is reached only over the tailnet, which it joins with its role's tag.
+	yield* syncPolicy(root, fleet);
+
+	const connection = yield* reachInstaller(root, name, state.operator.sshKeys, options);
 	const { disks, uefi } = yield* engine.discover(root, name, connection);
 
 	// Installed systems boot with systemd-boot, so a machine booted without UEFI would be left unbootable.
@@ -78,9 +97,15 @@ export const install = Effect.fn("install")(function* (
 		});
 	}
 
-	const disk = yield* chooseDisk(name, recorded?.disk, options.disk, disks);
+	// A NAS erases every disk of its two pools; any other machine one disk.
+	const layout =
+		machine.role === "nas"
+			? { pools: yield* choosePools(name, recorded?.pools, options, disks) }
+			: { disk: yield* chooseDisk(name, recorded?.disk, options.disk, disks) };
 
-	yield* Console.log(`\n${layoutPreview(machine, disk)}\n`);
+	yield* Console.log(
+		`\n${"pools" in layout ? nasPreview(machine, layout.pools) : layoutPreview(machine, layout.disk)}\n`,
+	);
 
 	if (!options.yes) {
 		const typed = yield* Prompt.String({ message: `Type "${name}" to erase this disk:` });
@@ -103,31 +128,123 @@ export const install = Effect.fn("install")(function* (
 	// Trusted before the build, so the machine is a recipient of the secrets it reads on first boot.
 	yield* trustHostKey(root, name, hostKey.publicKey);
 
-	// Later runs read the disk from state and never derive it again.
-	// An existing record stays as it is, so `installed` survives a failed reinstall.
-	if (recorded?.disk === undefined) yield* updateRecord(root, name, { disk: disk.byId });
+	// Erasing the disk erases the machine's tailnet identity and its guests', so they join again:
+	// the machine at this install, its guests at its first apply. A failure puts their
+	// records back. Their old nodes stay on the tailnet until the operator removes them.
+	const reinstalling = recorded?.installed === true;
 
-	const { build } = yield* emit(root);
+	// Its guests' identities live on its disk too.
+	const erased = [
+		...new Set([
+			name,
+			...guestsOf(fleet, name),
+			...[...state.machines].flatMap(([guest, { host }]) => (host === name ? [guest] : [])),
+		]),
+	];
 
-	// The machine's guests start on its first boot, so their host keys go on its disk too.
-	const guests = new Map(
-		yield* Effect.forEach(
-			guestsOf(fleet, name).filter((guest) => build.machines.includes(guest)),
-			(guest) =>
-				machineHostKey(root, guest, state.operator.ageKeys).pipe(
-					Effect.map((key) => [guest, key] as const),
-				),
-		),
+	const before = yield* Effect.forEach(erased, (machineName) =>
+		Effect.gen(function* () {
+			const record = path.join(root, "state", machineName, "machine.json");
+
+			return (yield* fs.exists(record))
+				? [{ record, content: yield* fs.readFileString(record) }]
+				: [];
+		}),
 	);
 
-	yield* engine.install(build, name, connection, { hostKey, guests, passphrase });
+	const oldNodes = erased.flatMap((machineName) =>
+		Option.toArray(Option.fromUndefinedOr(state.machines.get(machineName)?.tailnetName)),
+	);
+
+	if (reinstalling) {
+		yield* Effect.forEach(erased, (machineName) =>
+			forgetRecord(root, machineName, ["tailnet", "tailnetName", "unlock"]),
+		);
+	}
+
+	const restore = Effect.forEach(before.flat(), ({ record, content }) =>
+		fs.writeFileString(record, content),
+	);
+
+	// Later runs read the disks from state and never derive them again.
+	// An existing record stays as it is, so `installed` survives a failed reinstall.
+	const chosen =
+		"pools" in layout
+			? {
+					pools: {
+						root: layout.pools.root.map(({ byId }) => byId),
+						tank: layout.pools.tank.map(({ byId }) => byId),
+					},
+				}
+			: { disk: layout.disk.byId };
+
+	// A role that changed from or to nas() needs the other layout recorded instead.
+	if ("pools" in chosen ? recorded?.pools === undefined : recorded?.disk === undefined) {
+		yield* forgetRecord(root, name, ["disk", "pools"]);
+		yield* updateRecord(root, name, chosen);
+	}
+
+	const installed = yield* Effect.gen(function* () {
+		// An encrypted machine's initrd answers on its LAN from the first boot, where the installer is now.
+		if (machine.encrypted) {
+			const address = yield* Effect.fromOption(
+				yield* engine.lanAddress(connection),
+				() =>
+					new InstallError({
+						message: `The installer on ${name} has no route to the internet, so aett can't tell its LAN address. Nothing was erased.`,
+					}),
+			);
+
+			yield* updateRecord(root, name, { unlock: { address } });
+		}
+
+		const { build } = yield* emit(root);
+
+		// The machine's guests start on its first boot, so their host keys go on its disk too.
+		const keys = new Map(
+			yield* Effect.forEach(
+				guestsOf(fleet, name).filter((guest) => build.machines.includes(guest)),
+				(guest) =>
+					machineHostKey(root, guest, state.operator.ageKeys).pipe(
+						Effect.map((key) => [guest, key] as const),
+					),
+			),
+		);
+
+		if (oldNodes.length > 0) {
+			yield* Console.log(
+				`Remove the old ${oldNodes.join(", ")} from the tailnet at https://login.tailscale.com/admin/machines before you approve ${name}, so the new nodes get their names.`,
+			);
+		}
+
+		const done = yield* engine.install(
+			build,
+			name,
+			connection,
+			{ hostKey, guests: keys, passphrase },
+			tagOf(machine.role),
+			yield* approver(name),
+		);
+
+		return { keys, ...done };
+	}).pipe(Effect.onError(() => Effect.ignore(restore)));
+
 	yield* updateRecord(root, name, {
-		disk: disk.byId,
+		...chosen,
 		encrypted: machine.encrypted,
 		installed: true,
+		tailnet: installed.joined.tailnet,
+		tailnetName: installed.joined.tailnetName,
 	});
-	yield* Effect.forEach(guests, ([guest, key]) => trustHostKey(root, guest, key.publicKey));
-	yield* Console.log(`Installed ${name}. It reboots now and comes back as ${name}.local.`);
+	yield* Effect.forEach(installed.keys, ([guest, key]) => trustHostKey(root, guest, key.publicKey));
+	yield* Effect.forEach(Option.toArray(installed.unlockKey), (key) =>
+		trustHostKey(root, unlockName(name), key),
+	);
+	yield* Console.log(
+		machine.encrypted
+			? `Installed ${name}, on the tailnet as ${installed.joined.tailnetName}. It reboots now and waits for its passphrase: aett machine unlock ${name} opens it from its LAN, or type it at its console.`
+			: `Installed ${name}, on the tailnet as ${installed.joined.tailnetName}. It reboots now.`,
+	);
 
 	// The reboot drops the connection, which may fail the command; that is expected.
 	return yield* Effect.ignore(connection.run("systemctl reboot"));
@@ -161,6 +278,94 @@ const installable = (fleet: Fleet, name: string) =>
 	);
 
 // Logs in to the installer, asking for its code unless --code gave it.
+/**
+ * Logs in to the installer at `options.host` for install. Without --code it
+ * tries the operators' keys first: a machine that lets them in and still runs
+ * another Linux is switched into the installer in memory, once the operator
+ * agrees, and aett logs in to that installer on the machine's LAN. Its disks
+ * stay as they are until install erases them. Otherwise it asks for the code
+ * a stick-booted installer shows.
+ */
+const reachInstaller = Effect.fn("reachInstaller")(function* (
+	root: string,
+	name: string,
+	keys: ReadonlyArray<string>,
+	options: InstallOptions,
+) {
+	const ssh = yield* Ssh;
+	const engine = yield* Engine;
+
+	const running = yield* Option.match(options.code, {
+		onSome: () => Effect.succeed(Option.none()),
+		onNone: () => ssh.takeover(options.host).pipe(Effect.option),
+	});
+
+	if (Option.isNone(running)) return yield* connect(options);
+
+	if (yield* isInstaller(running.value)) return running.value;
+
+	const system = (yield* running.value.run(
+		'. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}"',
+	)).trim();
+
+	const node = joinedFrom(
+		yield* running.value.run("tailscale status --json --peers=false 2>/dev/null || true"),
+	);
+
+	const lan = Option.getOrElse(yield* engine.lanAddress(running.value), () => options.host.name);
+
+	yield* Console.log(
+		`${name} at ${formatHost(options.host)} runs ${system}. aett switches it into the installer in memory, without a USB stick; nothing is erased until you confirm its disks.`,
+	);
+
+	yield* Effect.forEach(Option.toArray(node), ({ tailnetName }) =>
+		Console.log(
+			`It is on your tailnet as ${tailnetName}. Remove that node at https://login.tailscale.com/admin/machines before you approve ${name} later, so the new one gets its name.`,
+		),
+	);
+
+	if (
+		!options.yes &&
+		!(yield* Prompt.Confirm({ message: `Switch ${name} into the installer now?` }))
+	) {
+		return yield* new InstallError({ message: `Left ${name} as it is.` });
+	}
+
+	const { build } = yield* emit(root);
+
+	yield* engine.switchToInstaller(build, running.value, keys);
+
+	// The installer isn't on the tailnet: aett finds it on the machine's LAN.
+	const installer = { name: lan, port: 22 };
+
+	yield* Console.log(`Waiting for the installer on ${name} at ${formatHost(installer)}…`);
+
+	return yield* ssh.takeover(installer).pipe(
+		Effect.flatMap((connection) =>
+			Effect.flatMap(isInstaller(connection), (ready) =>
+				ready
+					? Effect.succeed(connection)
+					: Effect.fail(
+							new InstallError({ message: `${name} at ${lan} isn't the installer yet.` }),
+						),
+			),
+		),
+		Effect.retry(Schedule.spaced("10 seconds").pipe(Schedule.upTo({ duration: "10 minutes" }))),
+		Effect.mapError(
+			(error) =>
+				new InstallError({
+					message: `${error.message}\nThe installer on ${name} didn't answer at ${lan}. aett reaches it on ${name}'s LAN, so from elsewhere connect to that LAN first, such as over your VPN. Its console shows what happened.`,
+				}),
+		),
+	);
+});
+
+// Whether `connection` is to the aett installer rather than to a system it replaces.
+const isInstaller = (connection: Connection) =>
+	connection
+		.run("test -e /etc/aett-installer && echo yes || true")
+		.pipe(Effect.map((said) => said.trim() === "yes"));
+
 const connect = Effect.fn("connect")(function* ({ host, code }: InstallerAccess) {
 	const ssh = yield* Ssh;
 
@@ -172,6 +377,70 @@ const connect = Effect.fn("connect")(function* ({ host, code }: InstallerAccess)
 	yield* Console.log(`Connecting to the installer at ${formatHost(host)}…`);
 
 	return yield* ssh.installer(host, secret);
+});
+
+// A NAS's recorded pools win; otherwise --root-disk and --tank-disk, or the operator's choice,
+// each pool mirroring at least two disks and no disk in both.
+const choosePools = Effect.fn("choosePools")(function* (
+	name: string,
+	recorded:
+		| { readonly root: ReadonlyArray<string>; readonly tank: ReadonlyArray<string> }
+		| undefined,
+	options: Pick<InstallOptions, "rootDisks" | "tankDisks">,
+	disks: ReadonlyArray<Disk>,
+) {
+	const choices = disks.map((disk) => `\n  ${diskLabel(disk)}`).join("");
+
+	// The disks `names` name, or an error that names the one the installer doesn't see.
+	const named = (names: ReadonlyArray<string>, where: string) =>
+		Effect.forEach(names, (path) =>
+			Effect.fromOption(
+				findDisk(disks, path),
+				() =>
+					new InstallError({
+						message: `${where} names ${path}, which is none of the installer's internal disks:${choices}`,
+					}),
+			).pipe(
+				Effect.map((disk) => ({ ...disk, byId: disk.names.includes(path) ? disk.byId : path })),
+			),
+		);
+
+	const pick = (pool: string, taken: ReadonlyArray<Disk>) =>
+		Prompt.MultiSelect({
+			message: `Which disks form ${name}'s ${pool} pool? aett erases them.`,
+			choices: disks.flatMap((disk) =>
+				taken.some(({ byId }) => byId === disk.byId)
+					? []
+					: [{ title: diskLabel(disk), value: disk }],
+			),
+			min: 2,
+		});
+
+	const pools =
+		recorded !== undefined
+			? {
+					root: yield* named(recorded.root, `state/${name}/machine.json`),
+					tank: yield* named(recorded.tank, `state/${name}/machine.json`),
+				}
+			: yield* Effect.gen(function* () {
+					const rootPool =
+						options.rootDisks.length > 0
+							? yield* named(options.rootDisks, "--root-disk")
+							: yield* pick("root", []);
+
+					const tank =
+						options.tankDisks.length > 0
+							? yield* named(options.tankDisks, "--tank-disk")
+							: yield* pick("tank", rootPool);
+
+					return { root: rootPool, tank };
+				});
+
+	return yield* Option.match(poolProblem(pools), {
+		onNone: () => Effect.succeed(pools),
+		onSome: (problem) =>
+			Effect.fail(new InstallError({ message: `${problem} Nothing was erased.` })),
+	});
 });
 
 // The recorded disk wins; otherwise --disk, the only internal disk or the operator's choice.

@@ -1,16 +1,51 @@
 import { pathToFileURL } from "node:url";
-import { Config, Console, Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
+import {
+	Config,
+	Console,
+	Effect,
+	FileSystem,
+	Layer,
+	Option,
+	Path,
+	Redacted,
+	Schema,
+	Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { type Connection, shellQuote } from "../../adapters/ssh.ts";
-import type { Fleet } from "../../domain/fleet.ts";
-import { InputsLock, type Pins } from "../../domain/pins.ts";
+import type { Channel, Fleet } from "../../domain/fleet.ts";
+import { Source } from "../../domain/packages.ts";
+import { InputsLock, type Pins, Platform } from "../../domain/pins.ts";
+import { machineSecrets } from "../../domain/secrets.ts";
 import type { State } from "../../domain/state.ts";
-import { type Build, Engine, EngineError, type HostKey, type InstallSecrets } from "../engine.ts";
+import type { Changes } from "../../domain/changes.ts";
+import { joinedFrom } from "../../domain/tailnet.ts";
+import {
+	type Approve,
+	type Build,
+	Engine,
+	EngineError,
+	type HostKey,
+	type Installed,
+	type InstallSecrets,
+} from "../engine.ts";
 import { FacterReport, installFacts } from "./facter.ts";
-import { fleetJson } from "./fleet-json.ts";
+import { pluginDirectory } from "../../adapters/assets.ts";
+import { type Extras, fleetJson } from "./fleet-json.ts";
+import { staticProfiles } from "./static-network.ts";
+import { wpaSupplicant } from "./wifi.ts";
 
 // A local directory as a flake reference; nix parses it as a URL, so spaces and the like are percent-encoded.
 const flakeAt = (directory: string) => `path:${pathToFileURL(directory).pathname}`;
+
+// What flake.nix's lib.names evaluates to.
+const PackageNames = Schema.fromJsonString(
+	Schema.Struct({
+		nixpkgs: Schema.Array(Schema.String),
+		unstable: Schema.Array(Schema.String),
+		"llm-agents": Schema.Array(Schema.String),
+	}),
+);
 
 // What `nix flake archive --json` prints; `path` is the flake's own store path.
 const ArchiveOutput = Schema.fromJsonString(Schema.Struct({ path: Schema.String }));
@@ -19,6 +54,12 @@ const ArchiveOutput = Schema.fromJsonString(Schema.Struct({ path: Schema.String 
 const PrefetchOutput = Schema.fromJsonString(Schema.Struct({ hash: Schema.String }));
 
 const Lock = Schema.fromJsonString(InputsLock);
+
+// What flake.nix's lib.sources returns: each name's source, or null.
+const Sources = Schema.fromJsonString(Schema.Record(Schema.String, Schema.NullOr(Source)));
+
+// The platform a nixos-facter report was made on.
+const ReportedSystem = Schema.fromJsonString(Schema.Struct({ system: Platform }));
 
 // What evaluating several machines' systems prints: each one's store path by name.
 const SystemPaths = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
@@ -69,10 +110,32 @@ const buildOn = <A>(
 const currentSystem = (target: Connection) =>
 	target.run("readlink -f /run/current-system").pipe(Effect.map((system) => system.trim()));
 
-const changes = (target: Connection, from: string, to: string) =>
+// The commands a system puts on PATH: its own and its users' profiles'.
+const commands = (target: Connection, system: string) =>
 	target
-		.run(`nix store diff-closures ${shellQuote(from)} ${shellQuote(to)}`)
-		.pipe(Effect.map((text) => text.trim()));
+		.run(
+			`ls -1 ${shellQuote(`${system}/sw/bin`)} ${shellQuote(system)}/etc/profiles/per-user/*/bin 2>/dev/null | grep -v -e ':$' -e '^$' | sort -u || true`,
+		)
+		.pipe(Effect.map((listed) => new Set(listed.split("\n").filter((name) => name !== ""))));
+
+const changes = Effect.fn("NixEngine.changes")(function* (
+	target: Connection,
+	from: string,
+	to: string,
+) {
+	const diff = (yield* target.run(
+		`nix store diff-closures ${shellQuote(from)} ${shellQuote(to)}`,
+	)).trim();
+
+	const before = yield* commands(target, from);
+	const after = yield* commands(target, to);
+
+	return {
+		diff,
+		removed: [...before].filter((name) => !after.has(name)).toSorted(),
+		added: [...after].filter((name) => !before.has(name)).toSorted(),
+	} satisfies Changes;
+});
 
 // nixos-rebuild's invocation: a transient unit finishes the switch even if the connection drops.
 // Its output goes to stderr, which streams to the terminal.
@@ -89,6 +152,8 @@ const switchTo = (target: Connection, system: string) =>
 const activate = Effect.fn("NixEngine.activate")(function* (target: Connection, system: string) {
 	yield* target.run(`nix-env -p /nix/var/nix/profiles/system --set ${shellQuote(system)}`);
 	yield* switchTo(target, system);
+	// The switch installed the boot loader, which put the Wi-Fi networks into the initrd.
+	yield* target.run(`rm -f ${wifiPending}`);
 });
 
 // A guest boots whatever its host's runner says, and its store is the host's, read-only, so a
@@ -175,6 +240,172 @@ const guestKeyDirectory = (root: string, guest: string) =>
 const placeGuestKey = (host: Connection, guest: string, hostKey: HostKey) =>
 	writeHostKey(host, guestKeyDirectory("", guest), hostKey);
 
+// Where an installer keeps the tailnet identity the machine joined with until the install copies it.
+const joinDirectory = "/run/aett-join";
+
+// Where unlock.nix takes the initrd's sshd key and Wi-Fi networks from.
+const unlockDirectory = "/persist/aett/unlock";
+
+// How a node joins the tailnet: as `hostname`, with `flags` for tailscale up, through the system's
+// tailscaled, or with `directory`, through one of its own in userspace that keeps the node's identity
+// there and leaves the system's node alone. `bin` is where tailscale and tailscaled are, if not on PATH.
+interface Joiner {
+	readonly hostname: string;
+	readonly flags: string;
+	readonly bin: string;
+	readonly directory: Option.Option<string>;
+}
+
+// The joining node's files: tailscale up's output and process, and its own tailscaled's socket and process.
+const joinFiles = (joiner: Joiner) => `/run/aett-join-${joiner.hostname}`;
+
+// The shell functions both halves of joining use: ts runs the CLI against the node's tailscaled,
+// running says whether the node is on the tailnet, and stop ends a tailscaled of its own.
+const joinHelpers = (joiner: Joiner) => {
+	const files = joinFiles(joiner);
+	const socket = Option.isSome(joiner.directory) ? ` --socket=${files}.sock` : "";
+
+	return `files=${files}
+ts() { ${joiner.bin}tailscale${socket} "$@"; }
+running() { ts status --json --peers=false 2>/dev/null | grep -q '"BackendState": *"Running"'; }
+stop() { [ -f "$files.daemon" ] || return 0; kill "$(cat "$files.daemon")" 2>/dev/null || true; for _ in $(seq 20); do kill -0 "$(cat "$files.daemon")" 2>/dev/null || break; sleep 0.5; done; rm -f "$files.daemon" "$files.sock"; }
+`;
+};
+
+// Run as root: starts the node joining and prints the URL the operator approves it at, or nothing when
+// it is on the tailnet already. tailscale up keeps waiting for the approval after this returns.
+const startJoining = (joiner: Joiner) => `set -eu
+${joinHelpers(joiner)}${Option.match(joiner.directory, {
+	onNone: () => "",
+	onSome: (directory) => `install -d -m 0700 ${shellQuote(directory)}
+if [ ! -S "$files.sock" ]; then
+  nohup ${joiner.bin}tailscaled --statedir=${shellQuote(directory)} --state=${shellQuote(`${directory}/tailscaled.state`)} --socket="$files.sock" --tun=userspace-networking --port=0 </dev/null >/dev/null 2>&1 &
+  echo $! > "$files.daemon"
+  for _ in $(seq 30); do [ -S "$files.sock" ] && break; sleep 1; done
+fi
+`,
+})}if running; then exit 0; fi
+nohup ${joiner.bin}tailscale${Option.isSome(joiner.directory) ? ' --socket="$files.sock"' : ""} up --reset --hostname=${shellQuote(joiner.hostname)} ${joiner.flags} --timeout=15m </dev/null >"$files.log" 2>&1 &
+up=$!
+echo "$up" > "$files.pid"
+for _ in $(seq 60); do
+  url=$(grep -o 'https://[^[:space:]]*' "$files.log" | head -n 1 || true)
+  if [ -n "$url" ]; then echo "$url"; exit 0; fi
+  kill -0 "$up" 2>/dev/null || break
+  sleep 1
+done
+if wait "$up" && running; then exit 0; fi
+cat "$files.log" >&2
+stop
+exit 1
+`;
+
+// Run as root after startJoining: waits up to 15 minutes for the approval, then prints the node's
+// status and stops a tailscaled of its own, whose identity stays in its directory.
+const finishJoining = (joiner: Joiner) => `set -eu
+${joinHelpers(joiner)}for _ in $(seq 900); do
+  if running; then
+    ts status --json --peers=false | tr -d '\n'
+    echo
+    stop
+    exit 0
+  fi
+  if [ -f "$files.pid" ] && ! kill -0 "$(cat "$files.pid")" 2>/dev/null; then
+    sleep 2
+    running && continue
+    cat "$files.log" >&2
+    stop
+    exit 1
+  fi
+  sleep 1
+done
+echo "Nobody approved ${joiner.hostname} within 15 minutes." >&2
+stop
+exit 1
+`;
+
+// Joins the node `joiner` describes, showing the operator the URL to approve it at unless it is on
+// the tailnet already. Returns what it says about itself.
+const joinWith = Effect.fn("NixEngine.joinWith")(function* (
+	target: Connection,
+	joiner: Joiner,
+	approve: Approve,
+) {
+	const url = (yield* target.run(`sh -c ${shellQuote(startJoining(joiner))}`)).trim();
+
+	if (url !== "") yield* approve(url);
+
+	const printed = yield* target.run(`sh -c ${shellQuote(finishJoining(joiner))}`);
+
+	return yield* Effect.fromOption(
+		joinedFrom(printed),
+		() =>
+			new EngineError({
+				message: `${joiner.hostname} joined the tailnet without an IPv4 address or a name:\n${printed}`,
+			}),
+	);
+});
+
+// Joins the system's own node, through its tailscaled.
+const join = (target: Connection, hostname: string, tag: string, approve: Approve) =>
+	joinWith(
+		target,
+		{ hostname, flags: `--advertise-tags=${tag}`, bin: "", directory: Option.none() },
+		approve,
+	);
+
+// Marks Wi-Fi networks the boot loader has yet to put into the initrd, until a boot loader install does.
+const wifiPending = `${unlockDirectory}/wifi-pending`;
+
+// Where NetworkManager keeps its connection profiles, the first shadowing the others: runtime ones,
+// then persistent ones, then those the system ships.
+const profileDirectories = [
+	"/run/NetworkManager/system-connections",
+	"/etc/NetworkManager/system-connections",
+	"/usr/lib/NetworkManager/system-connections",
+];
+
+// The Wi-Fi networks NetworkManager knows on `target`, as wpa_supplicant's configuration for the initrd.
+const wifiConfig = Effect.fn("NixEngine.wifiConfig")(function* (target: Connection) {
+	const separator = "\n--- aett ---\n";
+
+	const keyfiles = yield* target.run(
+		`for file in ${profileDirectories.map((directory) => `${directory}/*.nmconnection`).join(" ")}; do [ -f "$file" ] && cat "$file" && printf ${shellQuote(separator)}; done; true`,
+	);
+
+	return wpaSupplicant(keyfiles.split(separator));
+});
+
+// Hands the Wi-Fi networks NetworkManager knows to the initrd as wpa_supplicant's configuration,
+// which only root can read. Says whether the boot loader has yet to put them into the initrd.
+const unlockWifi = Effect.fn("NixEngine.unlockWifi")(function* (target: Connection) {
+	const said = yield* target.run(
+		`umask 077 && next=$(mktemp) && cat > "$next" && if cmp -s "$next" ${unlockDirectory}/wpa_supplicant.conf; then rm -f "$next"; else mv -f "$next" ${unlockDirectory}/wpa_supplicant.conf && touch ${wifiPending}; fi && if [ -e ${wifiPending} ]; then echo pending; fi`,
+		yield* wifiConfig(target),
+	);
+
+	return said.trim() === "pending";
+});
+
+// The address `target` reaches the internet from: its own on its LAN.
+const lanAddress = (target: Connection) =>
+	target
+		.run(
+			"ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \\([0-9.]*\\).*/\\1/p' | head -n 1",
+		)
+		.pipe(
+			Effect.map((printed) =>
+				Option.filter(Option.some(printed.trim()), (address) => address !== ""),
+			),
+		);
+
+// Installs the boot loader again for the system the machine runs, which appends the initrd's
+// secrets as they are now.
+const refreshBoot = (target: Connection) =>
+	target
+		.stream(`/run/current-system/bin/switch-to-configuration boot >&2 && rm -f ${wifiPending}`)
+		.pipe(Effect.asVoid);
+
 // Runs `format` with the passphrase, if there is one, in passphraseFile on the target.
 // The file is removed afterwards, also when writing it or formatting fails.
 const withPassphraseFile = <A, E>(
@@ -195,10 +426,11 @@ const withPassphraseFile = <A, E>(
 
 /**
  * The Nix engine. `flake` is the directory holding aett's flake, its lock and
- * the NixOS modules; every build starts as a copy of it with fleet.json and the
- * machines' facts added.
+ * the NixOS and nix-darwin modules; every build starts as a copy of it with
+ * fleet.json, the machines' facts and the plugins' modules added. `plugins`
+ * holds the plugins aett ships.
  */
-export const nixEngine = (flake: string) =>
+export const nixEngine = (flake: string, plugins: string) =>
 	Layer.effect(
 		Engine,
 		Effect.gen(function* () {
@@ -283,8 +515,25 @@ export const nixEngine = (flake: string) =>
 				return installFacts(decoded);
 			});
 
-			const discovered = (root: string, name: string) =>
-				fs.exists(path.join(root, "state", name, "facter.json"));
+			const discovered = Effect.fn("NixEngine.discovered")(function* (root: string, name: string) {
+				const file = path.join(root, "state", name, "facter.json");
+
+				if (!(yield* fs.exists(file))) return Option.none<Platform>();
+
+				return Option.some(
+					yield* fs.readFileString(file).pipe(
+						Effect.flatMap(Schema.decodeUnknownEffect(ReportedSystem)),
+						Effect.map(({ system }) => system),
+						Effect.catchTag("SchemaError", () =>
+							Effect.fail(
+								new EngineError({
+									message: `state/${name}/facter.json names no platform aett builds for.`,
+								}),
+							),
+						),
+					),
+				);
+			});
 
 			// Copies aett's flake to `directory`, locked to `inputs` instead of the lock it ships.
 			const copyFlake = Effect.fn("NixEngine.copyFlake")(function* (
@@ -327,10 +576,10 @@ export const nixEngine = (flake: string) =>
 				root: string,
 				fleet: Fleet,
 				state: State,
-				secrets: ReadonlyArray<string>,
+				extras: Extras,
 				pins: Pins,
 			) {
-				const emitted = fleetJson(fleet, state, secrets, pins);
+				const emitted = fleetJson(fleet, state, extras, pins);
 				const directory = path.join(root, ".aett", "build");
 
 				yield* fs.remove(directory, { recursive: true, force: true });
@@ -361,23 +610,39 @@ export const nixEngine = (flake: string) =>
 						),
 				);
 
-				// sops-nix on each machine decrypts these; tailscale.nix and the like read them from here.
-				yield* Effect.forEach(secrets, (secret) => {
-					const file = path.join("secrets", `${secret}.json`);
+				// Every plugin a machine has brings its modules, as plugins/<name>/ next to flake.nix.
+				yield* Effect.forEach([...fleet.services.values()], ({ plugin }) =>
+					fs.copy(
+						pluginDirectory(plugins, root, plugin),
+						path.join(directory, "plugins", plugin.name),
+					),
+				);
 
-					return fs
-						.makeDirectory(path.dirname(path.join(directory, file)), { recursive: true })
-						.pipe(Effect.andThen(fs.copyFile(path.join(root, file), path.join(directory, file))));
-				});
+				// sops-nix on each machine decrypts these; secrets.nix lists them for it.
+				yield* Effect.forEach(
+					machineSecrets(fleet).filter(({ name }) => extras.secrets.includes(name)),
+					({ file }) =>
+						fs
+							.makeDirectory(path.dirname(path.join(directory, file)), { recursive: true })
+							.pipe(Effect.andThen(fs.copyFile(path.join(root, file), path.join(directory, file)))),
+				);
 
-				return { directory, machines } satisfies Build;
+				const macs = fleet.machines.flatMap(({ name, kind }) =>
+					kind === "macos" && machines.includes(name) ? [name] : [],
+				);
+
+				return { directory, machines, macs } satisfies Build;
 			});
 
 			const evaluate = Effect.fn("NixEngine.evaluate")(function* (build: Build, name: string) {
+				const configuration = build.macs.includes(name)
+					? `darwinConfigurations.${name}`
+					: `nixosConfigurations.${name}`;
+
 				return yield* nix([
 					"eval",
 					"--raw",
-					`${flakeAt(build.directory)}#nixosConfigurations.${name}.config.system.build.toplevel.drvPath`,
+					`${flakeAt(build.directory)}#${configuration}.config.system.build.toplevel.drvPath`,
 				]);
 			});
 
@@ -408,26 +673,15 @@ export const nixEngine = (flake: string) =>
 			// nix reaches the target through its master connection: the pinned ssh first on PATH and the
 			// connection's options in NIX_SSHOPTS, which nix splits like a shell. With more than one
 			// connection nix would open its own master, which could not log in to an installer.
+			// Copies the build's flake alone: the machine fetches its pinned inputs itself, from GitHub and
+			// the binary caches, which is faster than through the controller when it is far away.
 			const ship = Effect.fn("NixEngine.ship")(function* (build: Build, target: Connection) {
-				yield* Console.log("Copying aett's flake and its inputs…");
+				yield* Console.log("Copying the fleet's flake…");
 
-				const output = yield* nix(
-					[
-						"flake",
-						"archive",
-						"--json",
-						"--to",
-						`ssh-ng://${target.destination}?max-connections=1`,
-						flakeAt(build.directory),
-					],
-					{
-						PATH: `${yield* tools}:${inheritedPath}`,
-						NIX_SSHOPTS: target.sshOptions.map(shellQuote).join(" "),
-					},
-				);
-
-				return yield* Schema.decodeUnknownEffect(ArchiveOutput)(output).pipe(
-					Effect.map(({ path: stored }) => stored),
+				// Archived here first, inputs included, which evaluating locked them into already.
+				const stored = yield* nix(["flake", "archive", "--json", flakeAt(build.directory)]).pipe(
+					Effect.flatMap(Schema.decodeUnknownEffect(ArchiveOutput)),
+					Effect.map(({ path: source }) => source),
 					Effect.catchTag("SchemaError", (error) =>
 						Effect.fail(
 							new EngineError({
@@ -436,6 +690,13 @@ export const nixEngine = (flake: string) =>
 						),
 					),
 				);
+
+				yield* nix(["copy", "--to", `ssh-ng://${target.destination}?max-connections=1`, stored], {
+					PATH: `${yield* tools}:${inheritedPath}`,
+					NIX_SSHOPTS: target.sshOptions.map(shellQuote).join(" "),
+				});
+
+				return stored;
 			});
 
 			const buildSystem = Effect.fn("NixEngine.buildSystem")(function* (
@@ -484,11 +745,65 @@ export const nixEngine = (flake: string) =>
 				return system;
 			});
 
+			const switchToInstaller = Effect.fn("NixEngine.switchToInstaller")(function* (
+				build: Build,
+				target: Connection,
+				keys: ReadonlyArray<string>,
+			) {
+				if ((yield* target.run("command -v nix >/dev/null && echo yes || true")).trim() !== "yes") {
+					return yield* new EngineError({
+						message:
+							"The machine has no Nix to build the installer with. Boot it from the aett installer stick instead.",
+					});
+				}
+
+				const source = yield* ship(build, target);
+
+				yield* Console.log("Building the installer on it…");
+
+				const kexec = (yield* target.stream(
+					`nix build --no-link --print-out-paths --extra-experimental-features 'nix-command flakes' ${shellQuote(`${source}#packages.`)}"$(nix eval --raw --impure --extra-experimental-features nix-command --expr builtins.currentSystem)".installer-kexec`,
+				)).trim();
+
+				// What the machine's network looks like now, so a fixed address comes along.
+				const profiles = staticProfiles(
+					yield* Effect.all({
+						links: target.run("ip -json -details link show 2>/dev/null || true"),
+						addresses: target.run("ip -json address show 2>/dev/null || true"),
+						ipv4Routes: target.run("ip -json -4 route show 2>/dev/null || true"),
+						ipv6Routes: target.run("ip -json -6 route show 2>/dev/null || true"),
+						resolvConf: target.run(
+							"cat /run/systemd/resolve/resolv.conf 2>/dev/null || cat /etc/resolv.conf 2>/dev/null || true",
+						),
+					}),
+				);
+
+				yield* Effect.forEach(profiles, ({ name }) =>
+					Console.log(`Carrying ${name}'s fixed addresses into the installer.`),
+				);
+
+				yield* Console.log("Switching it into the installer…");
+
+				const written = profiles.map(
+					({ name, keyfile }) =>
+						`printf %s ${shellQuote(keyfile)} > "$work"/${shellQuote(`aett-${name}.nmconnection`)} && `,
+				);
+
+				return yield* target
+					.run(
+						`work=$(mktemp -d) && ${written.join("")}cat > "$work/keys" && ${shellQuote(`${kexec}/bin/aett-kexec`)} "$work/keys"${profiles.length === 0 ? "" : ' "$work"/*.nmconnection'}`,
+						`${keys.join("\n")}\n`,
+					)
+					.pipe(Effect.asVoid);
+			});
+
 			const install = Effect.fn("NixEngine.install")(function* (
 				build: Build,
 				name: string,
 				target: Connection,
 				secrets: InstallSecrets,
+				tag: string,
+				approve: Approve,
 			) {
 				const source = yield* ship(build, target);
 
@@ -500,6 +815,19 @@ export const nixEngine = (flake: string) =>
 					name,
 					["system.build.toplevel", "system.build.destroyFormatMount", "system.build.aettInstall"],
 					InstallOutputs,
+				);
+
+				// The machine joins from the installer before anything is erased, through a tailscaled of its
+				// own whose identity the installed system boots with.
+				const joined = yield* joinWith(
+					target,
+					{
+						hostname: name,
+						flags: `--advertise-tags=${tag}`,
+						bin: `${toplevel}/sw/bin/`,
+						directory: Option.some(joinDirectory),
+					},
+					approve,
 				);
 
 				yield* Console.log("Erasing the disk…");
@@ -516,10 +844,35 @@ export const nixEngine = (flake: string) =>
 				yield* Effect.forEach(secrets.guests, ([guest, hostKey]) =>
 					writeHostKey(target, guestKeyDirectory("/mnt", guest), hostKey),
 				);
+				// Where persist.nix keeps /var/lib, the system's tailscaled's state directory among it.
+				yield* target.run(
+					`install -d -m 0700 /mnt/persist/var/lib/tailscale && cp -a ${joinDirectory}/. /mnt/persist/var/lib/tailscale/`,
+				);
+
+				// What unlock.nix puts into an encrypted machine's initrd, there before the boot loader install.
+				const unlockKey = yield* Effect.transposeOption(
+					Option.map(secrets.passphrase, () =>
+						Effect.gen(function* () {
+							const directory = `/mnt${unlockDirectory}`;
+
+							yield* target.run(
+								`install -d -m 0700 ${directory} && umask 077 && cat > ${directory}/wpa_supplicant.conf`,
+								yield* wifiConfig(target),
+							);
+
+							return (yield* target.run(
+								`ssh-keygen -q -t ed25519 -N "" -C ${shellQuote(`root@${name}-unlock`)} -f ${directory}/ssh_host_ed25519_key && cat ${directory}/ssh_host_ed25519_key.pub`,
+							)).trim();
+						}),
+					),
+				);
+
 				yield* Console.log("Installing…");
 				yield* target.run(
 					`nixos-install --root /mnt --system ${shellQuote(toplevel)} --no-root-passwd --no-channel-copy`,
 				);
+
+				return { joined, unlockKey } satisfies Installed;
 			});
 
 			// Locks a scratch copy of the flake, which lists no machines, so nothing but the inputs is read.
@@ -537,6 +890,151 @@ export const nixEngine = (flake: string) =>
 
 				return yield* readLock(path.join(directory, "flake.lock"));
 			}, Effect.scoped);
+
+			// Evaluates flake.nix's lib.sources in a scratch copy of the flake locked to `inputs`.
+			// Evaluates flake.nix's lib.names in a scratch copy of the flake locked to `inputs`.
+			const packageNames = Effect.fn("NixEngine.packageNames")(function* (inputs: InputsLock) {
+				const directory = path.join(
+					yield* fs.makeTempDirectoryScoped({ prefix: "aett-" }),
+					"flake",
+				);
+
+				yield* copyFlake(directory, inputs);
+
+				return yield* nix(["eval", "--json", `${flakeAt(directory)}#lib.names`]).pipe(
+					Effect.flatMap(Schema.decodeUnknownEffect(PackageNames)),
+					Effect.catchTag("SchemaError", (error) =>
+						Effect.fail(
+							new EngineError({ message: `nix eval printed unexpected names: ${error.message}` }),
+						),
+					),
+				);
+			}, Effect.scoped);
+
+			const packageSources = Effect.fn("NixEngine.packageSources")(function* (
+				inputs: InputsLock,
+				platform: Platform,
+				channel: Channel,
+				names: ReadonlyArray<string>,
+			) {
+				if (names.length === 0) return new Map<string, Option.Option<Source>>();
+
+				const directory = path.join(
+					yield* fs.makeTempDirectoryScoped({ prefix: "aett-" }),
+					"flake",
+				);
+
+				yield* copyFlake(directory, inputs);
+
+				// Package names are attribute paths, so their JSON strings are Nix strings too.
+				const output = yield* nix([
+					"eval",
+					"--json",
+					`${flakeAt(directory)}#lib`,
+					"--apply",
+					`lib: lib.sources ${JSON.stringify(platform)} ${JSON.stringify(channel)} [ ${names.map((name) => JSON.stringify(name)).join(" ")} ]`,
+				]);
+
+				const found = yield* Schema.decodeUnknownEffect(Sources)(output).pipe(
+					Effect.catchTag("SchemaError", (error) =>
+						Effect.fail(
+							new EngineError({ message: `nix eval printed unexpected output: ${error.message}` }),
+						),
+					),
+				);
+
+				return new Map(
+					names.map((name) => [name, Option.fromNullOr(found[name] ?? null)] as const),
+				);
+			}, Effect.scoped);
+
+			// The pinned tools and the operator's terminal for a command that may ask for sudo's password.
+			const interactive = Effect.fn("NixEngine.interactive")(function* (
+				args: ReadonlyArray<string>,
+				input?: string,
+			) {
+				const exitCode = yield* spawner
+					.exitCode(
+						// Attached to aett's terminal, where sudo asks for the password or Touch ID.
+						// -H: root's own home, not the operator's, for what runs as root.
+						ChildProcess.make("/usr/bin/sudo", ["-H", ...args], {
+							stdin: input === undefined ? "inherit" : Stream.make(new TextEncoder().encode(input)),
+							stdout: "inherit",
+							stderr: "inherit",
+							detached: false,
+						}),
+					)
+					.pipe(
+						Effect.mapError(
+							(error) => new EngineError({ message: `Could not run sudo: ${error.message}` }),
+						),
+					);
+
+				return yield* exitCode === 0
+					? Effect.void
+					: new EngineError({
+							message: `sudo ${args.join(" ")} failed with exit code ${exitCode}.`,
+						});
+			});
+
+			const buildDarwin = Effect.fn("NixEngine.buildDarwin")(function* (
+				build: Build,
+				name: string,
+			) {
+				yield* Console.log(`Building ${name}…`);
+
+				return yield* nix([
+					"build",
+					"--no-link",
+					"--print-out-paths",
+					`${flakeAt(build.directory)}#darwinConfigurations.${name}.system`,
+				]);
+			});
+
+			const brewfile = (build: Build, name: string) =>
+				nix([
+					"eval",
+					"--raw",
+					`${flakeAt(build.directory)}#darwinConfigurations.${name}.config.homebrew.brewfile`,
+				]);
+
+			// As darwin-rebuild switch: the profile first, then the system's activation, both as root.
+			const activateDarwin = Effect.fn("NixEngine.activateDarwin")(function* (
+				system: string,
+				ageKey: Redacted.Redacted,
+			) {
+				yield* interactive(
+					[
+						"/bin/sh",
+						"-c",
+						"install -d -m 0700 /var/lib/sops-nix && umask 077 && cat > /var/lib/sops-nix/key.txt",
+					],
+					`${Redacted.value(ageKey)}\n`,
+				);
+				// sudo's secure PATH lacks Nix; the daemon's profile has it on every multi-user install.
+				yield* interactive([
+					"/nix/var/nix/profiles/default/bin/nix-env",
+					"--profile",
+					"/nix/var/nix/profiles/system",
+					"--set",
+					system,
+				]);
+				// The Nix installer's own nix.custom.conf stands where darwin/machine.nix puts aett's, and
+				// nix-darwin refuses to replace a file it doesn't know. It is kept beside it.
+				yield* interactive([
+					"/bin/sh",
+					"-c",
+					`f=/etc/nix/nix.custom.conf; if [ -e ${shellQuote(`${system}/etc/nix/nix.custom.conf`)} ] && [ -f "$f" ] && [ ! -L "$f" ]; then mv "$f" "$f.before-nix-darwin" && echo "Moved $f to $f.before-nix-darwin; aett writes Nix's settings there now." >&2; fi`,
+				]);
+				// A nix-homebrew install whose taps were Nix's links them read-only into the store, where
+				// Homebrew can't tap anything; Homebrew makes the directory again.
+				yield* interactive([
+					"/bin/sh",
+					"-c",
+					`for taps in /opt/homebrew/Library/Taps /usr/local/Homebrew/Library/Taps; do if [ -L "$taps" ]; then rm "$taps" && echo "Made $taps Homebrew's own again." >&2; fi; done`,
+				]);
+				yield* interactive([`${system}/activate`]);
+			});
 
 			const prefetch = Effect.fn("NixEngine.prefetch")(function* (url: string) {
 				const output = yield* nix([
@@ -562,6 +1060,8 @@ export const nixEngine = (flake: string) =>
 				systemPaths,
 				updateInputs,
 				prefetch,
+				packageSources,
+				packageNames,
 				discover,
 				discovered,
 				emit,
@@ -577,6 +1077,14 @@ export const nixEngine = (flake: string) =>
 				controlGuest,
 				removeGuest,
 				placeGuestKey,
+				join,
+				switchToInstaller,
+				lanAddress,
+				unlockWifi,
+				refreshBoot,
+				buildDarwin,
+				brewfile,
+				activateDarwin,
 				install,
 			});
 		}),

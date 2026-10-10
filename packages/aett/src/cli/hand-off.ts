@@ -45,10 +45,12 @@ export const handOff = Effect.fn("handOff")(function* (cli: string) {
 	const args = yield* (yield* Stdio.Stdio).args;
 
 	const exitCode = yield* spawner.exitCode(
+		// On aett's terminal, which the fleet's copy needs for prompts and sudo.
 		ChildProcess.make(process.execPath, [cli, ...args], {
 			stdin: "inherit",
 			stdout: "inherit",
 			stderr: "inherit",
+			detached: false,
 		}),
 	);
 
