@@ -46,8 +46,37 @@ export const omintosh = plugin({
 /** The Homebrew apps aett's plugins put on every Mac, as plugins/tailscale/darwin.nix does: no fleet lists them. */
 export const macApps = ["tailscale-app"];
 
+/**
+ * T3 Code's server, which runs coding agents and serves the T3 Code app over
+ * HTTPS on the tailnet. The entry names the machines; on each, `t3-pair`
+ * prints the link that pairs a device.
+ */
+export const t3code = plugin({
+	name: "t3code",
+	roles: ["server", "computer"],
+	systems: ["nixos"],
+	package: "t3code",
+	endpoints: { web: { port: 3773, web: true } },
+	health: "systemctl is-active --quiet t3code && echo serving || { echo 'not running'; exit 1; }",
+});
+
+/**
+ * CLIProxyAPI, which serves the coding agents' subscriptions as OpenAI-,
+ * Claude- and Gemini-compatible APIs over HTTPS on the tailnet, without
+ * client keys. It keeps the logins in the fleet's user's home.
+ */
+export const cliProxyApi = plugin({
+	name: "cli-proxy-api",
+	roles: ["server", "computer"],
+	systems: ["nixos"],
+	package: "cli-proxy-api",
+	endpoints: { api: { port: 8317, web: true } },
+	health:
+		"systemctl is-active --quiet cli-proxy-api && echo serving || { echo 'not running'; exit 1; }",
+});
+
 /** Every plugin aett ships. */
-export const shipped = [tailscale, backup, omintosh] as const;
+export const shipped = [tailscale, backup, omintosh, t3code, cliProxyApi] as const;
 
 /** The plugins aett ships, as any plugin. */
 export const shippedPlugins: ReadonlyArray<Plugin> = shipped;

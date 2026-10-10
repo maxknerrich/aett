@@ -49,7 +49,7 @@ On a Mac, `create` offers to add the Mac itself and adopts what Homebrew has on 
 
 `services` puts things on machines. An entry is the machine it's on, a list of machines, or an object with `on`, `packages` and the service's options. Without `on`, it's on every machine it can be on.
 
-- A name aett ships is that service: `backup` (Kopia), or `omintosh` (a keyboard-first Mac desktop). Tailscale is always on every machine.
+- A name aett ships is that service: `backup` (Kopia), `omintosh` (a keyboard-first Mac desktop), `t3code` (T3 Code's server; `t3-pair` on the machine pairs a device) or `cli-proxy-api` (CLIProxyAPI, the agents' subscriptions as APIs for the tailnet). Tailscale is always on every machine.
 - A name from `plugins` is your own service.
 - Any other name is a pack of your own: packages and dotfiles.
 
