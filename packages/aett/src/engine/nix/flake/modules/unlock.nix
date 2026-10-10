@@ -15,8 +15,9 @@ let
   initrd = config.boot.initrd.systemd;
 
   # Answers every passphrase prompt for a LUKS device with the line on stdin until all are open.
+  # The initrd holds only what it lists, so the tools come from its /bin.
   unlock = pkgs.writeShellScript "aett-unlock" ''
-    PATH=${lib.makeBinPath [ pkgs.coreutils pkgs.gnused ]}
+    PATH=/bin
     IFS= read -r passphrase || exit 1
     for _ in $(seq 120); do
       open=true
@@ -38,20 +39,6 @@ let
     done
     echo "The disks didn't open. Is the passphrase right?" >&2
     exit 1
-  '';
-
-  # Runs wpa_supplicant on the first wireless interface that appears.
-  wifi = pkgs.writeShellScript "aett-unlock-wifi" ''
-    PATH=${lib.makeBinPath [ pkgs.coreutils ]}
-    for _ in $(seq 60); do
-      for device in /sys/class/net/*; do
-        if [ -d "$device/wireless" ]; then
-          exec ${pkgs.wpa_supplicant}/bin/wpa_supplicant -Dnl80211 -i "''${device##*/}" -c /etc/aett/wpa_supplicant.conf
-        fi
-      done
-      sleep 1
-    done
-    echo "No wireless interface appeared." >&2
   '';
 
   # Starts in the initrd and stops before it hands over to the system.
@@ -102,15 +89,27 @@ in
     boot.initrd.systemd.extraBin = {
       aett-unlock = unlock;
       systemd-reply-password = "${initrd.package}/lib/systemd/systemd-reply-password";
+      sed = "${pkgs.gnused}/bin/sed";
+      wpa_supplicant = "${pkgs.wpa_supplicant}/bin/wpa_supplicant";
     };
 
+    # Runs wpa_supplicant on the first wireless interface that appears. A script, unlike an
+    # ExecStart path, is copied into the initrd.
     boot.initrd.systemd.services.aett-unlock-wifi = early // {
       after = [ "initrd-nixos-copy-secrets.service" ];
       requires = [ "initrd-nixos-copy-secrets.service" ];
-      serviceConfig = {
-        ExecStart = wifi;
-        Restart = "on-failure";
-      };
+      serviceConfig.Restart = "on-failure";
+      script = ''
+        for _ in $(seq 60); do
+          for device in /sys/class/net/*; do
+            if [ -d "$device/wireless" ]; then
+              exec wpa_supplicant -Dnl80211 -i "''${device##*/}" -c /etc/aett/wpa_supplicant.conf
+            fi
+          done
+          sleep 1
+        done
+        echo "No wireless interface appeared." >&2
+      '';
     };
 
     boot.initrd.network.ssh = {
