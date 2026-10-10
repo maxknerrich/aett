@@ -56,12 +56,12 @@ describe("describeFleet", () => {
 				"        services  tailscale, backup",
 				"        endpoints backup repository hades.example.ts.net:51515",
 				"        packages  kopia (nixpkgs) · tailscale (not pinned yet)",
-				"        dotfiles  dotfiles/default/, dotfiles/backup/, dotfiles/hades/",
+				"        dotfiles  dotfiles/default/, dotfiles/server/, dotfiles/backup/, dotfiles/hades/",
 				"fawkes  computer, a Mac · not on the tailnet yet",
 				"        tags      dev",
 				"        services  tailscale, backup client of hades",
 				"        packages  ghostty, tailscale-app (cask) · git, kopia (nixpkgs) · vp v1.0.0 (o/vp)",
-				"        dotfiles  dotfiles/default/, dotfiles/dev/, dotfiles/fawkes/",
+				"        dotfiles  dotfiles/default/, dotfiles/dev/, dotfiles/computer/, dotfiles/fawkes/",
 			].join("\n"),
 		);
 	});

@@ -88,7 +88,8 @@ export const describeFleet = (fleet: Fleet, state: State, pins: Pins) => {
 
 	const lines = fleet.machines.flatMap((machine) => {
 		const details = [
-			["tags", machine.tags.join(", ")],
+			// The role is a tag too, which the headline names already.
+			["tags", machine.tags.filter((tag) => tag !== machine.role).join(", ")],
 			["services", services(machine)],
 			["endpoints", endpoints(machine)],
 			["packages", packagesOf(machine, pins)],

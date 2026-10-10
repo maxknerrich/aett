@@ -52,7 +52,7 @@ On a Mac, `create` offers to add the Mac itself and adopts what Homebrew has on 
 | `mac()` | A Mac, taken over in place. |
 | `vm({ host })` | A server VM on a hypervisor, a NAS or a bare-metal server. `cpu`, `memory` and `disk` are numbers, in GiB. |
 
-A target is a machine, a tag, or `default` for every machine it fits. `services` and `packages` put things on targets.
+A target is a machine, a tag, or `default` for every machine it fits. Every machine also carries its role as a tag: `server` (on bare metal or a VM), `computer`, `nas` or `hypervisor`. `services` and `packages` put things on targets.
 
 `services` places services by name:
 

@@ -127,9 +127,11 @@ type CheckedHosts<Machines> = {
 		: unknown;
 };
 
-// Every tag a machine carries.
+// Every tag a machine carries: its own, and its role.
 type TagsOf<Machines> = {
-	[Name in keyof Machines]: Machines[Name] extends Tagged<infer Tag> ? Tag : never;
+	[Name in keyof Machines]:
+		| (Machines[Name] extends Tagged<infer Tag> ? Tag : never)
+		| (Machines[Name] extends { readonly role: infer R extends string } ? R : never);
 }[keyof Machines];
 
 /** Where something goes: a machine, a tag, or every machine it fits with "default". */

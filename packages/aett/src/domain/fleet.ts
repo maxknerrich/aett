@@ -674,14 +674,24 @@ export const decodeFleet = (
 
 	if (machineProblems.length > 0) return Result.fail(machineProblems.join("\n"));
 
-	const machines = successes(machineResults);
-	const names = new Set(machines.map(({ name }) => name));
+	const decoded = successes(machineResults);
+	const names = new Set(decoded.map(({ name }) => name));
 
-	const tagProblems = machines.flatMap(({ name, tags }) =>
+	const tagProblems = decoded.flatMap(({ name, tags }) =>
 		tags.flatMap((tag) =>
 			names.has(tag) ? [`machines.${name}.tags: ${tag} is a machine's name`] : [],
 		),
 	);
+
+	// Every machine also carries its role as a tag, unless a machine has that name.
+	const machines = decoded.map(({ name, role, kind, host, tags, settings }): Decoded => ({
+		name,
+		role,
+		kind,
+		host,
+		settings,
+		tags: [...new Set([...tags, ...(names.has(role) ? [] : [role])])],
+	}));
 
 	const problemsSoFar = [...tagProblems, ...hostProblems(machines)];
 

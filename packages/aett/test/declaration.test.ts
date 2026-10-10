@@ -56,9 +56,14 @@ describe("decodeFleet", () => {
 				name: "zeus",
 				packages: ["claude-code", "git", "pi", "tailscale"],
 				releases: ["vp"],
-				home: ["default", "dev", "zeus"],
+				home: ["default", "dev", "server", "zeus"],
 			},
-			{ name: "vault", packages: ["git", "tailscale"], releases: [], home: ["default", "vault"] },
+			{
+				name: "vault",
+				packages: ["git", "tailscale"],
+				releases: [],
+				home: ["default", "nas", "vault"],
+			},
 			{
 				name: "fawkes",
 				packages: [
@@ -72,7 +77,7 @@ describe("decodeFleet", () => {
 					"vite-plus",
 				],
 				releases: [],
-				home: ["default", "dev", "fawkes"],
+				home: ["default", "dev", "computer", "fawkes"],
 			},
 		]);
 
@@ -82,7 +87,7 @@ describe("decodeFleet", () => {
 		);
 	});
 
-	it("places a service on targets with settings merged per machine: default, then tags, then the machine", () => {
+	it("places a service on targets, a role among the tags, with settings merged per machine: default, then tags, then the machine", () => {
 		const declared = loaded(
 			fleet({
 				user: "mkn",
@@ -94,7 +99,7 @@ describe("decodeFleet", () => {
 				services: {
 					// @ts-expect-error whoami comes from services/whoami/, unknown until aett generates it
 					whoami: { default: { greeting: "hi" }, public: { loud: true }, web: { greeting: "hey" } },
-					t3code: ["web", "api"],
+					t3code: "server",
 				},
 			}),
 			[whoami],
@@ -110,7 +115,14 @@ describe("decodeFleet", () => {
 		expect(settings("web")).toEqual({ greeting: "hey", loud: true });
 		expect(settings("api")).toEqual({ greeting: "hi" });
 		expect(declared.services.get("t3code")?.instances).toEqual(["web", "api"]);
-		expect(declared.machines[0]?.home).toEqual(["default", "public", "whoami", "t3code", "web"]);
+		expect(declared.machines[0]?.home).toEqual([
+			"default",
+			"public",
+			"server",
+			"whoami",
+			"t3code",
+			"web",
+		]);
 	});
 
 	it("gives a service with clients its server and every other machine with the user, but those excluded", () => {
