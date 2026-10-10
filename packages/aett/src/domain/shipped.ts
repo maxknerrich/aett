@@ -11,6 +11,7 @@ export const tailscale = plugin({
 	name: "tailscale",
 	always: true,
 	package: "tailscale",
+	macApp: "tailscale-app",
 	health: "tailscale ip -4 | head -n 1",
 });
 
@@ -42,9 +43,6 @@ export const omintosh = plugin({
 	roles: ["computer"],
 	systems: ["darwin"],
 });
-
-/** The Homebrew apps aett's plugins put on every Mac, as plugins/tailscale/darwin.nix does: no fleet lists them. */
-export const macApps = ["tailscale-app"];
 
 /**
  * T3 Code's server, which runs coding agents and serves the T3 Code app over

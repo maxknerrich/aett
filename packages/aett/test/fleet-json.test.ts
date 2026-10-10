@@ -172,9 +172,9 @@ describe("fleetJson", () => {
 
 		expect(machines["vault"]).toMatchObject({ role: "nas", pools, unlock: false });
 		expect(machines["fawkes"]).toMatchObject({
-			packages: { nixpkgs: ["git", "tailscale"] },
+			packages: { nixpkgs: ["git"] },
 			darwin: { system: "aarch64-darwin" },
-			homebrew: { zap: true, casks: ["ghostty"], brews: ["mas"] },
+			homebrew: { zap: true, casks: ["tailscale-app", "ghostty"], brews: ["mas"] },
 		});
 	});
 

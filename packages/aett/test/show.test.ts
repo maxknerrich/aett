@@ -60,7 +60,7 @@ describe("describeFleet", () => {
 				"fawkes  computer, a Mac · not on the tailnet yet",
 				"        tags      dev",
 				"        services  tailscale, backup client of hades",
-				"        packages  ghostty (cask) · git, kopia (nixpkgs) · tailscale (not pinned yet) · vp v1.0.0 (o/vp)",
+				"        packages  ghostty, tailscale-app (cask) · git, kopia (nixpkgs) · vp v1.0.0 (o/vp)",
 				"        dotfiles  dotfiles/default/, dotfiles/dev/, dotfiles/fawkes/",
 			].join("\n"),
 		);

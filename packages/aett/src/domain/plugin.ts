@@ -67,6 +67,8 @@ export interface Plugin<Name extends string = string, Options = unknown> {
 	readonly directory?: string | URL;
 	/** The nixpkgs package its modules run, picked and pinned like any other. */
 	readonly package?: string;
+	/** On a Mac, the Homebrew app that takes its package's place, such as the Tailscale app. */
+	readonly macApp?: string;
 	/** Ports by name. */
 	readonly endpoints?: { readonly [name: string]: Endpoint };
 	/** Secrets by name. */

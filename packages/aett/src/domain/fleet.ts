@@ -130,6 +130,7 @@ export const PluginMetadata = Schema.Struct({
 	),
 	directory: Schema.optionalKey(Schema.Union([Schema.String, Schema.instanceOf(URL)])),
 	package: Schema.optionalKey(Schema.String),
+	macApp: Schema.optionalKey(Schema.NonEmptyString),
 	endpoints: Schema.optionalKey(
 		Schema.Record(
 			Schema.String,
@@ -822,12 +823,15 @@ const toMachine = (
 			: [];
 	});
 
-	// Each service on it brings its package, which its modules run and the operator can use there.
-	const servicePackages = placed.flatMap(({ plugin }) =>
-		placements.some(({ name }) => name === plugin.name) && plugin.package !== undefined
-			? [plugin.package]
-			: [],
-	);
+	// Each service on it brings its package, which its modules run and the operator can use there; on a
+	// Mac, the app that takes its place.
+	const servicePackages = placed.flatMap(({ plugin }) => {
+		if (!placements.some(({ name }) => name === plugin.name)) return [];
+
+		if (macos && plugin.macApp !== undefined) return [`cask.${plugin.macApp}`];
+
+		return plugin.package === undefined ? [] : [plugin.package];
+	});
 
 	const listed = lists.flatMap(({ machines: named, packages }) =>
 		named.includes(machine.name) ? packages : [],

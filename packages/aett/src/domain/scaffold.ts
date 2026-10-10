@@ -1,6 +1,6 @@
 import { Option, Result, Schema } from "effect";
 import { MachineName, Role } from "./fleet.ts";
-import { macApps } from "./shipped.ts";
+import { shippedPlugins } from "./shipped.ts";
 
 /** A fleet's name: its directory and its package name, so lowercase and URL-safe. */
 export const FleetName = Schema.String.check(
@@ -84,7 +84,7 @@ export const fleetSource = (
 		onNone: () => "",
 		// Casks come first on a Mac anyway; formulae are led by brew., so none turns into a cask or a Nix package.
 		onSome: ({ mac, apps, brews }) =>
-			`\tpackages: {\n\t\t${key(mac)}: [${[...apps.filter((app) => !macApps.includes(app)), ...brews.map((brew) => `brew.${brew}`)].map((name) => JSON.stringify(name)).join(", ")}],\n\t},\n`,
+			`\tpackages: {\n\t\t${key(mac)}: [${[...apps.filter((app) => !shippedPlugins.some(({ macApp }) => macApp === app)), ...brews.map((brew) => `brew.${brew}`)].map((name) => JSON.stringify(name)).join(", ")}],\n\t},\n`,
 	});
 
 	return `import { ${imports.join(", ")} } from "aett"\n\nexport default fleet({\n\tuser: ${JSON.stringify(user)},\n\tmachines: {${machines.length === 0 ? "" : `\n${machines.map(entry).join("")}\t`}},\n${packages}})\n`;
