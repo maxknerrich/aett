@@ -181,8 +181,9 @@
         }).config.system.build.isoImage;
 
       # The installer as a kernel and initrd that a running Linux machine with Nix boots into through
-      # kexec, without a USB stick. `aett-kexec <authorized_keys>` adds an archive with those keys and
-      # the Wi-Fi networks NetworkManager knows there, loads it all and restarts into it.
+      # kexec, without a USB stick. `aett-kexec <authorized_keys> [<profile>…]` adds an archive with
+      # those keys, the networks NetworkManager knows there and the NetworkManager profiles given, loads
+      # it all and restarts into it.
       installerKexec =
         system:
         let
@@ -217,6 +218,7 @@
             trap 'rm -rf "$work"' EXIT
             install -d -m 0700 "$work/aett/root/.ssh"
             install -m 0600 "$1" "$work/aett/root/.ssh/authorized_keys"
+            shift
             # NetworkManager's profile directories, a runtime profile shadowing a persistent one and that
             # one a shipped one with its UUID. A profile tied to an interface name could miss the
             # installer's, which names interfaces its own way.
@@ -235,6 +237,10 @@
                 sed '/^interface-name=/d' "$profile" > "$copy"
                 chmod 0600 "$copy"
               done
+            done
+            # The profiles aett made for the machine's fixed addresses.
+            for profile in "$@"; do
+              install -m 0600 "$profile" "$carried/''${profile##*/}"
             done
             (cd "$work" && find aett | cpio -o -H newc --quiet | gzip -9) > "$work/aett.cpio.gz"
             cat ${config.system.build.netbootRamdisk}/initrd "$work/aett.cpio.gz" > "$work/initrd"

@@ -32,6 +32,7 @@ import {
 import { FacterReport, installFacts } from "./facter.ts";
 import { pluginDirectory } from "../../adapters/assets.ts";
 import { type Extras, fleetJson } from "./fleet-json.ts";
+import { staticProfiles } from "./static-network.ts";
 import { wpaSupplicant } from "./wifi.ts";
 
 // A local directory as a flake reference; nix parses it as a URL, so spaces and the like are percent-encoded.
@@ -764,11 +765,33 @@ export const nixEngine = (flake: string, plugins: string) =>
 					`nix build --no-link --print-out-paths --extra-experimental-features 'nix-command flakes' ${shellQuote(`${source}#packages.`)}"$(nix eval --raw --impure --extra-experimental-features nix-command --expr builtins.currentSystem)".installer-kexec`,
 				)).trim();
 
+				// What the machine's network looks like now, so a fixed address comes along.
+				const profiles = staticProfiles(
+					yield* Effect.all({
+						links: target.run("ip -json -details link show 2>/dev/null || true"),
+						addresses: target.run("ip -json address show 2>/dev/null || true"),
+						ipv4Routes: target.run("ip -json -4 route show 2>/dev/null || true"),
+						ipv6Routes: target.run("ip -json -6 route show 2>/dev/null || true"),
+						resolvConf: target.run(
+							"cat /run/systemd/resolve/resolv.conf 2>/dev/null || cat /etc/resolv.conf 2>/dev/null || true",
+						),
+					}),
+				);
+
+				yield* Effect.forEach(profiles, ({ name }) =>
+					Console.log(`Carrying ${name}'s fixed addresses into the installer.`),
+				);
+
 				yield* Console.log("Switching it into the installer…");
+
+				const written = profiles.map(
+					({ name, keyfile }) =>
+						`printf %s ${shellQuote(keyfile)} > "$work"/${shellQuote(`aett-${name}.nmconnection`)} && `,
+				);
 
 				return yield* target
 					.run(
-						`keys=$(mktemp) && cat > "$keys" && ${shellQuote(`${kexec}/bin/aett-kexec`)} "$keys"`,
+						`work=$(mktemp -d) && ${written.join("")}cat > "$work/keys" && ${shellQuote(`${kexec}/bin/aett-kexec`)} "$work/keys"${profiles.length === 0 ? "" : ' "$work"/*.nmconnection'}`,
 						`${keys.join("\n")}\n`,
 					)
 					.pipe(Effect.asVoid);
