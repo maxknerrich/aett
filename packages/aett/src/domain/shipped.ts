@@ -64,7 +64,8 @@ export const t3code = plugin({
 /**
  * CLIProxyAPI, which serves the coding agents' subscriptions as OpenAI-,
  * Claude- and Gemini-compatible APIs over HTTPS on the tailnet, without
- * client keys. It keeps the logins in the fleet's user's home.
+ * client keys. It keeps the logins in the fleet's user's home. Its web panel
+ * at /management.html takes the password aett asks for.
  */
 export const cliProxy = plugin({
 	name: "cli-proxy",
@@ -72,6 +73,7 @@ export const cliProxy = plugin({
 	systems: ["nixos"],
 	package: "cli-proxy-api",
 	endpoints: { api: { port: 8317, web: true } },
+	secrets: { panel: { prompt: "A password for CLIProxyAPI's web panel" } },
 	health:
 		"systemctl is-active --quiet cli-proxy-api && echo serving || { echo 'not running'; exit 1; }",
 });
