@@ -89,6 +89,13 @@
     (pkgs.writeShellScriptBin "aett-code" "cat /run/issue.d/aett.issue")
   ];
 
+  # A laptop that serves with its lid closed would otherwise fall asleep mid-install.
+  services.logind.settings.Login = {
+    HandleLidSwitch = "ignore";
+    HandleLidSwitchExternalPower = "ignore";
+    HandleLidSwitchDocked = "ignore";
+  };
+
   # Wi-Fi cards need their firmware, which the kexec installer's netboot-minimal leaves out.
   hardware.enableRedistributableFirmware = lib.mkForce true;
 
