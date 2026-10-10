@@ -201,6 +201,19 @@
             }))
             config
             ;
+
+          # Lets the network cards' drivers go of them, which stops them, then restarts into the loaded
+          # installer: kexec skips the reset a reboot gives, and a card left running, such as Intel
+          # Wi-Fi, fails to start in the installer.
+          restart = pkgs.writeShellScript "aett-kexec-restart" ''
+            for device in /sys/class/net/*/device; do
+              driver=$(readlink -f "$device/driver")
+              if [ -w "$driver/unbind" ]; then
+                basename "$(readlink -f "$device")" > "$driver/unbind"
+              fi
+            done
+            systemctl kexec
+          '';
         in
         pkgs.writeShellApplication {
           name = "aett-kexec";
@@ -247,18 +260,8 @@
             kexec --load ${config.system.build.kernel}/${config.system.boot.loader.kernelFile} \
               --initrd="$work/initrd" \
               --command-line "init=${config.system.build.toplevel}/init ${toString config.boot.kernelParams}"
-            # In a moment, so the command that started this returns first. The network cards' drivers let
-            # go of them first, which stops them: kexec skips the reset a reboot gives, and a card left
-            # running, such as Intel Wi-Fi, fails to start in the installer.
-            systemd-run --on-active=2 --setenv=PATH="$PATH" ${pkgs.runtimeShell} -c '
-              for device in /sys/class/net/*/device; do
-                driver=$(readlink -f "$device/driver")
-                if [ -w "$driver/unbind" ]; then
-                  basename "$(readlink -f "$device")" > "$driver/unbind"
-                fi
-              done
-              systemctl kexec
-            '
+            # In a moment, so the command that started this returns first.
+            systemd-run --on-active=2 --setenv=PATH="$PATH" ${restart}
           '';
         };
 
