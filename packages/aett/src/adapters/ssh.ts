@@ -16,6 +16,8 @@ import { Engine, type EngineError } from "../engine/engine.ts";
 
 export class SshError extends Schema.TaggedError<SshError>()("SshError", {
 	message: Schema.String,
+	// A remote command's exit code, or ssh's own 255 when the connection failed or dropped.
+	exitCode: Schema.optionalKey(Schema.Number),
 }) {}
 
 /** An SSH connection to root on one host. Every command reuses its one master connection. */
@@ -202,6 +204,7 @@ export class Ssh extends Context.Service<
 							return yield* new SshError({
 								message:
 									`${command} failed on ${formatHost(host)} with exit code ${result.exitCode}.\n${tail}`.trim(),
+								exitCode: result.exitCode,
 							});
 						}
 

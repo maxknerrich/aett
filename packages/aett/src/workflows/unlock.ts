@@ -1,4 +1,4 @@
-import { Console, Effect, Option, Path, Schema } from "effect";
+import { Console, Effect, Option, Path, Schedule, Schema } from "effect";
 import { Secrets } from "../adapters/secrets.ts";
 import { Ssh } from "../adapters/ssh.ts";
 import { loadFleet, readState } from "./load.ts";
@@ -70,8 +70,37 @@ export const unlock = Effect.fn("unlock")(function* (
 			),
 		);
 
-	// The initrd runs aett-unlock for the operators' keys whatever they ask for.
-	const answer = yield* connection.run("aett-unlock", `${passphrase}\n`);
+	// The initrd runs aett-unlock for the operators' keys whatever they ask for. Opening the disk ends
+	// the initrd and its sshd, often before aett-unlock reports, and the session drops with ssh's 255.
+	const answer = yield* connection.run("aett-unlock", `${passphrase}\n`).pipe(
+		Effect.catchIf(
+			(error) => error.exitCode === 255,
+			() => booted(root, name, address),
+		),
+	);
 
 	return yield* Console.log(answer.trim());
+}, Effect.scoped);
+
+// Waits for the machine to answer on its own SSH at `address`, as it does once its disk opened and
+// it booted.
+const booted = Effect.fn("booted")(function* (root: string, name: string, address: string) {
+	const path = yield* Path.Path;
+	const ssh = yield* Ssh;
+
+	yield* Console.log(`${name}'s initrd closed the connection. Waiting for ${name} to boot…`);
+
+	yield* ssh
+		.machine(name, { name: address, port: 22 }, path.join(root, "state", "known_hosts"), "refuse")
+		.pipe(
+			Effect.retry(Schedule.spaced("5 seconds").pipe(Schedule.upTo({ duration: "3 minutes" }))),
+			Effect.mapError(
+				() =>
+					new UnlockError({
+						message: `The connection to ${name}'s initrd dropped after the passphrase, and ${name} hasn't answered at ${address} since. Its console shows what happened.`,
+					}),
+			),
+		);
+
+	return `Unlocked. ${name} is up.`;
 }, Effect.scoped);
